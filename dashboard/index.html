@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentinel — Anomaly Detection</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-left">
+            <div class="logo">
+                <span class="logo-icon">◈</span>
+                <span class="logo-text">SENTINEL</span>
+            </div>
+            <span class="topbar-subtitle">Telemetry Anomaly Detection</span>
+        </div>
+        <div class="topbar-right">
+            <div class="connection-status" id="connStatus">
+                <span class="status-dot offline"></span>
+                <span class="status-text">Connecting...</span>
+            </div>
+            <div class="topbar-stat">
+                <span class="stat-label">Uptime</span>
+                <span class="stat-value" id="uptime">--</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="grid">
+        <!-- Health Cards Row -->
+        <section class="card-row">
+            <div class="metric-card" id="card-total-points">
+                <div class="metric-label">Telemetry Points</div>
+                <div class="metric-value" id="totalPoints">--</div>
+                <div class="metric-trend" id="pointsTrend">--/min</div>
+            </div>
+            <div class="metric-card" id="card-anomalies">
+                <div class="metric-label">Active Anomalies</div>
+                <div class="metric-value anomaly-count" id="anomalyCount">0</div>
+                <div class="metric-trend" id="anomalyTrend">last 15 min</div>
+            </div>
+            <div class="metric-card" id="card-severity">
+                <div class="metric-label">Highest Severity</div>
+                <div class="metric-value severity-badge nominal" id="maxSeverity">NOMINAL</div>
+                <div class="metric-trend" id="severityParam">--</div>
+            </div>
+            <div class="metric-card" id="card-satellites">
+                <div class="metric-label">Satellites</div>
+                <div class="metric-value" id="satCount">0</div>
+                <div class="metric-trend" id="satList">--</div>
+            </div>
+        </section>
+
+        <!-- Main Content -->
+        <div class="content-grid">
+            <!-- Anomaly Timeline -->
+            <section class="panel timeline-panel">
+                <div class="panel-header">
+                    <h2>Anomaly Timeline</h2>
+                    <div class="filter-group">
+                        <select id="severityFilter" class="filter-select">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="watch">Watch</option>
+                        </select>
+                        <select id="subsystemFilter" class="filter-select">
+                            <option value="">All Subsystems</option>
+                            <option value="eps">EPS</option>
+                            <option value="adcs">ADCS</option>
+                            <option value="thermal">Thermal</option>
+                            <option value="comms">Comms</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="timeline-list" id="timelineList">
+                    <div class="empty-state">No anomalies detected yet. Start the simulator to see live data.</div>
+                </div>
+            </section>
+
+            <!-- Right Column: Explanation + Subsystems -->
+            <div class="right-col">
+                <!-- Explanation Panel -->
+                <section class="panel explanation-panel">
+                    <div class="panel-header">
+                        <h2>Explanation</h2>
+                    </div>
+                    <div class="explanation-body" id="explanationBody">
+                        <div class="empty-state">Select an anomaly to see its explanation</div>
+                    </div>
+                </section>
+
+                <!-- Subsystem Health -->
+                <section class="panel subsystem-panel">
+                    <div class="panel-header">
+                        <h2>Subsystem Health</h2>
+                    </div>
+                    <div class="subsystem-grid" id="subsystemGrid">
+                        <div class="subsystem-card" data-subsystem="eps">
+                            <div class="subsystem-name">EPS</div>
+                            <div class="subsystem-status nominal">NOMINAL</div>
+                            <div class="subsystem-desc">Electrical Power</div>
+                        </div>
+                        <div class="subsystem-card" data-subsystem="adcs">
+                            <div class="subsystem-name">ADCS</div>
+                            <div class="subsystem-status nominal">NOMINAL</div>
+                            <div class="subsystem-desc">Attitude Control</div>
+                        </div>
+                        <div class="subsystem-card" data-subsystem="thermal">
+                            <div class="subsystem-name">THERMAL</div>
+                            <div class="subsystem-status nominal">NOMINAL</div>
+                            <div class="subsystem-desc">Thermal Control</div>
+                        </div>
+                        <div class="subsystem-card" data-subsystem="comms">
+                            <div class="subsystem-name">COMMS</div>
+                            <div class="subsystem-status nominal">NOMINAL</div>
+                            <div class="subsystem-desc">Communications</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+
+        <!-- Alert Log -->
+        <section class="panel alert-panel">
+            <div class="panel-header">
+                <h2>Alert Log</h2>
+                <button class="btn-secondary" id="clearAlerts">Clear</button>
+            </div>
+            <div class="alert-list" id="alertList">
+                <div class="empty-state">No alerts dispatched</div>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

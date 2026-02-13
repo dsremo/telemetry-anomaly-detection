@@ -16,7 +16,7 @@ Ground-based satellite telemetry anomaly detection. Customers push JSON telemetr
 - Frozen dataclasses for domain models. Immutability by default.
 
 ## Code Standards
-- Python 3.11+, type hints everywhere
+- Python 3.10+, type hints everywhere
 - `ruff` for linting (bandit security checks enabled)
 - `structlog` for all logging (structured JSON in production)
 - `asyncpg` for DB (no ORM)
