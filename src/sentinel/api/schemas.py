@@ -1,0 +1,111 @@
+"""Pydantic schemas — the API contract.
+
+These define exactly what goes in and out of every endpoint.
+Strict validation here is our first line of defense.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class TelemetryIn(BaseModel):
+    """Single telemetry point from a customer."""
+
+    satellite_id: str = Field(..., min_length=1, max_length=128, examples=["SAT-01"])
+    timestamp: datetime | float | str
+    subsystem: str = Field(..., min_length=1, max_length=32, examples=["eps"])
+    parameter: str = Field(..., min_length=1, max_length=128, examples=["battery_voltage"])
+    value: float
+    unit: str = Field(default="", max_length=16, examples=["V"])
+    quality: float = Field(default=1.0, ge=0.0, le=1.0)
+
+    @field_validator("satellite_id", "subsystem", "parameter")
+    @classmethod
+    def no_control_chars(cls, v: str) -> str:
+        if any(ord(c) < 32 for c in v):
+            raise ValueError("control characters not allowed")
+        return v
+
+
+class TelemetryBatchIn(BaseModel):
+    """Batch of telemetry points — up to 500 per request."""
+
+    points: list[TelemetryIn] = Field(..., min_length=1, max_length=500)
+    hmac_signature: str | None = Field(default=None, max_length=128)
+
+
+class TelemetryOut(BaseModel):
+    """Telemetry point as returned by the API."""
+
+    satellite_id: str
+    timestamp: datetime
+    subsystem: str
+    parameter: str
+    value: float
+    unit: str
+    quality: float
+
+
+class AnomalyOut(BaseModel):
+    """Anomaly record as returned by the API."""
+
+    id: str
+    satellite_id: str
+    timestamp: datetime
+    subsystem: str
+    parameter: str
+    value: float
+    severity: str
+    confidence: float
+    detectors_triggered: list[str]
+    explanation: str
+    root_cause_group: str | None
+    contributing_params: dict[str, float]
+
+
+class IngestResponse(BaseModel):
+    """Response after telemetry ingestion."""
+
+    accepted: int
+    rejected: int
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HealthResponse(BaseModel):
+    """System health check response."""
+
+    status: str
+    version: str
+    db_connected: bool
+    uptime_seconds: float
+
+
+class SimulateRequest(BaseModel):
+    """Request to start the simulator."""
+
+    satellite_id: str = Field(default="DEMO-SAT-01", max_length=128)
+    duration_seconds: int = Field(default=300, ge=10, le=86400)
+    rate_hz: float = Field(default=1.0, ge=0.1, le=10.0)
+
+
+class InjectRequest(BaseModel):
+    """Request to inject a fault into the simulator."""
+
+    fault_type: str = Field(..., examples=["drift", "spike", "dropout", "degradation"])
+    subsystem: str = Field(..., examples=["eps", "thermal"])
+    parameter: str = Field(..., examples=["battery_voltage"])
+    intensity: float = Field(default=0.5, ge=0.0, le=1.0)
+    duration_seconds: int = Field(default=60, ge=1, le=3600)
+
+
+class PaginatedResponse(BaseModel):
+    """Wrapper for paginated list responses."""
+
+    data: list[Any]
+    total: int
+    limit: int
+    offset: int

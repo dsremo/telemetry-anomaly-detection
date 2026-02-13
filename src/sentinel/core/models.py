@@ -1,0 +1,139 @@
+"""Domain models — immutable value objects for the telemetry pipeline.
+
+Every struct here is frozen (immutable) and uses __slots__ for memory efficiency.
+These flow through the system as pure data — no methods that mutate state.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum, unique
+
+
+@unique
+class Severity(str, Enum):
+    """Anomaly severity levels — maps directly to operator response urgency."""
+
+    NOMINAL = "nominal"
+    WATCH = "watch"        # worth monitoring, no action needed yet
+    WARNING = "warning"    # operator should investigate
+    CRITICAL = "critical"  # immediate attention required
+
+
+@unique
+class Subsystem(str, Enum):
+    """Satellite subsystem identifiers."""
+
+    EPS = "eps"          # Electrical Power System
+    ADCS = "adcs"        # Attitude Determination & Control
+    THERMAL = "thermal"  # Thermal Control System
+    COMMS = "comms"      # Communications
+
+
+@unique
+class FaultType(str, Enum):
+    """Injectable fault types for the simulator."""
+
+    DRIFT = "drift"              # gradual parameter drift
+    SPIKE = "spike"              # sudden value spike
+    DROPOUT = "dropout"          # sensor stops reporting
+    DEGRADATION = "degradation"  # slow performance decline
+    OSCILLATION = "oscillation"  # unexpected periodic behavior
+    CORRELATION_BREAK = "correlation_break"  # cross-parameter link breaks
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryPoint:
+    """Single telemetry measurement from a satellite parameter.
+
+    This is the atomic unit of data flowing through the system.
+    Immutable by design — once captured, telemetry is fact.
+    """
+
+    satellite_id: str
+    timestamp: datetime
+    subsystem: str
+    parameter: str
+    value: float
+    unit: str
+    quality: float = 1.0  # 0.0 = garbage, 1.0 = perfect
+
+
+@dataclass(frozen=True, slots=True)
+class TelemetryBatch:
+    """A batch of telemetry points ingested together.
+
+    Batching reduces API round-trips for high-frequency subsystems.
+    """
+
+    points: tuple[TelemetryPoint, ...]
+    ingested_at: datetime = field(default_factory=datetime.utcnow)
+    hmac_signature: str | None = None  # tamper detection
+
+
+@dataclass(frozen=True, slots=True)
+class DetectorResult:
+    """Output from a single anomaly detector."""
+
+    detector_name: str
+    is_anomaly: bool
+    score: float          # 0.0 = normal, 1.0 = extreme anomaly
+    severity: Severity
+    details: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Anomaly:
+    """A confirmed anomaly — the core output of the detection pipeline.
+
+    Contains everything an operator needs: what happened, how confident
+    we are, which detectors agree, and a human-readable explanation.
+    """
+
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    satellite_id: str = ""
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    subsystem: str = ""
+    parameter: str = ""
+    value: float = 0.0
+    severity: Severity = Severity.WATCH
+    confidence: float = 0.0
+    detectors_triggered: tuple[str, ...] = ()
+    explanation: str = ""
+    root_cause_group: str | None = None
+    contributing_params: dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class Alert:
+    """An alert dispatched to operators via webhook/email.
+
+    Alerts are deduplicated — the same ongoing anomaly doesn't spam.
+    """
+
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    anomaly_id: str = ""
+    satellite_id: str = ""
+    severity: Severity = Severity.WARNING
+    title: str = ""
+    message: str = ""
+    dispatched_at: datetime = field(default_factory=datetime.utcnow)
+    acknowledged: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SatelliteProfile:
+    """Configuration profile for a monitored satellite.
+
+    Defines what parameters exist, their expected ranges, and
+    which subsystem they belong to. Loaded from mission config.
+    """
+
+    satellite_id: str
+    name: str
+    orbit_period_minutes: float = 90.0  # LEO default
+    subsystems: tuple[str, ...] = ("eps", "adcs", "thermal", "comms")
+    parameters: dict[str, dict] = field(default_factory=dict)
+    # parameters example: {"battery_voltage": {"unit": "V", "min": 6.0, "max": 8.4, "subsystem": "eps"}}

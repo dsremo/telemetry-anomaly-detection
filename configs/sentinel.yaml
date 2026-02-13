@@ -1,0 +1,94 @@
+# Sentinel Configuration
+# Secrets go in environment variables, never here.
+
+server:
+  host: "0.0.0.0"
+  port: 8400
+  workers: 1
+  cors_origins:
+    - "http://localhost:8400"
+
+database:
+  host: "${SENTINEL_DB_HOST:localhost}"
+  port: 5432
+  name: "sentinel"
+  user: "${SENTINEL_DB_USER:sentinel}"
+  password: "${SENTINEL_DB_PASSWORD:}"  # MUST be set via env var
+  pool_min: 2
+  pool_max: 10
+
+security:
+  api_key_header: "X-API-Key"
+  rate_limit_per_minute: 300
+  max_payload_bytes: 1_048_576  # 1 MB
+  hmac_algorithm: "sha256"
+
+detection:
+  # Rolling Z-Score
+  z_score_window: 300       # samples (5 min at 1Hz)
+  z_score_threshold: 3.0    # standard deviations
+
+  # Isolation Forest
+  isolation_contamination: 0.01  # expected anomaly fraction
+  isolation_lookback: 3600       # samples for training window
+
+  # Change-Point Detection (PELT)
+  changepoint_penalty: 3    # higher = fewer change points
+  changepoint_min_size: 30  # minimum segment length
+
+  # Ensemble
+  ensemble_weights:
+    statistical: 0.35
+    isolation_forest: 0.40
+    changepoint: 0.25
+
+  # Severity thresholds (on 0-1 confidence scale)
+  severity_thresholds:
+    watch: 0.3
+    warning: 0.6
+    critical: 0.85
+
+features:
+  windows:
+    - 300    # 5 minutes
+    - 900    # 15 minutes
+    - 3600   # 1 hour
+  orbital_period: 5400  # 90 minutes in seconds (LEO)
+
+alerts:
+  webhook_url: "${SENTINEL_WEBHOOK_URL:}"
+  smtp_host: "${SENTINEL_SMTP_HOST:}"
+  smtp_port: 587
+  smtp_user: "${SENTINEL_SMTP_USER:}"
+  smtp_password: "${SENTINEL_SMTP_PASSWORD:}"
+  dedup_window_seconds: 300   # suppress duplicate alerts for 5 min
+  escalation_delay_seconds: 600  # escalate if anomaly persists 10 min
+
+simulator:
+  default_satellite: "DEMO-SAT-01"
+  telemetry_rate_hz: 1.0
+  noise_level: 0.02         # 2% sensor noise
+  subsystems:
+    eps:
+      parameters:
+        battery_voltage: { unit: "V", nominal: 7.4, min: 6.0, max: 8.4 }
+        battery_current: { unit: "A", nominal: 1.2, min: 0.0, max: 5.0 }
+        solar_array_current: { unit: "A", nominal: 2.5, min: 0.0, max: 4.0 }
+        bus_voltage: { unit: "V", nominal: 5.0, min: 4.5, max: 5.5 }
+    adcs:
+      parameters:
+        wheel_speed_x: { unit: "rpm", nominal: 3000, min: 0, max: 6000 }
+        wheel_speed_y: { unit: "rpm", nominal: 3000, min: 0, max: 6000 }
+        wheel_speed_z: { unit: "rpm", nominal: 3000, min: 0, max: 6000 }
+        pointing_error: { unit: "deg", nominal: 0.1, min: 0.0, max: 5.0 }
+    thermal:
+      parameters:
+        panel_temp_sun: { unit: "C", nominal: 60.0, min: -40, max: 120 }
+        panel_temp_shade: { unit: "C", nominal: -20.0, min: -80, max: 40 }
+        battery_temp: { unit: "C", nominal: 22.0, min: 5, max: 45 }
+        electronics_temp: { unit: "C", nominal: 30.0, min: 10, max: 60 }
+    comms:
+      parameters:
+        signal_strength: { unit: "dBm", nominal: -80.0, min: -120, max: -50 }
+        bit_error_rate: { unit: "", nominal: 0.0001, min: 0.0, max: 0.1 }
+        link_margin: { unit: "dB", nominal: 10.0, min: 0.0, max: 20.0 }
