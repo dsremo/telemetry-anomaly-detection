@@ -36,3 +36,4 @@ htmlcov/
 *.joblib
 models/*.pt
 data/
+Resources/

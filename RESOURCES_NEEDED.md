@@ -14,10 +14,33 @@ Paste paths, links, or credentials below. Items marked with 🔴 are BLOCKING �
 
 **How to get these:**
 1. ESA OPS-SAT — Download the ZIP from Zenodo (free, no login). ~200MB.
+In the Resources folder
+
 2. SatNOGS — Use their API or export CSVs for specific satellites.
+curl -H "Authorization: Token $SATNOGS_API_TOKEN" \
+"https://db.satnogs.org/api/telemetry/?satellite=KPMW-9188-6390-9743-3148&limit=5"
+
+
+curl -H "Authorization: Token $SATNOGS_API_TOKEN" \
+"https://db.satnogs.org/api/telemetry/?satellite=AEYC-6866-6455-5236-7157&limit=5"
+
+BEST choices (from your page)
+Satellite	Why
+ROBUSTA-3A	Very high frame count (~700k), academic CubeSat
+Monitor-3 (RS58S)	Stable telemetry, long history
+ITASAT-1	Brazilian CubeSat, clean EPS + thermal data
+LEOPARD	Modern mission, good continuity
+
+
+api key: Moved to `.env` as `SATNOGS_API_TOKEN` (never put tokens in git-tracked files)
+
+
+
 3. NASA PCoE — Download battery datasets (B0005-B0018) for degradation testing.
 
 > Until you provide real data, the simulator generates synthetic telemetry so development is not blocked.
+
+https://phm-datasets.s3.amazonaws.com/NASA/5.+Battery+Data+Set.zip
 
 ---
 
