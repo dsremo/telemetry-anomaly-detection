@@ -24,40 +24,71 @@ from sentinel.api.middleware import (
 )
 from sentinel.api.routes import router
 from sentinel.core.config import load_config
-from sentinel.db.connection import close_pool, init_pool
-from sentinel.db.migrations import run_migrations
 
 logger = structlog.get_logger()
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent.parent / "dashboard"
 
+# Global flag checked by routes and detection pipeline
+demo_mode: bool = False
+
+
+def _activate_demo_mode() -> None:
+    """Swap DB queries module with in-memory store throughout the app."""
+    global demo_mode
+    demo_mode = True
+
+    from sentinel.db import memory_store
+
+    # Patch routes and detection pipeline to use memory_store instead of DB queries
+    import sentinel.api.routes as routes_mod
+    import sentinel.detection.detector as detector_mod
+
+    routes_mod.queries = memory_store  # type: ignore[attr-defined]
+    detector_mod.queries = memory_store  # type: ignore[attr-defined]
+
+    logger.info("demo_mode_activated", storage="in-memory")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: connect DB, run migrations. Shutdown: close pool."""
+    """Startup: connect DB (or use memory store in demo mode). Shutdown: cleanup."""
     settings = app.state.settings
 
-    db = settings.get("database", {})
-    await init_pool(
-        host=db.get("host", "localhost"),
-        port=db.get("port", 5432),
-        database=db.get("name", "sentinel"),
-        user=db.get("user", "sentinel"),
-        password=db.get("password", ""),
-        min_size=db.get("pool_min", 2),
-        max_size=db.get("pool_max", 10),
-    )
-    await run_migrations()
+    if app.state.demo_mode:
+        _activate_demo_mode()
+    else:
+        from sentinel.db.connection import close_pool, init_pool
+        from sentinel.db.migrations import run_migrations
+
+        db = settings.get("database", {})
+        await init_pool(
+            host=db.get("host", "localhost"),
+            port=db.get("port", 5432),
+            database=db.get("name", "sentinel"),
+            user=db.get("user", "sentinel"),
+            password=db.get("password", ""),
+            min_size=db.get("pool_min", 2),
+            max_size=db.get("pool_max", 10),
+        )
+        await run_migrations()
 
     app.state.start_time = time.monotonic()
-    logger.info("sentinel_started", version=__version__)
+    logger.info("sentinel_started", version=__version__, demo=app.state.demo_mode)
     yield
-    await close_pool()
+    if not app.state.demo_mode:
+        from sentinel.db.connection import close_pool
+        await close_pool()
     logger.info("sentinel_stopped")
 
 
-def create_app(config_path: Path | None = None) -> FastAPI:
-    """Build and return the configured FastAPI application."""
+def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
+    """Build and return the configured FastAPI application.
+
+    Args:
+        config_path: Path to sentinel.yaml. Uses default discovery if None.
+        demo: If True, runs entirely in-memory with no PostgreSQL needed.
+    """
     settings = load_config(config_path)
 
     app = FastAPI(
@@ -71,6 +102,7 @@ def create_app(config_path: Path | None = None) -> FastAPI:
 
     app.state.settings = settings
     app.state.start_time = time.monotonic()
+    app.state.demo_mode = demo
 
     # --- Middleware stack (order matters: outermost runs first) ---
     sec = settings.get("security", {})

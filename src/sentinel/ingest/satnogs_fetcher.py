@@ -159,14 +159,20 @@ def _flatten_dict(d: dict, prefix: str = "") -> list[tuple[str, Any]]:
 
 
 def _guess_subsystem(parameter_name: str) -> str:
-    """Best-effort subsystem classification from parameter name."""
+    """Best-effort subsystem classification from parameter name.
+
+    Order matters: more specific matches (comms, adcs, thermal) are checked
+    before EPS which has broad keywords like 'power' and 'current'.
+    """
     name = parameter_name.lower()
-    if any(kw in name for kw in ("batt", "solar", "voltage", "current", "power", "bus")):
-        return "eps"
+    # Comms first — 'radio_power' should be comms, not EPS
+    if any(kw in name for kw in ("rssi", "signal", "link", "radio", "beacon", "antenna")):
+        return "comms"
     if any(kw in name for kw in ("gyro", "wheel", "pointing", "attitude", "mag")):
         return "adcs"
     if any(kw in name for kw in ("temp", "thermal", "heat")):
         return "thermal"
-    if any(kw in name for kw in ("rssi", "signal", "link", "radio", "beacon")):
-        return "comms"
+    # EPS last — broad keywords like 'power', 'current'
+    if any(kw in name for kw in ("batt", "solar", "voltage", "current", "power", "bus")):
+        return "eps"
     return "unknown"

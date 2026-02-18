@@ -33,19 +33,38 @@ def serve(
     port: int = typer.Option(8400, help="Port"),
     reload: bool = typer.Option(False, help="Auto-reload on code changes (dev only)"),
     config: Path | None = typer.Option(None, help="Path to sentinel.yaml"),
+    demo: bool = typer.Option(False, help="Demo mode — runs in-memory, no PostgreSQL needed"),
 ) -> None:
     """Start the Sentinel API server."""
     import uvicorn
 
-    typer.echo(f"Starting Sentinel on {host}:{port}")
-    uvicorn.run(
-        "sentinel.api.app:create_app",
-        host=host,
-        port=port,
-        reload=reload,
-        factory=True,
-        log_level="info",
-    )
+    if demo:
+        typer.echo(f"Starting Sentinel DEMO on {host}:{port} (in-memory, no DB)")
+        typer.echo("  Dashboard: http://localhost:8400/dashboard")
+        typer.echo("  API docs:  http://localhost:8400/docs")
+        typer.echo()
+
+        # Pass demo=True to the factory
+        from functools import partial
+        from sentinel.api.app import create_app
+
+        app_instance = create_app(config_path=config, demo=True)
+        uvicorn.run(
+            app_instance,
+            host=host,
+            port=port,
+            log_level="info",
+        )
+    else:
+        typer.echo(f"Starting Sentinel on {host}:{port}")
+        uvicorn.run(
+            "sentinel.api.app:create_app",
+            host=host,
+            port=port,
+            reload=reload,
+            factory=True,
+            log_level="info",
+        )
 
 
 @app.command()

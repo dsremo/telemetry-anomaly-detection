@@ -37,14 +37,19 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse, tags=["system"])
 async def health_check(request: Request) -> HealthResponse:
     """System health check — always accessible without auth."""
-    db_ok = True
-    try:
-        from sentinel.db.connection import get_pool
-        pool = get_pool()
-        async with pool.acquire() as conn:
-            await conn.fetchval("SELECT 1")
-    except Exception:
-        db_ok = False
+    is_demo = getattr(request.app.state, "demo_mode", False)
+
+    if is_demo:
+        db_ok = True  # memory store is always "connected"
+    else:
+        db_ok = True
+        try:
+            from sentinel.db.connection import get_pool
+            pool = get_pool()
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+        except Exception:
+            db_ok = False
 
     uptime = time.monotonic() - getattr(request.app.state, "start_time", time.monotonic())
     return HealthResponse(
