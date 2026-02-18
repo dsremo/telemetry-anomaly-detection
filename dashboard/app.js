@@ -112,7 +112,7 @@ function renderTimeline() {
         const explanation = (a.explanation || '').split('|')[0].trim();
 
         return `
-            <div class="timeline-item ${selected}" data-index="${i}" onclick="selectAnomaly('${a.id}')">
+            <div class="timeline-item ${selected}" data-index="${i}" onclick="selectAnomalyByIndex(${state.anomalies.indexOf(a)})">
                 <span class="timeline-time">${time}</span>
                 <span class="timeline-dot ${a.severity}"></span>
                 <div class="timeline-content">
@@ -213,6 +213,14 @@ window.selectAnomaly = function(id) {
     renderExplanation(anomaly);
 };
 
+window.selectAnomalyByIndex = function(index) {
+    const anomaly = state.anomalies[index];
+    if (!anomaly) return;
+    state.selectedAnomaly = anomaly;
+    renderTimeline();
+    renderExplanation(anomaly);
+};
+
 function addAlert(data) {
     if (data.severity !== 'warning' && data.severity !== 'critical') return;
     const list = document.getElementById('alertList');
@@ -253,10 +261,13 @@ async function fetchAnomalies() {
         if (Array.isArray(data) && data.length > 0) {
             // Merge with WS data, dedup by id
             const existing = new Set(state.anomalies.map(a => a.id));
+            let newAlerts = false;
             for (const a of data) {
                 if (!existing.has(a.id)) {
                     state.anomalies.push(a);
                     updateSubsystemStatus(a);
+                    addAlert(a);
+                    newAlerts = true;
                 }
             }
             state.anomalies.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));

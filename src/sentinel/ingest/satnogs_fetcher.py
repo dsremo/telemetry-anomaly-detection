@@ -36,6 +36,11 @@ class SatNOGSFetcher:
     def __init__(self, api_token: str | None = None):
         self.api_token = api_token or os.environ.get("SATNOGS_API_TOKEN", "")
         if not self.api_token:
+            # .env might not be loaded yet (standalone usage outside API server)
+            from sentinel.core.config import _load_dotenv
+            _load_dotenv()
+            self.api_token = os.environ.get("SATNOGS_API_TOKEN", "")
+        if not self.api_token:
             logger.warning("satnogs_no_token", hint="Set SATNOGS_API_TOKEN in .env")
 
     @property
@@ -61,17 +66,24 @@ class SatNOGSFetcher:
             "limit": min(limit, 500),  # SatNOGS caps at 500 per page
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.get(url, headers=self._headers, params=params)
             resp.raise_for_status()
             data = resp.json()
 
+        # SatNOGS API may return paginated dict {"count": N, "results": [...]}
+        # or a plain list, depending on the endpoint version
+        if isinstance(data, dict):
+            frames = data.get("results", [])
+        else:
+            frames = data
+
         logger.info(
             "satnogs_fetched",
             satellite=satellite_norad_id,
-            frames=len(data),
+            frames=len(frames),
         )
-        return data
+        return frames
 
     async def fetch_satellite_info(self, norad_id: str) -> dict:
         """Get satellite metadata from SatNOGS."""
@@ -122,8 +134,8 @@ class SatNOGSFetcher:
 
             # SatNOGS decoded data is in 'decoded' field (if available)
             decoded = frame.get("decoded", {})
-            if not decoded:
-                # Raw frame — limited usefulness without decoder
+            if not decoded or not isinstance(decoded, dict):
+                # Raw frame or non-dict decoded — skip
                 continue
 
             # Flatten decoded telemetry into individual points
