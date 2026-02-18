@@ -36,6 +36,17 @@ logger = structlog.get_logger()
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _DEFAULT_DATA_DIR = _PROJECT_ROOT / "Resources" / "ESA-Mission1"
 
+# ESA uses generic subsystem names — map to Sentinel's standard names.
+# The exact mapping is based on the ESA OPS-SAT documentation and channel groupings.
+_ESA_SUBSYSTEM_MAP: dict[str, str] = {
+    "subsystem_1": "eps",       # power/electrical
+    "subsystem_2": "eps",       # power secondary
+    "subsystem_3": "adcs",      # attitude/orbit control
+    "subsystem_4": "adcs",      # attitude secondary
+    "subsystem_5": "thermal",   # thermal control
+    "subsystem_6": "comms",     # communications/payload
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ChannelMeta:
@@ -85,9 +96,12 @@ class ESADataLoader:
             reader = csv.DictReader(f)
             for row in reader:
                 name = row["Channel"]
+                raw_subsystem = row["Subsystem"].strip().lower().replace(" ", "_")
+                # Map ESA's generic subsystem names to Sentinel's standard names
+                mapped_subsystem = _ESA_SUBSYSTEM_MAP.get(raw_subsystem, "eps")
                 self._channels_meta[name] = ChannelMeta(
                     name=name,
-                    subsystem=row["Subsystem"],
+                    subsystem=mapped_subsystem,
                     unit=row["Physical Unit"],
                     group=int(row["Group"]),
                     is_target=row["Target"] == "YES",

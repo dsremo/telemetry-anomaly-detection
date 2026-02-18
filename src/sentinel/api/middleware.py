@@ -19,6 +19,11 @@ from sentinel.core.security import RateLimiter
 logger = structlog.get_logger()
 
 
+def _is_websocket(scope: dict) -> bool:
+    """Check if the current request is a WebSocket upgrade."""
+    return scope.get("type") == "websocket"
+
+
 class PayloadLimitMiddleware(BaseHTTPMiddleware):
     """Reject requests with bodies exceeding the size limit.
 
@@ -30,6 +35,8 @@ class PayloadLimitMiddleware(BaseHTTPMiddleware):
         self.max_bytes = max_bytes
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if _is_websocket(request.scope):
+            return await call_next(request)
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > self.max_bytes:
             logger.warning("payload_too_large", size=content_length)
@@ -55,6 +62,8 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         self.key_hashes = api_key_hashes or set()
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if _is_websocket(request.scope):
+            return await call_next(request)
         if not self.enabled:
             return await call_next(request)
 
@@ -82,6 +91,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         self.limiter = RateLimiter(max_requests, window_seconds)
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if _is_websocket(request.scope):
+            return await call_next(request)
         # Rate limit by API key or by IP for unauthenticated endpoints
         key = request.headers.get("X-API-Key", "")
         if not key:
@@ -104,6 +115,8 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if _is_websocket(request.scope):
+            return await call_next(request)
         start = time.monotonic()
         response = await call_next(request)
         latency_ms = (time.monotonic() - start) * 1000

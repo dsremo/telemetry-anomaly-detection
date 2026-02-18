@@ -16,6 +16,25 @@ logger = structlog.get_logger()
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _DEFAULT_CONFIG = _PROJECT_ROOT / "configs" / "sentinel.yaml"
+_DOTENV_PATH = _PROJECT_ROOT / ".env"
+
+
+def _load_dotenv() -> None:
+    """Load .env file into os.environ. No-op if file doesn't exist."""
+    if not _DOTENV_PATH.exists():
+        return
+    with open(_DOTENV_PATH) as f:
+        import os
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            # Don't override existing env vars (explicit export takes priority)
+            if key not in os.environ:
+                os.environ[key] = value
 
 
 def load_config(
@@ -27,6 +46,10 @@ def load_config(
     Priority (highest wins): env vars → config file → defaults.
     Secrets (passwords, keys) MUST come from env vars — they're never in YAML.
     """
+    # Load .env into os.environ BEFORE dynaconf reads config.
+    # This way SENTINEL_DB_PASSWORD etc. are available everywhere.
+    _load_dotenv()
+
     path = config_path or _DEFAULT_CONFIG
 
     if not path.exists():
@@ -36,7 +59,7 @@ def load_config(
         settings_files=[str(path)],
         envvar_prefix=env_prefix,
         environments=False,
-        load_dotenv=True,
+        load_dotenv=False,  # we already loaded it above
     )
 
     # Apply SENTINEL_DB_* env vars to database.* config

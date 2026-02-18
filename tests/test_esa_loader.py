@@ -29,7 +29,7 @@ def esa_data_dir(tmp_path: Path) -> Path:
     channels_dir = data_dir / "channels"
     channels_dir.mkdir(parents=True)
 
-    # Write channels.csv
+    # Write channels.csv (using real ESA subsystem names)
     with open(data_dir / "channels.csv", "w", newline="") as f:
         writer = csv.DictWriter(
             f, fieldnames=["Channel", "Subsystem", "Physical Unit", "Group", "Target"]
@@ -37,21 +37,21 @@ def esa_data_dir(tmp_path: Path) -> Path:
         writer.writeheader()
         writer.writerow({
             "Channel": "channel_1",
-            "Subsystem": "Power",
+            "Subsystem": "subsystem_1",
             "Physical Unit": "V",
             "Group": 1,
             "Target": "YES",
         })
         writer.writerow({
             "Channel": "channel_2",
-            "Subsystem": "Thermal",
+            "Subsystem": "subsystem_5",
             "Physical Unit": "°C",
             "Group": 2,
             "Target": "NO",
         })
         writer.writerow({
             "Channel": "channel_3",
-            "Subsystem": "AOCS",
+            "Subsystem": "subsystem_3",
             "Physical Unit": "deg/s",
             "Group": 1,
             "Target": "YES",
@@ -132,16 +132,16 @@ class TestESAMetadata:
 
     def test_subsystem_map(self, loader: ESADataLoader):
         subsystems = loader.get_subsystem_map()
-        assert "Power" in subsystems
-        assert "Thermal" in subsystems
-        assert "channel_1" in subsystems["Power"]
+        assert "eps" in subsystems       # subsystem_1 → eps
+        assert "thermal" in subsystems   # subsystem_5 → thermal
+        assert "channel_1" in subsystems["eps"]
 
     def test_summary(self, loader: ESADataLoader):
         summary = loader.summary()
         assert summary["total_channels"] == 3
         assert summary["target_channels"] == 2
         assert summary["anomaly_labels"] == 2
-        assert "Power" in summary["subsystems"]
+        assert "eps" in summary["subsystems"]
 
 
 class TestESAChannelLoading:
@@ -181,7 +181,7 @@ class TestESAStreaming:
         points = list(loader.stream_channel("channel_1", max_points=10))
         assert len(points) == 10
         assert all(p.satellite_id == "ESA-MISSION1" for p in points)
-        assert all(p.subsystem == "Power" for p in points)
+        assert all(p.subsystem == "eps" for p in points)  # subsystem_1 → eps
         assert all(p.parameter == "channel_1" for p in points)
         assert all(p.unit == "V" for p in points)
         assert all(p.quality == 1.0 for p in points)

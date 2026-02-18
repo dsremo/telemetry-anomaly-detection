@@ -108,6 +108,10 @@ class SatNOGSFetcher:
         points: list[TelemetryPoint] = []
 
         for frame in raw_frames:
+            # SatNOGS API can return raw hex strings for undecoded frames — skip them
+            if not isinstance(frame, dict):
+                continue
+
             sat_id = satellite_id or str(frame.get("norad_cat_id", "UNKNOWN"))
             timestamp_str = frame.get("timestamp", "")
 

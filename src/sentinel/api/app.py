@@ -23,6 +23,7 @@ from sentinel.api.middleware import (
     RateLimitMiddleware,
 )
 from sentinel.api.routes import router
+from sentinel.api.websocket import ws_router
 from sentinel.core.config import load_config
 
 logger = structlog.get_logger()
@@ -132,6 +133,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
 
     # --- Routes ---
     app.include_router(router, prefix="/api/v1")
+    app.include_router(ws_router, prefix="/api/v1")
 
     # --- Dashboard static files ---
     if _DASHBOARD_DIR.exists():
