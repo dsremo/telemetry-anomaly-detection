@@ -39,9 +39,33 @@ def load_config(
         load_dotenv=True,
     )
 
+    # Apply SENTINEL_DB_* env vars to database.* config
+    # (dynaconf's double-underscore convention would require SENTINEL_DATABASE__HOST)
+    _apply_env_overrides(settings)
+
     _validate_required(settings)
     logger.info("config_loaded", path=str(path))
     return settings
+
+
+def _apply_env_overrides(settings: Dynaconf) -> None:
+    """Map flat SENTINEL_DB_* env vars onto nested database.* config keys."""
+    import os
+
+    env_map = {
+        "SENTINEL_DB_HOST": "database.host",
+        "SENTINEL_DB_PORT": "database.port",
+        "SENTINEL_DB_USER": "database.user",
+        "SENTINEL_DB_PASSWORD": "database.password",
+        "SENTINEL_DB_NAME": "database.name",
+        "SENTINEL_HMAC_SECRET": "security.hmac_secret",
+        "SENTINEL_WEBHOOK_URL": "alerts.webhook_url",
+    }
+
+    for env_var, config_key in env_map.items():
+        val = os.environ.get(env_var)
+        if val:
+            settings.set(config_key, val)
 
 
 def _validate_required(settings: Dynaconf) -> None:

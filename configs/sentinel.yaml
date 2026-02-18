@@ -9,11 +9,11 @@ server:
     - "http://localhost:8400"
 
 database:
-  host: "${SENTINEL_DB_HOST:localhost}"
+  host: "localhost"
   port: 5432
   name: "sentinel"
-  user: "${SENTINEL_DB_USER:sentinel}"
-  password: "${SENTINEL_DB_PASSWORD:}"  # MUST be set via env var
+  user: "sentinel"
+  password: ""  # overridden by SENTINEL_DB_PASSWORD env var
   pool_min: 2
   pool_max: 10
 
@@ -56,11 +56,11 @@ features:
   orbital_period: 5400  # 90 minutes in seconds (LEO)
 
 alerts:
-  webhook_url: "${SENTINEL_WEBHOOK_URL:}"
-  smtp_host: "${SENTINEL_SMTP_HOST:}"
+  webhook_url: ""
+  smtp_host: ""
   smtp_port: 587
-  smtp_user: "${SENTINEL_SMTP_USER:}"
-  smtp_password: "${SENTINEL_SMTP_PASSWORD:}"
+  smtp_user: ""
+  smtp_password: ""
   dedup_window_seconds: 300   # suppress duplicate alerts for 5 min
   escalation_delay_seconds: 600  # escalate if anomaly persists 10 min
 
