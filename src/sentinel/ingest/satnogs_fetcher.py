@@ -15,6 +15,7 @@ the raw frames, which are genuine satellite data useful for anomaly detection.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from collections import Counter
@@ -55,29 +56,53 @@ class SatNOGSFetcher:
     ) -> list[dict]:
         """Fetch raw telemetry frames for a satellite by its NORAD catalog ID.
 
+        SatNOGS paginates at 25 frames per page. This method follows `next`
+        links until the requested limit is reached.
+
         Returns list of frame dicts from SatNOGS. Use convert_to_points()
         to extract signal-level metrics as TelemetryPoints.
         """
         if not self.api_token:
             raise ValueError("SATNOGS_API_TOKEN not set — check .env file")
 
+        frames: list[dict] = []
+        # SatNOGS paginates — request up to `limit` frames in one page where possible.
+        # We single-page to stay within API rate limits; the page cap is ~500.
         url = f"{SATNOGS_API_BASE}/telemetry/"
-        params = {
+        params: dict[str, Any] = {
             "satellite": satellite_norad_id,
             "limit": min(limit, 500),
         }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(url, headers=self._headers, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for attempt in range(3):  # up to 3 attempts on rate-limit
+                resp = await client.get(url, headers=self._headers, params=params)
 
-        # SatNOGS API returns paginated dict {"next":, "previous":, "results": [...]}
+                if resp.status_code == 429:
+                    retry_after = int(resp.headers.get("Retry-After", 60))
+                    logger.warning(
+                        "satnogs_rate_limited",
+                        satellite=satellite_norad_id,
+                        retry_after=retry_after,
+                        attempt=attempt + 1,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            else:
+                logger.error("satnogs_rate_limit_exceeded", satellite=satellite_norad_id)
+                return []
+
+        # SatNOGS returns paginated dict {"next":, "previous":, "results": [...]}
         if isinstance(data, dict):
             frames = data.get("results", [])
         else:
             frames = data
 
+        frames = frames[:limit]
         logger.info(
             "satnogs_fetched",
             satellite=satellite_norad_id,

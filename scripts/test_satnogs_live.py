@@ -15,6 +15,10 @@ import time
 
 import httpx
 
+# Delay between satellite API calls to avoid SatNOGS rate limiting
+# SatNOGS enforces ~1 req/5s per token — 6s gives comfortable headroom
+INTER_SAT_DELAY_S = 6.0
+
 from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
 
 API_BASE = "http://localhost:8400"
@@ -22,13 +26,16 @@ BATCH_SIZE = 50
 
 # Active satellites with high frame counts on SatNOGS DB
 # Source: https://db.satnogs.org/ — "Latest Data" section
+# Note: kept to 2 satellites to stay within SatNOGS API rate limits
 SATELLITES_TO_TRY = [
     ("35933", "BEESAT"),        # 6.6M frames, TU Berlin CubeSat, active
     ("39446", "UWE-3"),         # 131K frames, Uni Würzburg, active
-    ("42017", "NAYIF-1"),       # Emirates CubeSat
     ("40014", "FUNCUBE-1"),     # FUNcube, educational sat
     ("44830", "ROBUSTA-3A"),    # French academic CubeSat
 ]
+
+# Frames per satellite — SatNOGS returns up to 500 per page
+FRAMES_PER_SAT = 100
 
 
 async def main() -> None:
@@ -56,7 +63,7 @@ async def main() -> None:
     for norad_id, name in SATELLITES_TO_TRY:
         print(f"\n{name} (NORAD {norad_id}):")
         try:
-            raw = await fetcher.fetch_telemetry(norad_id, limit=100)
+            raw = await fetcher.fetch_telemetry(norad_id, limit=FRAMES_PER_SAT)
             print(f"  Raw frames: {len(raw)}")
 
             if not raw:
@@ -86,6 +93,9 @@ async def main() -> None:
             print(f"  Timeout — skipping")
         except Exception as e:
             print(f"  Error: {type(e).__name__}: {e}")
+
+        # Brief pause to avoid SatNOGS API rate limiting
+        await asyncio.sleep(INTER_SAT_DELAY_S)
 
     elapsed = time.time() - start
     print(f"\nFetched {len(all_points)} total signal metrics from SatNOGS in {elapsed:.1f}s")
@@ -123,22 +133,29 @@ async def main() -> None:
 
         print(f"  Accepted: {accepted_total}, Rejected: {rejected_total}")
 
-        # --- 5. Query anomalies ---
-        resp = await client.get(f"{API_BASE}/api/v1/anomalies?limit=100")
+        # --- 5. Query anomalies (SatNOGS satellites only) ---
+        satnogs_names = {s[1] for s in SATELLITES_TO_TRY}
+        resp = await client.get(f"{API_BASE}/api/v1/anomalies?limit=200")
         anomalies = resp.json()
-        print(f"\nAnomalies in DB: {len(anomalies)}")
+        satnogs_anomalies = [a for a in anomalies if a.get("satellite_id") in satnogs_names]
 
-        # Show SatNOGS-specific anomalies
-        satnogs_anomalies = [a for a in anomalies if a.get("satellite_id") in [s[1] for s in SATELLITES_TO_TRY]]
+        print(f"\nSatNOGS anomalies detected: {len(satnogs_anomalies)}")
         if satnogs_anomalies:
-            print(f"  SatNOGS anomalies: {len(satnogs_anomalies)}")
-            for a in satnogs_anomalies[:5]:
-                print(f"    [{a['severity']:8s}] {a['satellite_id']:12s} {a['parameter']:15s} = {a['value']:.2f}")
+            by_sat: dict[str, list] = {}
+            for a in satnogs_anomalies:
+                by_sat.setdefault(a["satellite_id"], []).append(a)
+            for sat, sat_anoms in by_sat.items():
+                sevs = [a["severity"] for a in sat_anoms]
+                print(f"  {sat}: {len(sat_anoms)} anomalies  (critical={sevs.count('critical')}, warning={sevs.count('warning')})")
+                for a in sat_anoms[:3]:
+                    print(f"    [{a['severity']:8s}] {a['parameter']:15s} = {a['value']:.4f}  conf={a.get('confidence', 0)*100:.1f}%")
+        else:
+            print("  None — signal metrics nominal (satellite operating normally)")
 
         # --- 6. Satellites ---
         resp = await client.get(f"{API_BASE}/api/v1/satellites")
         satellites = resp.json()
-        print(f"\nAll satellites in DB: {satellites}")
+        print(f"\nSatellites in DB: {satellites}")
 
     print("\n--- SatNOGS live test complete ---")
 
