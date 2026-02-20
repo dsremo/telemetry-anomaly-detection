@@ -7,16 +7,17 @@ community ground stations worldwide.
 API: https://db.satnogs.org/api/
 Auth: Token-based (stored in .env as SATNOGS_API_TOKEN)
 
-Recommended satellites for Sentinel testing:
-  - ROBUSTA-3A:  ~700k frames, academic CubeSat
-  - Monitor-3:   Stable telemetry, long history
-  - ITASAT-1:    Clean EPS + thermal data
-  - LEOPARD:     Modern mission, good continuity
+NOTE: The SatNOGS public REST API returns raw hex frames — decoded telemetry
+is stored in their internal InfluxDB and is NOT exposed via REST. We extract
+signal-level metrics (frame size, byte statistics, reception patterns) from
+the raw frames, which are genuine satellite data useful for anomaly detection.
 """
 
 from __future__ import annotations
 
+import math
 import os
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
@@ -54,8 +55,8 @@ class SatNOGSFetcher:
     ) -> list[dict]:
         """Fetch raw telemetry frames for a satellite by its NORAD catalog ID.
 
-        Returns raw JSON responses from SatNOGS. Use convert_to_points()
-        to transform into Sentinel's format.
+        Returns list of frame dicts from SatNOGS. Use convert_to_points()
+        to extract signal-level metrics as TelemetryPoints.
         """
         if not self.api_token:
             raise ValueError("SATNOGS_API_TOKEN not set — check .env file")
@@ -63,7 +64,7 @@ class SatNOGSFetcher:
         url = f"{SATNOGS_API_BASE}/telemetry/"
         params = {
             "satellite": satellite_norad_id,
-            "limit": min(limit, 500),  # SatNOGS caps at 500 per page
+            "limit": min(limit, 500),
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -71,8 +72,7 @@ class SatNOGSFetcher:
             resp.raise_for_status()
             data = resp.json()
 
-        # SatNOGS API may return paginated dict {"count": N, "results": [...]}
-        # or a plain list, depending on the endpoint version
+        # SatNOGS API returns paginated dict {"next":, "previous":, "results": [...]}
         if isinstance(data, dict):
             frames = data.get("results", [])
         else:
@@ -114,13 +114,22 @@ class SatNOGSFetcher:
     ) -> list[TelemetryPoint]:
         """Convert SatNOGS raw frames into Sentinel TelemetryPoints.
 
-        SatNOGS frames contain decoded telemetry as JSON. The structure
-        varies by satellite — this extracts what we can generically.
+        The SatNOGS public API does NOT include decoded telemetry —
+        the 'decoded' field is just a flag string, not a data dict.
+
+        Instead, we extract signal-level metrics from the raw hex frames:
+          - frame_length: size of the received frame in bytes
+          - byte_mean: mean byte value (0-255) — changes indicate payload shifts
+          - byte_entropy: Shannon entropy of bytes — detects encoding changes
+          - frame_rate: inter-frame timing (computed from timestamps)
+
+        These are genuine satellite signal measurements that our anomaly
+        detection pipeline can analyze for reception quality changes.
         """
         points: list[TelemetryPoint] = []
+        prev_ts: datetime | None = None
 
         for frame in raw_frames:
-            # SatNOGS API can return raw hex strings for undecoded frames — skip them
             if not isinstance(frame, dict):
                 continue
 
@@ -132,27 +141,70 @@ class SatNOGSFetcher:
             except (ValueError, AttributeError):
                 continue
 
-            # SatNOGS decoded data is in 'decoded' field (if available)
-            decoded = frame.get("decoded", {})
-            if not decoded or not isinstance(decoded, dict):
-                # Raw frame or non-dict decoded — skip
+            frame_hex = frame.get("frame", "")
+            if not frame_hex:
                 continue
 
-            # Flatten decoded telemetry into individual points
-            for key, value in _flatten_dict(decoded):
-                if not isinstance(value, (int, float)):
-                    continue
+            try:
+                frame_bytes = bytes.fromhex(frame_hex)
+            except ValueError:
+                continue
 
-                subsystem = _guess_subsystem(key)
-                points.append(TelemetryPoint(
-                    satellite_id=sat_id,
-                    timestamp=ts,
-                    subsystem=subsystem,
-                    parameter=key,
-                    value=float(value),
-                    unit="",
-                    quality=0.9,  # slightly lower quality since community-collected
-                ))
+            if len(frame_bytes) < 2:
+                continue
+
+            # --- Extract signal-level metrics ---
+
+            # Frame length — anomalous if suddenly changes
+            points.append(TelemetryPoint(
+                satellite_id=sat_id,
+                timestamp=ts,
+                subsystem="comms",
+                parameter="frame_length",
+                value=float(len(frame_bytes)),
+                unit="bytes",
+                quality=0.9,
+            ))
+
+            # Mean byte value — shifts indicate payload/encoding changes
+            byte_values = list(frame_bytes)
+            mean_val = sum(byte_values) / len(byte_values)
+            points.append(TelemetryPoint(
+                satellite_id=sat_id,
+                timestamp=ts,
+                subsystem="comms",
+                parameter="byte_mean",
+                value=round(mean_val, 2),
+                unit="",
+                quality=0.9,
+            ))
+
+            # Byte entropy — low=structured data, high=encrypted/noise
+            entropy = _byte_entropy(frame_bytes)
+            points.append(TelemetryPoint(
+                satellite_id=sat_id,
+                timestamp=ts,
+                subsystem="comms",
+                parameter="byte_entropy",
+                value=round(entropy, 4),
+                unit="bits",
+                quality=0.9,
+            ))
+
+            # Inter-frame gap — detects communication dropouts
+            if prev_ts is not None:
+                gap = abs((ts - prev_ts).total_seconds())
+                if gap < 86400:  # ignore gaps > 1 day (different passes)
+                    points.append(TelemetryPoint(
+                        satellite_id=sat_id,
+                        timestamp=ts,
+                        subsystem="comms",
+                        parameter="frame_gap",
+                        value=round(gap, 1),
+                        unit="s",
+                        quality=0.85,
+                    ))
+            prev_ts = ts
 
         logger.info(
             "satnogs_converted",
@@ -162,16 +214,18 @@ class SatNOGSFetcher:
         return points
 
 
-def _flatten_dict(d: dict, prefix: str = "") -> list[tuple[str, Any]]:
-    """Recursively flatten a nested dict into (key, value) pairs."""
-    items: list[tuple[str, Any]] = []
-    for k, v in d.items():
-        full_key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            items.extend(_flatten_dict(v, full_key))
-        else:
-            items.append((full_key, v))
-    return items
+def _byte_entropy(data: bytes) -> float:
+    """Shannon entropy of byte values — 0.0 to 8.0 bits."""
+    if len(data) == 0:
+        return 0.0
+    counts = Counter(data)
+    length = len(data)
+    entropy = 0.0
+    for count in counts.values():
+        p = count / length
+        if p > 0:
+            entropy -= p * math.log2(p)
+    return entropy
 
 
 def _guess_subsystem(parameter_name: str) -> str:

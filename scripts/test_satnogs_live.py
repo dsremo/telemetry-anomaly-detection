@@ -1,4 +1,8 @@
-"""SatNOGS real data → Sentinel API live test.
+"""SatNOGS real satellite data → Sentinel API live test.
+
+Fetches raw frames from the SatNOGS network and extracts signal-level
+metrics (frame length, byte entropy, inter-frame gaps) that flow through
+our anomaly detection pipeline.
 
 Run:  python3 scripts/test_satnogs_live.py
 Requires: sentinel serve running on localhost:8400
@@ -7,6 +11,7 @@ Requires: sentinel serve running on localhost:8400
 
 import asyncio
 import sys
+import time
 
 import httpx
 
@@ -15,97 +20,88 @@ from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
 API_BASE = "http://localhost:8400"
 BATCH_SIZE = 50
 
-# Satellites known to have decoded telemetry in SatNOGS DB.
-# Many CubeSats only have raw hex — we try several until one works.
+# Active satellites with high frame counts on SatNOGS DB
+# Source: https://db.satnogs.org/ — "Latest Data" section
 SATELLITES_TO_TRY = [
-    ("44830", "ROBUSTA-3A"),
-    ("43786", "ITASAT-1"),
-    ("47960", "LEOPARD"),
-    ("25544", "ISS"),
-    ("40014", "FUNCUBE-1"),
-    ("42017", "NAYIF-1"),
+    ("35933", "BEESAT"),        # 6.6M frames, TU Berlin CubeSat, active
+    ("39446", "UWE-3"),         # 131K frames, Uni Würzburg, active
+    ("42017", "NAYIF-1"),       # Emirates CubeSat
+    ("40014", "FUNCUBE-1"),     # FUNcube, educational sat
+    ("44830", "ROBUSTA-3A"),    # French academic CubeSat
 ]
 
 
 async def main() -> None:
-    # --- 1. Init fetcher (auto-loads .env) ---
+    # --- 1. Init fetcher ---
     fetcher = SatNOGSFetcher()
     if not fetcher.api_token:
         print("FAIL: SATNOGS_API_TOKEN not found. Check .env file.")
         sys.exit(1)
     print(f"SatNOGS token: {fetcher.api_token[:8]}...")
 
-    # --- 2. Check server is up ---
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # --- 2. Check server ---
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.get(f"{API_BASE}/api/v1/health")
             health = resp.json()
-            print(f"Server health: {health['status']}")
+            print(f"Server: {health['status']} (v{health.get('version', '?')})")
         except httpx.ConnectError:
             print("FAIL: Cannot connect to server. Run 'sentinel serve' first.")
             sys.exit(1)
 
-    # --- 3. Try satellites until we find one with decoded frames ---
-    points = []
-    sat_name = ""
+    # --- 3. Fetch and convert from each satellite ---
+    all_points = []
+    start = time.time()
 
     for norad_id, name in SATELLITES_TO_TRY:
-        print(f"\nTrying {name} (NORAD {norad_id})...")
+        print(f"\n{name} (NORAD {norad_id}):")
         try:
-            raw = await fetcher.fetch_telemetry(norad_id, limit=200)
+            raw = await fetcher.fetch_telemetry(norad_id, limit=100)
             print(f"  Raw frames: {len(raw)}")
 
-            # Debug: show raw response structure
-            print(f"  Response type: {type(raw).__name__}")
-            if isinstance(raw, dict):
-                print(f"  Dict keys: {list(raw.keys())}")
-                # Paginated response — extract results list
-                results = raw.get("results", [])
-                print(f"  Results count: {len(results)}")
-                if results and isinstance(results[0], dict):
-                    print(f"  First result keys: {list(results[0].keys())}")
-                    decoded = results[0].get("decoded")
-                    print(f"  Has 'decoded': {decoded is not None}")
-                    if decoded:
-                        print(f"  Decoded: {decoded}")
-            elif isinstance(raw, list) and raw:
-                frame = raw[0]
-                if isinstance(frame, dict):
-                    print(f"  Frame keys: {list(frame.keys())}")
-                    decoded = frame.get("decoded")
-                    print(f"  'decoded' type: {type(decoded).__name__}, value: {str(decoded)[:200]}")
-                else:
-                    print(f"  Frame is {type(frame).__name__} (raw hex)")
+            if not raw:
+                print("  No frames available")
+                continue
 
-            converted = fetcher.convert_to_points(raw, satellite_id=name)
-            print(f"  Decoded points: {len(converted)}")
+            # Show sample frame info
+            frame = raw[0] if isinstance(raw[0], dict) else None
+            if frame:
+                hex_data = frame.get("frame", "")
+                ts = frame.get("timestamp", "")
+                observer = frame.get("observer", "")
+                print(f"  Latest: {ts} | observer={observer} | hex_len={len(hex_data)}")
 
-            if converted:
-                points = converted
-                sat_name = name
-                break
+            points = fetcher.convert_to_points(raw, satellite_id=name)
+            print(f"  Extracted {len(points)} signal metrics")
+
+            if points:
+                # Show sample metrics
+                params = set(p.parameter for p in points)
+                print(f"  Parameters: {params}")
+                for p in points[:3]:
+                    print(f"    {p.parameter}: {p.value} {p.unit}")
+                all_points.extend(points)
+
         except httpx.ReadTimeout:
-            print(f"  Timeout — SatNOGS API slow for {name}, skipping")
+            print(f"  Timeout — skipping")
         except Exception as e:
-            import traceback
             print(f"  Error: {type(e).__name__}: {e}")
-            traceback.print_exc()
 
-    if not points:
-        print("\n--- No decoded telemetry found from any satellite ---")
-        print("This is normal — many CubeSats only transmit raw hex beacons.")
-        print("SatNOGS integration works, but needs a satellite with a decoder.")
-        print("\nThe ESA dataset test (test_esa_live.py) uses pre-decoded data and works reliably.")
-        sys.exit(0)
+    elapsed = time.time() - start
+    print(f"\nFetched {len(all_points)} total signal metrics from SatNOGS in {elapsed:.1f}s")
+
+    if not all_points:
+        print("\nNo data extracted. Check your SatNOGS API token and internet connection.")
+        sys.exit(1)
 
     # --- 4. Push to API ---
-    print(f"\n{sat_name}: pushing {len(points)} points to API...")
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    print(f"\nPushing {len(all_points)} points to Sentinel API...")
+    async with httpx.AsyncClient(timeout=30.0) as client:
         accepted_total = 0
         rejected_total = 0
 
-        for i in range(0, len(points), BATCH_SIZE):
-            batch = points[i : i + BATCH_SIZE]
+        for i in range(0, len(all_points), BATCH_SIZE):
+            batch = all_points[i : i + BATCH_SIZE]
             payload = [
                 {
                     "satellite_id": p.satellite_id,
@@ -124,16 +120,25 @@ async def main() -> None:
                 continue
             accepted_total += result.get("accepted", 0)
             rejected_total += result.get("rejected", 0)
-            print(f"  Batch {i // BATCH_SIZE + 1}: accepted={result['accepted']}, rejected={result['rejected']}")
 
-        print(f"\nTotal: accepted={accepted_total}, rejected={rejected_total}")
+        print(f"  Accepted: {accepted_total}, Rejected: {rejected_total}")
 
         # --- 5. Query anomalies ---
-        resp = await client.get(f"{API_BASE}/api/v1/anomalies")
+        resp = await client.get(f"{API_BASE}/api/v1/anomalies?limit=100")
         anomalies = resp.json()
         print(f"\nAnomalies in DB: {len(anomalies)}")
-        for a in anomalies[:3]:
-            print(f"  [{a.get('severity', '?')}] {a.get('satellite_id', '?')} — {a.get('explanation', '')[:80]}")
+
+        # Show SatNOGS-specific anomalies
+        satnogs_anomalies = [a for a in anomalies if a.get("satellite_id") in [s[1] for s in SATELLITES_TO_TRY]]
+        if satnogs_anomalies:
+            print(f"  SatNOGS anomalies: {len(satnogs_anomalies)}")
+            for a in satnogs_anomalies[:5]:
+                print(f"    [{a['severity']:8s}] {a['satellite_id']:12s} {a['parameter']:15s} = {a['value']:.2f}")
+
+        # --- 6. Satellites ---
+        resp = await client.get(f"{API_BASE}/api/v1/satellites")
+        satellites = resp.json()
+        print(f"\nAll satellites in DB: {satellites}")
 
     print("\n--- SatNOGS live test complete ---")
 
