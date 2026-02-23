@@ -215,6 +215,10 @@ class FeatureEngine:
             columns.append(win.values[-length:])
         return np.column_stack(columns)
 
+    def get_known_parameters(self) -> set[str]:
+        """Return the set of parameters that have been seen so far."""
+        return set(self._windows.keys())
+
     def reset(self, parameter: str | None = None) -> None:
         """Clear feature windows. If parameter given, clear only that one."""
         if parameter:

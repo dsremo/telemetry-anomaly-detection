@@ -74,6 +74,10 @@ async def lifespan(app: FastAPI):
         )
         await run_migrations()
 
+    # Wire config thresholds into detector singletons
+    from sentinel.detection.detector import init_detectors
+    init_detectors(settings)
+
     app.state.start_time = time.monotonic()
     logger.info("sentinel_started", version=__version__, demo=app.state.demo_mode)
     yield

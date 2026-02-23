@@ -24,28 +24,62 @@ security:
   hmac_algorithm: "sha256"
 
 detection:
-  # Rolling Z-Score
-  z_score_window: 300       # samples (5 min at 1Hz)
-  z_score_threshold: 3.0    # standard deviations
+  # ── Z-Score spike detector (runs on STL residuals) ──────────────────
+  z_score_threshold: 3.0    # flag residuals above 3σ from rolling mean
+                            # z-score is spike-only; drift is handled by CUSUM
 
-  # Isolation Forest
-  isolation_contamination: 0.01  # expected anomaly fraction
+  # ── CUSUM drift detector — NASA standard parameters ─────────────────
+  # k = allowance = 0.5 × σ_ref   (detect shifts ≥ 1σ)
+  # H = threshold = 8.0 × σ_ref   (require 8σ of accumulated evidence)
+  #   H was raised from 5.0 to 8.0 to handle long-term telemetry drift;
+  #   satellite signals age over months/years — a higher threshold avoids
+  #   flagging normal aging as anomalies.
+  # Both are per-channel — derived from the calibration reference window.
+  cusum_k_factor: 0.5
+  cusum_h_factor: 8.0
+  cusum_recal_factor: 3.0   # recalibrate if mean drifts > 3σ for 20 samples
+                            # lower = more responsive to slow regime shifts
+
+  # ── EWMA level-shift detector ────────────────────────────────────────
+  ewma_lambda: 0.1          # smoothing: 0.1=slow/sensitive, 0.3=fast/noisy
+                            # lowered from 0.2 → less reactive to brief spikes
+  ewma_sigma_factor: 3.5    # UCL/LCL = ±3.5σ × sqrt(λ/(2-λ))
+                            # raised from 3.0 → fewer false level-shift alarms
+
+  # ── Per-channel calibration ──────────────────────────────────────────
+  calibration_window: 200   # residual samples before CUSUM/EWMA activate
+                            # 200 hourly points = ~8 days: better σ_ref estimate
+                            # than 100 (4 days); still activates in first week.
+
+  # ── Alert cooldown: minimum hours between anomaly reports ────────────
+  # Suppresses repeated alarms during a sustained anomalous regime.
+  # Each distinct anomaly event should be flagged once, not every N hours.
+  alert_cooldown_hours: 72  # 3 days between same-channel reports
+
+  # ── STL decomposition ────────────────────────────────────────────────
+  stl_recompute_every: 30   # recompute decomposition after N new points
+                            # amortises O(n) STL cost across detection cycles
+
+  # ── Isolation Forest (multivariate cross-parameter) ──────────────────
+  isolation_contamination: 0.01  # expected anomaly fraction (~1%)
   isolation_lookback: 3600       # samples for training window
 
-  # Change-Point Detection (PELT)
-  changepoint_penalty: 3    # higher = fewer change points
-  changepoint_min_size: 30  # minimum segment length
+  # ── PELT changepoint (structural breaks in residuals) ────────────────
+  changepoint_penalty: 10   # higher = fewer, more confident changepoints
+  changepoint_min_size: 50  # minimum segment length between breakpoints
 
-  # Ensemble
+  # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
   ensemble_weights:
-    statistical: 0.35
-    isolation_forest: 0.40
-    changepoint: 0.25
+    cusum:            0.30   # primary: gradual drift accumulation
+    ewma:             0.25   # secondary: sudden level shifts
+    statistical:      0.20   # spike detection (single-point outliers)
+    changepoint:      0.15   # structural break detection
+    isolation_forest: 0.10   # multivariate (only for standard param names)
 
-  # Severity thresholds (on 0-1 confidence scale)
+  # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:
-    watch: 0.3
-    warning: 0.6
+    watch:    0.50
+    warning:  0.65
     critical: 0.85
 
 features:

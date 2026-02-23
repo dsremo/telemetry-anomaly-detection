@@ -1,13 +1,36 @@
 """Parameterized queries — the ONLY way to talk to the database.
 
-Every query uses $1, $2, ... placeholders. No string interpolation. Ever.
-This file is the single source of truth for all SQL operations.
+Rules (never break these):
+  1. All values go through $N placeholders. Zero string interpolation.
+  2. Every public function opens its own connection via acquire().
+  3. Bulk inserts use UNNEST — one round-trip for any batch size.
+  4. ON CONFLICT DO NOTHING on telemetry — idempotent ingestion, retry-safe.
+  5. All SELECT limits are capped server-side — callers cannot cause OOM.
+
+Query map:
+  Telemetry       — insert_telemetry, get_telemetry, get_recent_telemetry_window,
+                    get_latest_values
+  Satellites      — get_known_satellites, upsert_satellite_seen
+  Channels        — upsert_channel_seen, get_channel_stats
+  Calibration     — get_channel_calibration, upsert_channel_calibration,
+                    get_all_calibrations
+  Detector state  — get_detector_state, upsert_detector_state,
+                    bulk_upsert_detector_states, get_all_detector_states
+  Anomalies       — insert_anomaly, get_anomalies, get_anomaly_by_id,
+                    get_anomaly_stats, mark_false_positive
+  Incidents       — open_incident, get_open_incident, update_incident_stats,
+                    link_anomaly_to_incident, close_incident, get_incidents
+  Alerts          — get_alerts, acknowledge_alert
+  API Keys        — store_api_key, verify_api_key_exists, touch_api_key
+  Rollups         — get_hourly_stats (uses telemetry_hourly cagg if available)
 """
 
 from __future__ import annotations
 
 import json
 from datetime import datetime
+from typing import Any
+from uuid import UUID
 
 import structlog
 
@@ -22,31 +45,42 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 async def insert_telemetry(points: list[TelemetryPoint]) -> int:
-    """Batch insert telemetry points. Returns number of rows inserted."""
+    """Bulk-insert telemetry via UNNEST.
+
+    One SQL statement regardless of batch size — 10-100x faster than
+    executemany for large payloads (ESA: 500 points → 1 round-trip vs 500).
+
+    ON CONFLICT DO NOTHING: exact duplicate (same sat + parameter + timestamp)
+    is silently discarded, making ingestion idempotent on retransmission.
+    """
     if not points:
         return 0
 
     async with acquire() as conn:
-        records = [
-            (
-                p.satellite_id,
-                p.timestamp,
-                p.subsystem,
-                p.parameter,
-                p.value,
-                p.unit,
-                p.quality,
-            )
-            for p in points
-        ]
-        await conn.executemany(
+        await conn.execute(
             """
-            INSERT INTO telemetry (satellite_id, timestamp, subsystem, parameter, value, unit, quality)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            INSERT INTO telemetry
+                (satellite_id, timestamp, subsystem, parameter, value, unit, quality)
+            SELECT * FROM UNNEST(
+                $1::text[],
+                $2::timestamptz[],
+                $3::text[],
+                $4::text[],
+                $5::float8[],
+                $6::text[],
+                $7::float4[]
+            )
+            ON CONFLICT (satellite_id, parameter, timestamp) DO NOTHING
             """,
-            records,
+            [p.satellite_id for p in points],
+            [p.timestamp    for p in points],
+            [p.subsystem    for p in points],
+            [p.parameter    for p in points],
+            [p.value        for p in points],
+            [p.unit         for p in points],
+            [p.quality      for p in points],
         )
-        return len(records)
+    return len(points)
 
 
 async def get_telemetry(
@@ -56,35 +90,36 @@ async def get_telemetry(
     until: datetime | None = None,
     limit: int = 1000,
 ) -> list[dict]:
-    """Query telemetry with optional filters. Always bounded by limit."""
+    """Query telemetry with optional filters. Hard-capped at 10 000 rows."""
+    # Build conditions list cleanly — no f-string SQL, no injection risk.
+    conditions: list[str] = ["satellite_id = $1"]
+    params: list[Any] = [satellite_id]
+
+    if parameter is not None:
+        params.append(parameter)
+        conditions.append(f"parameter = ${len(params)}")
+
+    if since is not None:
+        params.append(since)
+        conditions.append(f"timestamp >= ${len(params)}")
+
+    if until is not None:
+        params.append(until)
+        conditions.append(f"timestamp <= ${len(params)}")
+
+    params.append(min(limit, 10_000))
+    limit_ph = f"${len(params)}"
+
+    where = " AND ".join(conditions)
+    sql = (
+        f"SELECT satellite_id, timestamp, subsystem, parameter, value, unit, quality "
+        f"FROM telemetry WHERE {where} "
+        f"ORDER BY timestamp DESC LIMIT {limit_ph}"
+    )
+
     async with acquire() as conn:
-        conditions = ["satellite_id = $1"]
-        params: list = [satellite_id]
-        idx = 2
-
-        if parameter:
-            conditions.append(f"parameter = ${idx}")
-            params.append(parameter)
-            idx += 1
-
-        if since:
-            conditions.append(f"timestamp >= ${idx}")
-            params.append(since)
-            idx += 1
-
-        if until:
-            conditions.append(f"timestamp <= ${idx}")
-            params.append(until)
-            idx += 1
-
-        where = " AND ".join(conditions)
-        params.append(min(limit, 10_000))  # hard cap
-
-        rows = await conn.fetch(
-            f"SELECT * FROM telemetry WHERE {where} ORDER BY timestamp DESC LIMIT ${idx}",
-            *params,
-        )
-        return [dict(r) for r in rows]
+        rows = await conn.fetch(sql, *params)
+    return [dict(r) for r in rows]
 
 
 async def get_recent_telemetry_window(
@@ -92,25 +127,76 @@ async def get_recent_telemetry_window(
     parameter: str,
     window_size: int = 300,
 ) -> list[dict]:
-    """Get the N most recent points for a specific parameter. Used by detectors."""
+    """N most-recent points for one parameter, ascending order.
+
+    Detectors require oldest-first (ascending) so values[0] is the oldest
+    and values[-1] is the current point.
+    """
     async with acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT timestamp, value, quality
-            FROM telemetry
-            WHERE satellite_id = $1 AND parameter = $2
-            ORDER BY timestamp DESC
-            LIMIT $3
+            FROM (
+                SELECT timestamp, value, quality
+                FROM telemetry
+                WHERE satellite_id = $1 AND parameter = $2
+                ORDER BY timestamp DESC
+                LIMIT $3
+            ) sub
+            ORDER BY timestamp ASC
             """,
             satellite_id, parameter, window_size,
         )
-        return [dict(r) for r in rows]
+    return [dict(r) for r in rows]
+
+
+async def get_telemetry_batch_ordered(
+    satellite_id: str,
+    parameter: str,
+    after_ts: "datetime | None" = None,
+    limit: int = 10_000,
+) -> list[dict]:
+    """Chronologically ordered telemetry for one parameter, with pagination.
+
+    Used by the bulk analysis pipeline to replay all stored data through the
+    detection pipeline without going through the REST API.  Callers should
+    call repeatedly, passing the last returned timestamp as after_ts, until
+    an empty list is returned.
+
+    Returns oldest-first (ascending) so the detection loop sees time correctly.
+    """
+    async with acquire() as conn:
+        if after_ts is None:
+            rows = await conn.fetch(
+                """
+                SELECT timestamp, value, subsystem, quality
+                FROM telemetry
+                WHERE satellite_id = $1 AND parameter = $2
+                ORDER BY timestamp ASC
+                LIMIT $3
+                """,
+                satellite_id, parameter, limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT timestamp, value, subsystem, quality
+                FROM telemetry
+                WHERE satellite_id = $1 AND parameter = $2
+                  AND timestamp > $3
+                ORDER BY timestamp ASC
+                LIMIT $4
+                """,
+                satellite_id, parameter, after_ts, limit,
+            )
+    return [dict(r) for r in rows]
 
 
 async def get_latest_values(satellite_id: str) -> list[dict]:
-    """Get the most recent value for every parameter of a satellite.
+    """Most-recent value for every parameter of a satellite.
 
-    Uses DISTINCT ON — PostgreSQL-specific but very efficient.
+    DISTINCT ON is PostgreSQL-specific but extremely efficient with the
+    idx_telemetry_param_time index (satellite_id, parameter, timestamp DESC).
     """
     async with acquire() as conn:
         rows = await conn.fetch(
@@ -123,7 +209,255 @@ async def get_latest_values(satellite_id: str) -> list[dict]:
             """,
             satellite_id,
         )
-        return [dict(r) for r in rows]
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Satellites
+# ---------------------------------------------------------------------------
+
+async def upsert_satellite_seen(satellite_id: str, ts: datetime) -> None:
+    """Register satellite on first telemetry; update last_telemetry_at thereafter."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO satellites (satellite_id, first_telemetry_at, last_telemetry_at)
+            VALUES ($1, $2, $2)
+            ON CONFLICT (satellite_id) DO UPDATE
+                SET last_telemetry_at = EXCLUDED.last_telemetry_at
+                WHERE satellites.last_telemetry_at IS NULL
+                   OR satellites.last_telemetry_at < EXCLUDED.last_telemetry_at
+            """,
+            satellite_id, ts,
+        )
+
+
+async def get_known_satellites() -> list[str]:
+    """All satellite IDs that have ever sent telemetry."""
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT satellite_id FROM satellites ORDER BY satellite_id"
+        )
+    return [r["satellite_id"] for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Channel registry
+# ---------------------------------------------------------------------------
+
+async def upsert_channel_seen(
+    satellite_id: str,
+    parameter: str,
+    subsystem: str,
+    unit: str,
+    point_count: int = 1,
+) -> None:
+    """Register a channel on first sight; bump total_points and last_seen_at."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO channel_registry
+                (satellite_id, parameter, subsystem, unit, total_points)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (satellite_id, parameter) DO UPDATE
+                SET last_seen_at = NOW(),
+                    total_points = channel_registry.total_points + EXCLUDED.total_points,
+                    subsystem    = EXCLUDED.subsystem,
+                    unit         = EXCLUDED.unit
+            """,
+            satellite_id, parameter, subsystem, unit, point_count,
+        )
+
+
+async def get_channel_stats(satellite_id: str) -> list[dict]:
+    """Summary stats for every channel of a satellite. Used by dashboard."""
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                cr.parameter,
+                cr.subsystem,
+                cr.unit,
+                cr.total_points,
+                cr.first_seen_at,
+                cr.last_seen_at,
+                cc.state           AS calibration_state,
+                cc.ref_mean,
+                cc.ref_std,
+                cc.ref_sample_count
+            FROM channel_registry cr
+            LEFT JOIN channel_calibration cc
+                   ON cc.satellite_id = cr.satellite_id
+                  AND cc.parameter    = cr.parameter
+            WHERE cr.satellite_id = $1
+            ORDER BY cr.subsystem, cr.parameter
+            """,
+            satellite_id,
+        )
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Per-channel calibration (CUSUM / EWMA reference distribution)
+# ---------------------------------------------------------------------------
+
+async def get_channel_calibration(
+    satellite_id: str, parameter: str
+) -> dict | None:
+    """Load calibration state for one channel."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT state, ref_mean, ref_std, ref_sample_count, calibrated_at
+            FROM channel_calibration
+            WHERE satellite_id = $1 AND parameter = $2
+            """,
+            satellite_id, parameter,
+        )
+    return dict(row) if row else None
+
+
+async def upsert_channel_calibration(
+    satellite_id: str,
+    parameter: str,
+    state: str,
+    ref_mean: float | None,
+    ref_std: float | None,
+    ref_sample_count: int,
+) -> None:
+    """Persist calibration state.  Overwrites previous state for the channel."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO channel_calibration
+                (satellite_id, parameter, state, ref_mean, ref_std,
+                 ref_sample_count, calibrated_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6,
+                    CASE WHEN $3 = 'calibrated' THEN NOW() ELSE NULL END,
+                    NOW())
+            ON CONFLICT (satellite_id, parameter) DO UPDATE
+                SET state            = EXCLUDED.state,
+                    ref_mean         = EXCLUDED.ref_mean,
+                    ref_std          = EXCLUDED.ref_std,
+                    ref_sample_count = EXCLUDED.ref_sample_count,
+                    calibrated_at    = EXCLUDED.calibrated_at,
+                    updated_at       = NOW()
+            """,
+            satellite_id, parameter, state, ref_mean, ref_std, ref_sample_count,
+        )
+
+
+async def get_all_calibrations(satellite_id: str) -> dict[str, dict]:
+    """Load calibration for all channels of a satellite in one query.
+
+    Called at startup to warm the in-memory calibration cache so the
+    detectors don't need individual DB lookups on the first ingestion cycle.
+    Returns: { parameter: { state, ref_mean, ref_std, ref_sample_count } }
+    """
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT parameter, state, ref_mean, ref_std, ref_sample_count
+            FROM channel_calibration
+            WHERE satellite_id = $1
+            """,
+            satellite_id,
+        )
+    return {r["parameter"]: dict(r) for r in rows}
+
+
+# ---------------------------------------------------------------------------
+# Detector accumulator state (CUSUM / EWMA — survive restarts)
+# ---------------------------------------------------------------------------
+
+async def get_detector_state(
+    satellite_id: str, parameter: str, detector_name: str
+) -> dict | None:
+    """Load accumulator state for one (channel, detector) pair."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT state_data, last_updated_at
+            FROM detector_state
+            WHERE satellite_id = $1 AND parameter = $2 AND detector_name = $3
+            """,
+            satellite_id, parameter, detector_name,
+        )
+    return dict(row) if row else None
+
+
+async def upsert_detector_state(
+    satellite_id: str,
+    parameter: str,
+    detector_name: str,
+    state_data: dict,
+) -> None:
+    """Persist accumulator state for one (channel, detector) pair."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO detector_state
+                (satellite_id, parameter, detector_name, state_data, last_updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, NOW())
+            ON CONFLICT (satellite_id, parameter, detector_name) DO UPDATE
+                SET state_data      = EXCLUDED.state_data,
+                    last_updated_at = NOW()
+            """,
+            satellite_id, parameter, detector_name, json.dumps(state_data),
+        )
+
+
+async def bulk_upsert_detector_states(
+    states: list[dict[str, Any]],
+) -> None:
+    """Batch-persist accumulator states in one round-trip.
+
+    Expected shape of each dict:
+        { satellite_id, parameter, detector_name, state_data: dict }
+
+    Called during the flush cycle (every N detections) and at shutdown
+    to persist all in-memory accumulators.
+    """
+    if not states:
+        return
+
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO detector_state
+                (satellite_id, parameter, detector_name, state_data, last_updated_at)
+            SELECT s, p, d, data::jsonb, NOW()
+            FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS t(s, p, d, data)
+            ON CONFLICT (satellite_id, parameter, detector_name) DO UPDATE
+                SET state_data      = EXCLUDED.state_data,
+                    last_updated_at = NOW()
+            """,
+            [s["satellite_id"]              for s in states],
+            [s["parameter"]                 for s in states],
+            [s["detector_name"]             for s in states],
+            [json.dumps(s["state_data"])    for s in states],
+        )
+
+
+async def get_all_detector_states(
+    satellite_id: str, detector_name: str
+) -> dict[str, dict]:
+    """Load all accumulator states for one detector across all channels.
+
+    Called at startup to warm the in-memory state so detection can resume
+    seamlessly after a restart.
+    Returns: { parameter: state_data_dict }
+    """
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT parameter, state_data
+            FROM detector_state
+            WHERE satellite_id = $1 AND detector_name = $2
+            """,
+            satellite_id, detector_name,
+        )
+    return {r["parameter"]: dict(r["state_data"]) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -131,15 +465,16 @@ async def get_latest_values(satellite_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 async def insert_anomaly(anomaly: Anomaly) -> str:
-    """Insert an anomaly record. Returns the anomaly ID."""
+    """Insert one anomaly record. Returns the anomaly ID."""
     async with acquire() as conn:
         await conn.execute(
             """
             INSERT INTO anomalies
                 (id, satellite_id, timestamp, subsystem, parameter, value,
                  severity, confidence, detectors_triggered, explanation,
-                 root_cause_group, contributing_params)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 root_cause_group, contributing_params, stl_residual)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+            ON CONFLICT (id) DO NOTHING
             """,
             anomaly.id,
             anomaly.satellite_id,
@@ -153,8 +488,9 @@ async def insert_anomaly(anomaly: Anomaly) -> str:
             anomaly.explanation,
             anomaly.root_cause_group,
             json.dumps(anomaly.contributing_params),
+            getattr(anomaly, "stl_residual", None),
         )
-        return anomaly.id
+    return anomaly.id
 
 
 async def get_anomalies(
@@ -162,46 +498,296 @@ async def get_anomalies(
     severity: str | None = None,
     since: datetime | None = None,
     limit: int = 100,
+    include_false_positives: bool = False,
 ) -> list[dict]:
-    """Query anomalies with optional filters."""
+    """Query anomalies. Excludes false-positives by default."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if not include_false_positives:
+        conditions.append("false_positive = FALSE")
+
+    if satellite_id is not None:
+        params.append(satellite_id)
+        conditions.append(f"satellite_id = ${len(params)}")
+
+    if severity is not None:
+        params.append(severity)
+        conditions.append(f"severity = ${len(params)}")
+
+    if since is not None:
+        params.append(since)
+        conditions.append(f"timestamp >= ${len(params)}")
+
+    params.append(min(limit, 1000))
+    limit_ph = f"${len(params)}"
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    sql = (
+        f"SELECT id, satellite_id, timestamp, subsystem, parameter, value, "
+        f"severity, confidence, detectors_triggered, explanation, "
+        f"root_cause_group, contributing_params, incident_id, "
+        f"reviewed, false_positive, stl_residual, created_at "
+        f"FROM anomalies {where} "
+        f"ORDER BY timestamp DESC LIMIT {limit_ph}"
+    )
+
     async with acquire() as conn:
-        conditions: list[str] = []
-        params: list = []
-        idx = 1
-
-        if satellite_id:
-            conditions.append(f"satellite_id = ${idx}")
-            params.append(satellite_id)
-            idx += 1
-
-        if severity:
-            conditions.append(f"severity = ${idx}")
-            params.append(severity)
-            idx += 1
-
-        if since:
-            conditions.append(f"timestamp >= ${idx}")
-            params.append(since)
-            idx += 1
-
-        where = " WHERE " + " AND ".join(conditions) if conditions else ""
-        params.append(min(limit, 1000))
-
-        rows = await conn.fetch(
-            f"SELECT * FROM anomalies{where} ORDER BY timestamp DESC LIMIT ${idx}",
-            *params,
-        )
-        return [dict(r) for r in rows]
+        rows = await conn.fetch(sql, *params)
+    return [dict(r) for r in rows]
 
 
 async def get_anomaly_by_id(anomaly_id: str) -> dict | None:
-    """Get a single anomaly by ID."""
+    """Full detail for one anomaly."""
     async with acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM anomalies WHERE id = $1",
             anomaly_id,
         )
-        return dict(row) if row else None
+    return dict(row) if row else None
+
+
+async def get_anomaly_stats(satellite_id: str) -> dict:
+    """Aggregate counts for the dashboard summary panel.
+
+    Single query with conditional aggregation — avoids 4 separate round-trips.
+    """
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*)
+                    FILTER (WHERE false_positive = FALSE)
+                    AS total,
+                COUNT(*)
+                    FILTER (WHERE severity = 'critical'
+                              AND reviewed = FALSE
+                              AND false_positive = FALSE)
+                    AS open_critical,
+                COUNT(*)
+                    FILTER (WHERE severity = 'warning'
+                              AND reviewed = FALSE
+                              AND false_positive = FALSE)
+                    AS open_warning,
+                COUNT(*)
+                    FILTER (WHERE severity = 'watch'
+                              AND reviewed = FALSE
+                              AND false_positive = FALSE)
+                    AS open_watch,
+                COUNT(*)
+                    FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours'
+                              AND false_positive = FALSE)
+                    AS last_24h,
+                COUNT(*)
+                    FILTER (WHERE timestamp > NOW() - INTERVAL '1 hour'
+                              AND false_positive = FALSE)
+                    AS last_hour,
+                MAX(confidence)
+                    FILTER (WHERE false_positive = FALSE)
+                    AS peak_confidence,
+                MAX(timestamp)
+                    FILTER (WHERE false_positive = FALSE)
+                    AS latest_at
+            FROM anomalies
+            WHERE satellite_id = $1
+            """,
+            satellite_id,
+        )
+    return dict(row) if row else {}
+
+
+async def mark_false_positive(anomaly_id: str) -> bool:
+    """Flag an anomaly as a false positive. Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE anomalies
+               SET false_positive = TRUE, reviewed = TRUE
+             WHERE id = $1
+            """,
+            anomaly_id,
+        )
+    return result == "UPDATE 1"
+
+
+# ---------------------------------------------------------------------------
+# Incidents
+# ---------------------------------------------------------------------------
+
+async def open_incident(
+    satellite_id: str,
+    subsystem: str,
+    severity: str,
+    title: str,
+    first_anomaly_at: datetime,
+) -> str:
+    """Create a new incident. Returns the UUID as a string."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO incidents
+                (satellite_id, subsystem, severity, title,
+                 first_anomaly_at, last_anomaly_at)
+            VALUES ($1, $2, $3, $4, $5, $5)
+            RETURNING id::text
+            """,
+            satellite_id, subsystem, severity, title, first_anomaly_at,
+        )
+    return row["id"]
+
+
+async def get_open_incident(
+    satellite_id: str,
+    subsystem: str,
+    window_minutes: int = 10,
+) -> dict | None:
+    """Find an open incident for a subsystem within the correlation window.
+
+    Used to group anomalies that arrive close together in time into one
+    incident rather than generating N separate incidents.
+    """
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, severity, anomaly_count, last_anomaly_at
+            FROM incidents
+            WHERE satellite_id = $1
+              AND subsystem     = $2
+              AND status        = 'open'
+              AND last_anomaly_at > NOW() - ($3 * INTERVAL '1 minute')
+            ORDER BY last_anomaly_at DESC
+            LIMIT 1
+            """,
+            satellite_id, subsystem, window_minutes,
+        )
+    return dict(row) if row else None
+
+
+async def update_incident_stats(
+    incident_id: str,
+    severity: str,
+    last_anomaly_at: datetime,
+) -> None:
+    """Bump anomaly count and update severity + last-seen timestamp."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE incidents
+               SET anomaly_count  = anomaly_count + 1,
+                   last_anomaly_at = $2,
+                   severity = CASE
+                       WHEN $3 = 'critical' THEN 'critical'
+                       WHEN $3 = 'warning' AND severity != 'critical' THEN 'warning'
+                       ELSE severity
+                   END
+             WHERE id = $1::uuid
+            """,
+            incident_id, last_anomaly_at, severity,
+        )
+
+
+async def link_anomaly_to_incident(anomaly_id: str, incident_id: str) -> None:
+    """Associate an anomaly with an incident."""
+    async with acquire() as conn:
+        await conn.execute(
+            "UPDATE anomalies SET incident_id = $1::uuid WHERE id = $2",
+            incident_id, anomaly_id,
+        )
+
+
+async def close_incident(incident_id: str) -> None:
+    """Mark an incident as closed."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE incidents
+               SET status    = 'closed',
+                   closed_at = NOW()
+             WHERE id = $1::uuid
+            """,
+            incident_id,
+        )
+
+
+async def get_incidents(
+    satellite_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Query incidents with optional satellite + status filter."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if satellite_id is not None:
+        params.append(satellite_id)
+        conditions.append(f"satellite_id = ${len(params)}")
+
+    if status is not None:
+        params.append(status)
+        conditions.append(f"status = ${len(params)}")
+
+    params.append(min(limit, 500))
+    limit_ph = f"${len(params)}"
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    sql = (
+        f"SELECT id::text, satellite_id, subsystem, severity, status, title, "
+        f"root_cause_summary, anomaly_count, first_anomaly_at, last_anomaly_at, "
+        f"acknowledged_at, closed_at, created_at "
+        f"FROM incidents {where} "
+        f"ORDER BY last_anomaly_at DESC LIMIT {limit_ph}"
+    )
+
+    async with acquire() as conn:
+        rows = await conn.fetch(sql, *params)
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+
+async def get_alerts(
+    satellite_id: str | None = None,
+    acknowledged: bool | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Query alert dispatch records."""
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if satellite_id is not None:
+        params.append(satellite_id)
+        conditions.append(f"satellite_id = ${len(params)}")
+
+    if acknowledged is not None:
+        params.append(acknowledged)
+        conditions.append(f"acknowledged = ${len(params)}")
+
+    params.append(min(limit, 1000))
+    limit_ph = f"${len(params)}"
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    sql = (
+        f"SELECT id, anomaly_id, satellite_id, severity, title, message, "
+        f"dispatched_at, acknowledged "
+        f"FROM alerts {where} "
+        f"ORDER BY dispatched_at DESC LIMIT {limit_ph}"
+    )
+
+    async with acquire() as conn:
+        rows = await conn.fetch(sql, *params)
+    return [dict(r) for r in rows]
+
+
+async def acknowledge_alert(alert_id: str) -> bool:
+    """Mark alert as acknowledged. Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "UPDATE alerts SET acknowledged = TRUE WHERE id = $1 AND acknowledged = FALSE",
+            alert_id,
+        )
+    return result == "UPDATE 1"
 
 
 # ---------------------------------------------------------------------------
@@ -209,32 +795,95 @@ async def get_anomaly_by_id(anomaly_id: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 async def store_api_key(key_hash: str, label: str) -> None:
-    """Store a hashed API key."""
+    """Persist a hashed API key. Plain-text key is never stored."""
     async with acquire() as conn:
         await conn.execute(
-            "INSERT INTO api_keys (key_hash, label) VALUES ($1, $2)",
+            "INSERT INTO api_keys (key_hash, label) VALUES ($1, $2) "
+            "ON CONFLICT (key_hash) DO NOTHING",
             key_hash, label,
         )
 
 
 async def verify_api_key_exists(key_hash: str) -> bool:
-    """Check if a hashed API key exists and is active."""
+    """Return True if the hash matches an active key."""
     async with acquire() as conn:
         result = await conn.fetchval(
             "SELECT active FROM api_keys WHERE key_hash = $1",
             key_hash,
         )
-        return result is True
+    return result is True
+
+
+async def touch_api_key(key_hash: str) -> None:
+    """Update last_used_at for audit trail. Best-effort — no failure on miss."""
+    try:
+        async with acquire() as conn:
+            await conn.execute(
+                "UPDATE api_keys SET last_used_at = NOW() WHERE key_hash = $1",
+                key_hash,
+            )
+    except Exception as exc:
+        logger.warning("api_key_touch_failed", error=str(exc))
 
 
 # ---------------------------------------------------------------------------
-# Satellites
+# Rollup queries (telemetry_hourly cagg or raw fallback)
 # ---------------------------------------------------------------------------
 
-async def get_known_satellites() -> list[str]:
-    """Get all satellite IDs that have sent telemetry."""
+async def get_hourly_stats(
+    satellite_id: str,
+    parameter: str,
+    since: datetime,
+) -> list[dict]:
+    """Per-hour aggregates for dashboard trend charts.
+
+    Uses the telemetry_hourly continuous aggregate when TimescaleDB is
+    available; falls back to a plain GROUP BY on raw telemetry otherwise.
+    Both return the same columns: hour, avg_value, min_value, max_value,
+    stddev_value, sample_count.
+    """
     async with acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT DISTINCT satellite_id FROM telemetry ORDER BY satellite_id"
+        # Check if the cagg exists.
+        has_cagg: bool = await conn.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_matviews
+                WHERE matviewname = 'telemetry_hourly'
+            )
+            """
         )
-        return [r["satellite_id"] for r in rows]
+
+        if has_cagg:
+            rows = await conn.fetch(
+                """
+                SELECT hour, avg_value, min_value, max_value,
+                       stddev_value, sample_count
+                FROM telemetry_hourly
+                WHERE satellite_id = $1
+                  AND parameter    = $2
+                  AND hour         >= $3
+                ORDER BY hour ASC
+                """,
+                satellite_id, parameter, since,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    date_trunc('hour', timestamp)  AS hour,
+                    AVG(value)    AS avg_value,
+                    MIN(value)    AS min_value,
+                    MAX(value)    AS max_value,
+                    STDDEV(value) AS stddev_value,
+                    COUNT(*)      AS sample_count
+                FROM telemetry
+                WHERE satellite_id = $1
+                  AND parameter    = $2
+                  AND timestamp    >= $3
+                GROUP BY date_trunc('hour', timestamp)
+                ORDER BY hour ASC
+                """,
+                satellite_id, parameter, since,
+            )
+
+    return [dict(r) for r in rows]

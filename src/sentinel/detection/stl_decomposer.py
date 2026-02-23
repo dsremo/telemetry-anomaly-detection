@@ -1,0 +1,279 @@
+"""STL decomposer — removes predictable variation before anomaly detection.
+
+Key principle (from DETECTION_PRINCIPLES.md):
+    Detectors run on STL residuals only, never on raw telemetry values.
+
+Raw satellite telemetry contains two non-anomalous components:
+    1. Orbital sinusoid  — 90-min eclipse cycle in thermal, power, comms.
+    2. Long-term trend   — slow drift in battery capacity, sensor aging, etc.
+
+STL separates:  raw = trend + seasonal + residual
+
+Only the residual is passed to CUSUM / EWMA / z-score / PELT.  The seasonal
+component is removed so eclipse cycles never become false positives.  The
+trend IS included in the residual (raw - seasonal only) because gradual
+degradation is exactly what CUSUM must detect — trend changes ARE anomalies.
+
+Decomposition modes (auto-selected per channel):
+    "stl"           — full statsmodels.STL when period_samples >= 4 and
+                      len(values) >= 2 × period_samples
+    "savgol_trend"  — Savitzky-Golay trend extraction only (no seasonal);
+                      used when orbital period is too fine for the data rate
+    "cold_start"    — global mean subtraction when < MIN_SAMPLES points
+                      available; activates CUSUM/EWMA warmup
+
+Caching: decomposition is expensive.  Each channel caches its last result
+and only recomputes when at least RECOMPUTE_EVERY new points have arrived.
+The cache key is (channel_key, n_values) — a recompute fires the moment the
+window changes meaningfully, not on every single sample.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+
+import numpy as np
+import structlog
+
+logger = structlog.get_logger()
+
+# Minimum samples before any decomposition is attempted.
+_MIN_SAMPLES: int = 20
+
+# Recompute STL / Savitzky-Golay only when this many new values have arrived
+# since the last decomposition.  Amortises the O(n) cost over multiple cycles.
+_RECOMPUTE_EVERY: int = 30
+
+
+@dataclass(frozen=True, slots=True)
+class DecompositionResult:
+    """Immutable result of one decomposition cycle for a channel window."""
+
+    trend: np.ndarray       # long-term trend (kept in residual for CUSUM)
+    seasonal: np.ndarray    # periodic orbital component (removed)
+    residual: np.ndarray    # raw - seasonal  (= raw - seasonal, trend kept)
+    method: str             # "stl" | "savgol_trend" | "cold_start"
+    period_samples: int     # effective orbital period in samples (0 if N/A)
+    n_samples: int          # length of the input window
+
+
+@dataclass
+class _ChannelCache:
+    """Per-channel decomposition cache."""
+    last_result: DecompositionResult | None = field(default=None)
+    last_n: int = field(default=0)          # n_values at last recompute
+    calls_since_recompute: int = field(default=0)
+
+
+class STLDecomposer:
+    """Per-channel STL decomposer.  Singleton — one instance per server.
+
+    Usage:
+        result = decomposer.decompose(key, values, timestamps)
+        residuals = result.residual          # pass to CUSUM / EWMA / z-score
+        current_residual = residuals[-1]     # residual for the latest point
+    """
+
+    def __init__(self, orbital_period_s: int = 5400, recompute_every: int = _RECOMPUTE_EVERY):
+        self._orbital_period_s = orbital_period_s
+        self._recompute_every = recompute_every
+        self._cache: dict[str, _ChannelCache] = {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def decompose(
+        self,
+        key: str,
+        values: np.ndarray,
+        timestamps: np.ndarray | None = None,
+    ) -> DecompositionResult:
+        """Decompose a channel window.  Returns cached result when unchanged.
+
+        Args:
+            key:        Unique channel key, e.g. "ESA-MISSION1:channel_047".
+            values:     Raw telemetry values, oldest → newest.
+            timestamps: Unix epoch seconds, same length as values (optional).
+                        Used to estimate the effective sampling interval so the
+                        orbital period can be expressed in samples.
+
+        Returns:
+            DecompositionResult with .residual ready for detectors.
+        """
+        n = len(values)
+        ch = self._cache.setdefault(key, _ChannelCache())
+        ch.calls_since_recompute += 1
+
+        needs_recompute = (
+            ch.last_result is None
+            or ch.calls_since_recompute >= self._recompute_every
+            or n != ch.last_n
+        )
+
+        if needs_recompute:
+            period_samples = self._estimate_period(timestamps, n)
+            ch.last_result = self._compute(values, period_samples)
+            ch.last_n = n
+            ch.calls_since_recompute = 0
+
+        return ch.last_result  # type: ignore[return-value]
+
+    def reset(self, key: str | None = None) -> None:
+        """Clear cache for one channel or all channels."""
+        if key:
+            self._cache.pop(key, None)
+        else:
+            self._cache.clear()
+
+    # ------------------------------------------------------------------
+    # Period estimation
+    # ------------------------------------------------------------------
+
+    def _estimate_period(
+        self, timestamps: np.ndarray | None, n: int
+    ) -> int:
+        """Estimate orbital period in samples from actual timestamp spacing.
+
+        Returns 0 when the data is too coarse to resolve orbital periodicity
+        (i.e. the sampling interval >> orbital period).
+        """
+        if timestamps is None or len(timestamps) < 2:
+            return 0
+
+        # Use the median inter-sample interval to be robust against gaps.
+        diffs = np.diff(timestamps[-min(n, 200):])
+        valid = diffs[diffs > 0]
+        if len(valid) == 0:
+            return 0
+
+        median_interval_s = float(np.median(valid))
+        if median_interval_s <= 0:
+            return 0
+
+        period_samples = self._orbital_period_s / median_interval_s
+
+        # Need at least 4 samples per cycle for meaningful decomposition.
+        return int(period_samples) if period_samples >= 4.0 else 0
+
+    # ------------------------------------------------------------------
+    # Decomposition
+    # ------------------------------------------------------------------
+
+    def _compute(self, values: np.ndarray, period_samples: int) -> DecompositionResult:
+        n = len(values)
+
+        if n < _MIN_SAMPLES:
+            return self._cold_start(values)
+
+        # Full STL: requires period >= 4 AND at least 2 complete cycles of data.
+        if period_samples >= 4 and n >= 2 * period_samples:
+            result = self._try_stl(values, period_samples)
+            if result is not None:
+                return result
+
+        # Fallback: extract trend via Savitzky-Golay, no seasonal component.
+        # Residual = raw - trend.  CUSUM will then detect accelerating drift.
+        return self._savgol_trend(values)
+
+    def _try_stl(self, values: np.ndarray, period_samples: int) -> DecompositionResult | None:
+        try:
+            from statsmodels.tsa.seasonal import STL  # type: ignore
+
+            n = len(values)
+            # seasonal window must be odd and >= 7
+            sw = max(7, period_samples | 1)  # bitwise OR 1 → make odd
+            if sw % 2 == 0:
+                sw += 1
+
+            stl = STL(
+                values,
+                period=period_samples,
+                seasonal=sw,
+                robust=True,   # resistant to outliers during decomposition
+            )
+            fit = stl.fit()
+
+            trend    = np.asarray(fit.trend,    dtype=np.float64)
+            seasonal = np.asarray(fit.seasonal, dtype=np.float64)
+
+            # Residual = raw - seasonal only.
+            # We keep the trend inside the residual so CUSUM can detect
+            # when the long-term drift itself becomes anomalous.
+            residual = values - seasonal
+
+            return DecompositionResult(
+                trend=trend,
+                seasonal=seasonal,
+                residual=residual,
+                method="stl",
+                period_samples=period_samples,
+                n_samples=n,
+            )
+        except Exception as exc:
+            logger.debug("stl_decomp_failed", error=str(exc))
+            return None
+
+    def _savgol_trend(self, values: np.ndarray) -> DecompositionResult:
+        """Trend-only decomposition via Savitzky-Golay smoothing.
+
+        Used when the data rate is too coarse for orbital STL.
+        Extracts a smooth trend; residual = raw - trend, which centres the
+        signal and removes baseline drift so CUSUM operates on deviations.
+        """
+        n = len(values)
+        # Window: ~15% of data, must be odd, between 5 and 101
+        window = max(5, min(n // 7, 101))
+        if window % 2 == 0:
+            window += 1
+        window = min(window, n if n % 2 == 1 else n - 1)
+        window = max(window, 5)
+
+        trend = self._apply_savgol(values, window)
+        seasonal = np.zeros(n, dtype=np.float64)
+        # Residual = raw - trend here (no seasonal component)
+        residual = values - trend
+
+        return DecompositionResult(
+            trend=trend,
+            seasonal=seasonal,
+            residual=residual,
+            method="savgol_trend",
+            period_samples=0,
+            n_samples=n,
+        )
+
+    @staticmethod
+    def _apply_savgol(values: np.ndarray, window: int) -> np.ndarray:
+        try:
+            from scipy.signal import savgol_filter  # type: ignore
+            return np.asarray(savgol_filter(values, window_length=window, polyorder=2), dtype=np.float64)
+        except Exception:
+            # Final fallback: centred rolling mean
+            return np.asarray(
+                np.convolve(values, np.ones(window) / window, mode="same"),
+                dtype=np.float64,
+            )
+
+    @staticmethod
+    def _cold_start(values: np.ndarray) -> DecompositionResult:
+        """Minimal decomposition during warm-up (<20 samples).
+
+        Removes only the global mean so residuals are centred at zero.
+        CUSUM and EWMA skip detection until calibration completes anyway.
+        """
+        n = len(values)
+        mean = float(np.mean(values)) if n > 0 else 0.0
+        trend    = np.full(n, mean, dtype=np.float64)
+        seasonal = np.zeros(n, dtype=np.float64)
+        residual = values - trend
+
+        return DecompositionResult(
+            trend=trend,
+            seasonal=seasonal,
+            residual=residual,
+            method="cold_start",
+            period_samples=0,
+            n_samples=n,
+        )

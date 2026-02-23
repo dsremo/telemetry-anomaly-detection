@@ -1,10 +1,13 @@
-"""Change-point detector — finds abrupt shifts in telemetry behavior.
+"""Change-point detector — structural breaks in STL residuals via PELT.
 
 Uses the PELT (Pruned Exact Linear Time) algorithm via the `ruptures` library.
-Detects moments where the statistical properties of a signal change suddenly:
-  - Mean shift (sensor failure, mode change)
-  - Variance shift (vibration onset, noise increase)
-  - Trend break (degradation start)
+Detects moments where the statistical properties of the RESIDUAL signal change:
+  - Mean shift in residuals  (sensor failure, mode change that STL didn't absorb)
+  - Variance shift           (vibration onset, noise increase)
+  - Trend break in residuals (degradation onset — acceleration of drift)
+
+Running on STL residuals instead of raw telemetry means eclipse transitions
+(which live in the seasonal component) no longer generate changepoints.
 
 The key advantage: catches the *moment* a fault begins, not just that
 values are currently abnormal. "Something changed at T=14:32:07" is
@@ -38,9 +41,12 @@ class ChangePointDetector:
         self.lookback = lookback
 
     def detect(self, values: np.ndarray, parameter: str = "") -> DetectorResult:
-        """Analyze a window of values for change points.
+        """Analyze a window of STL residuals for structural change points.
 
-        values: 1D array of recent telemetry values (time-ordered)
+        Args:
+            values:    1D array of STL residuals, oldest → newest.
+                       Caller passes residuals (NOT raw telemetry values).
+            parameter: Channel name for log context only.
         """
         if len(values) < self.min_segment_size * 2:
             return DetectorResult(
