@@ -148,12 +148,13 @@ def init_detectors(settings: object) -> None:
 
     # ── Calibration (shared params read by CalibrationManager internals) ──
     import sentinel.detection.calibration as _cal_mod
-    _cal_mod.CALIBRATION_WINDOW = int(det.get("calibration_window", 100))
-    _cal_mod.CUSUM_K_FACTOR     = float(det.get("cusum_k_factor", 0.5))
-    _cal_mod.CUSUM_H_FACTOR     = float(det.get("cusum_h_factor", 5.0))
-    _cal_mod.EWMA_LAMBDA        = float(det.get("ewma_lambda", 0.2))
-    _cal_mod.EWMA_SIGMA_FACTOR  = float(det.get("ewma_sigma_factor", 3.0))
-    _cal_mod.RECAL_FACTOR       = float(det.get("cusum_recal_factor", 10.0))
+    _cal_mod.CALIBRATION_WINDOW    = int(det.get("calibration_window", 100))
+    _cal_mod.CUSUM_K_FACTOR        = float(det.get("cusum_k_factor", 0.5))
+    _cal_mod.CUSUM_H_FACTOR        = float(det.get("cusum_h_factor", 5.0))
+    _cal_mod.EWMA_LAMBDA           = float(det.get("ewma_lambda", 0.2))
+    _cal_mod.EWMA_SIGMA_FACTOR     = float(det.get("ewma_sigma_factor", 3.0))
+    _cal_mod.RECAL_FACTOR          = float(det.get("cusum_recal_factor", 10.0))
+    _cal_mod.SIGMA_UPDATE_INTERVAL = int(det.get("sigma_update_interval", 720))
     # Recompute the spread constant in calibration module after lambda change.
     import math
     lam = _cal_mod.EWMA_LAMBDA

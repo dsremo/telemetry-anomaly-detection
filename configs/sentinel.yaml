@@ -53,8 +53,21 @@ detection:
 
   # ── Alert cooldown: minimum hours between anomaly reports ────────────
   # Suppresses repeated alarms during a sustained anomalous regime.
-  # Each distinct anomaly event should be flagged once, not every N hours.
-  alert_cooldown_hours: 72  # 3 days between same-channel reports
+  # Each distinct anomaly event should be flagged once, not repeatedly.
+  # 360 h = 15 days: caps channels with persistent signals at ~13 alarms
+  # over a 13-year mission (4745 days / 15 days ≈ 316 max, but adaptive
+  # σ_ref should reduce genuine alarm rate well below that ceiling).
+  alert_cooldown_hours: 360  # 15 days between same-channel reports
+
+  # ── Adaptive σ_ref: periodic noise-floor refresh ─────────────────────
+  # After initial calibration, σ_ref is refreshed every N samples using
+  # the last CALIBRATION_WINDOW post-calibration residuals.  This prevents
+  # the frozen σ_ref (from the first 8 days of data) from becoming stale
+  # on 13-year signals where component aging or seasonal effects slowly
+  # change the noise variance.  A too-small σ_ref makes CUSUM accumulate
+  # normal drift and fire as false positives.
+  # 720 = 30 days at 1-h resampling.  Only updates when σ changes >10%.
+  sigma_update_interval: 720
 
   # ── STL decomposition ────────────────────────────────────────────────
   stl_recompute_every: 30   # recompute decomposition after N new points

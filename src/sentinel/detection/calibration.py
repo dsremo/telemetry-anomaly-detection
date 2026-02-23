@@ -39,6 +39,9 @@ CUSUM_H_FACTOR:      float = 5.0    # H = H × σ_ref
 EWMA_LAMBDA:         float = 0.2    # smoothing weight per new sample
 EWMA_SIGMA_FACTOR:   float = 3.0    # UCL/LCL = ±SIGMA × σ_ref × spread
 RECAL_FACTOR:        float = 10.0   # recalibrate if |drift| > RECAL × σ_ref
+SIGMA_UPDATE_INTERVAL: int = 720    # post-calibration samples between σ_ref refreshes
+                                    # 720 = 30 days at 1-h resampling; adapts to
+                                    # aging / long-term seasonal variance shifts
 
 # Pre-computed EWMA spread factor sqrt(λ/(2-λ)) — constant for a given λ
 _ewma_spread = math.sqrt(EWMA_LAMBDA / (2.0 - EWMA_LAMBDA))
@@ -65,6 +68,11 @@ class CalibrationState:
 
     # Internal: raw residuals collected during warming_up
     _buffer: list[float] = field(default_factory=list, repr=False)
+
+    # Internal: recent post-calibration residuals for periodic σ_ref refresh.
+    # Kept at ≤ CALIBRATION_WINDOW entries — a sliding window of recent noise.
+    _recent_buffer: list[float] = field(default_factory=list, repr=False)
+    _sigma_update_counter: int = 0
 
     # ── derived-parameter helpers ───────────────────────────────────────
 
@@ -198,7 +206,17 @@ class CalibrationManager:
             )
 
     def _check_regime(self, key: str, state: CalibrationState, residual: float) -> None:
-        """Detect if the process has shifted to a new regime."""
+        """Detect if the process has shifted to a new regime.
+
+        Also performs a periodic σ_ref refresh every SIGMA_UPDATE_INTERVAL
+        samples.  This prevents the frozen σ_ref (computed from the first
+        CALIBRATION_WINDOW residuals) from becoming stale on long time-series
+        where signal variance evolves due to component aging or seasonal effects.
+
+        When σ_ref is too small relative to the current noise floor, CUSUM
+        accumulates small-but-consistent deviations and fires repeatedly as a
+        false positive — this adaptive update is the root-cause fix for that.
+        """
         if state.ref_std < 1e-9:
             return
         deviation = abs(residual - state.ref_mean) / state.ref_std
@@ -217,8 +235,40 @@ class CalibrationManager:
                 )
                 state.state = "recalibrating"
                 state._buffer = [residual]
+                state._recent_buffer.clear()
+                state._sigma_update_counter = 0
                 state.sample_count += 1
                 self._recal_streak[key] = 0
         else:
             # Normal — reset streak counter.
             self._recal_streak[key] = 0
+
+        # ── Periodic σ_ref refresh ─────────────────────────────────────────
+        # Accumulate recent residuals in a sliding window and refresh σ_ref
+        # every SIGMA_UPDATE_INTERVAL samples.  Only acts when the new σ
+        # differs meaningfully from the current one (>10% change) to avoid
+        # noisy micro-updates.
+        state._recent_buffer.append(residual)
+        if len(state._recent_buffer) > CALIBRATION_WINDOW:
+            # Keep only the most recent CALIBRATION_WINDOW residuals.
+            state._recent_buffer = state._recent_buffer[-CALIBRATION_WINDOW:]
+
+        state._sigma_update_counter += 1
+        if state._sigma_update_counter >= SIGMA_UPDATE_INTERVAL:
+            state._sigma_update_counter = 0
+            min_samples = CALIBRATION_WINDOW // 2
+            if len(state._recent_buffer) >= min_samples:
+                arr = np.asarray(state._recent_buffer, dtype=np.float64)
+                new_sigma = float(np.std(arr, ddof=1))
+                if new_sigma > 1e-9:
+                    old_sigma = state.ref_std
+                    ratio = new_sigma / max(old_sigma, 1e-9)
+                    if abs(ratio - 1.0) > 0.10:  # >10% change warrants update
+                        state._update_derived(new_sigma)
+                        logger.debug(
+                            "sigma_refreshed",
+                            key=key,
+                            old=round(old_sigma, 6),
+                            new=round(new_sigma, 6),
+                            ratio=round(ratio, 3),
+                        )
