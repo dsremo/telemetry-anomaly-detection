@@ -33,7 +33,7 @@ _SATELLITE_ID = "ESA-MISSION1"
 _DEFAULT_RESAMPLE_MINUTES = 60
 
 
-async def main(resample_minutes: int, max_channels: int | None) -> None:
+async def main(resample_minutes: int, max_channels: int | None, cooldown_hours: int) -> None:
     cfg = load_config(Path("configs/sentinel.yaml"))
     db = cfg.get("database", {})
     await db_connection.init_pool(
@@ -45,7 +45,14 @@ async def main(resample_minutes: int, max_channels: int | None) -> None:
         min_size=2,
         max_size=4,
     )
-    init_detectors(cfg)
+
+    # ESA historical data spans 13 years — override cooldown so the detector
+    # suppresses repeated alarms during long-term aging drift.  Live monitoring
+    # uses the 15-day default; historical benchmark uses the CLI value (default 60d).
+    import copy
+    cfg_esa = copy.deepcopy(cfg)
+    cfg_esa["detection"]["alert_cooldown_hours"] = cooldown_hours
+    init_detectors(cfg_esa)
 
     loader = ESADataLoader()
     loader.load_metadata()
@@ -108,5 +115,9 @@ if __name__ == "__main__":
         "--channels", type=int, default=None,
         help="Limit to first N channels (default: all 58)",
     )
+    parser.add_argument(
+        "--cooldown-hours", type=int, default=1440,
+        help="Min hours between anomaly reports per channel (default: 1440 = 60d for historical data)",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.resample_minutes, args.channels))
+    asyncio.run(main(args.resample_minutes, args.channels, args.cooldown_hours))

@@ -79,6 +79,15 @@ async def lifespan(app: FastAPI):
     from sentinel.detection.detector import init_detectors
     init_detectors(settings)
 
+    # Wire alert service — dispatches webhooks/email on WARNING+ anomalies.
+    from sentinel.alerts.service import init_alert_service
+    al = settings.get("alerts", {})
+    init_alert_service(
+        webhook_url=al.get("webhook_url", ""),
+        dedup_window_sec=float(al.get("dedup_window_seconds", 300)),
+        escalation_delay_sec=float(al.get("escalation_delay_seconds", 600)),
+    )
+
     app.state.start_time = time.monotonic()
     logger.info("sentinel_started", version=__version__, demo=app.state.demo_mode)
     yield

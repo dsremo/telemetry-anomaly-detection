@@ -308,7 +308,21 @@ class SatNOGSFetcher:
             except ValueError:
                 continue
 
-            if len(frame_bytes) < 2:
+            n = len(frame_bytes)
+            if n < 4:
+                # Fewer than 4 bytes → not a valid protocol frame; discard.
+                continue
+            if n > 2048:
+                # Frames above 2 kB are implausible for LEO amateur downlinks
+                # (AX.25 max = 330 B, most CubeSats < 512 B).  Large values
+                # indicate ground-station test injections or corrupted hex
+                # that skew the calibration reference distribution.
+                continue
+
+            # Entropy guard: all bytes identical → zero-entropy → corrupted or
+            # padding frame.  These produce entropy=0 and contaminate σ_ref.
+            raw_entropy = _byte_entropy(frame_bytes)
+            if raw_entropy < 0.1:
                 continue
 
             # --- Extract signal-level metrics ---
@@ -319,7 +333,7 @@ class SatNOGSFetcher:
                 timestamp=ts,
                 subsystem="comms",
                 parameter="frame_length",
-                value=float(len(frame_bytes)),
+                value=float(n),
                 unit="bytes",
                 quality=0.9,
             ))
@@ -338,7 +352,8 @@ class SatNOGSFetcher:
             ))
 
             # Byte entropy — low=structured data, high=encrypted/noise
-            entropy = _byte_entropy(frame_bytes)
+            # raw_entropy already computed above for the sanity guard; reuse it.
+            entropy = raw_entropy
             points.append(TelemetryPoint(
                 satellite_id=sat_id,
                 timestamp=ts,

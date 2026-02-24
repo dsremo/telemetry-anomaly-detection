@@ -629,6 +629,13 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                     "explanation": anomaly.explanation,
                     "timestamp":   anomaly.timestamp.isoformat() if isinstance(anomaly.timestamp, datetime) else str(anomaly.timestamp),
                 })
+
+                # Dispatch alert (webhook / email) for WARNING and CRITICAL only.
+                # WATCH-level anomalies are informational — no pager alert.
+                from sentinel.alerts.service import get_alert_service
+                _svc = get_alert_service()
+                if _svc is not None:
+                    await _svc.process_anomaly(anomaly)
             except Exception as exc:
                 logger.error("anomaly_store_failed", error=str(exc), parameter=param)
 

@@ -19,6 +19,38 @@ from sentinel.core.models import Alert, Anomaly, Severity
 
 logger = structlog.get_logger()
 
+# Module-level singleton — initialised once at server startup via init_alert_service().
+# None until init_alert_service() is called (e.g. in demo mode or when no webhook set).
+_alert_service: "AlertService | None" = None
+
+
+def init_alert_service(
+    webhook_url: str = "",
+    dedup_window_sec: float = 300.0,
+    escalation_delay_sec: float = 600.0,
+) -> "AlertService":
+    """Create and register the global AlertService singleton.
+
+    Called once from app.py lifespan after loading config.
+    """
+    global _alert_service
+    _alert_service = AlertService(
+        webhook_url=webhook_url,
+        dedup_window_sec=dedup_window_sec,
+        escalation_delay_sec=escalation_delay_sec,
+    )
+    logger.info(
+        "alert_service_initialized",
+        webhook_configured=bool(webhook_url),
+        dedup_window_sec=dedup_window_sec,
+    )
+    return _alert_service
+
+
+def get_alert_service() -> "AlertService | None":
+    """Return the global AlertService, or None if not yet initialised."""
+    return _alert_service
+
 
 class AlertService:
     """Manages alert dispatching with deduplication and escalation."""
