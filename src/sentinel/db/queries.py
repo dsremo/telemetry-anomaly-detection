@@ -512,7 +512,7 @@ async def insert_anomaly(anomaly: Anomaly) -> str:
                  severity, confidence, detectors_triggered, explanation,
                  root_cause_group, contributing_params, stl_residual)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT (satellite_id, parameter, timestamp) DO NOTHING
             """,
             anomaly.id,
             anomaly.satellite_id,

@@ -29,7 +29,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +358,25 @@ _MIGRATIONS: list[str] = [
         END;
     END;
     $$;
+    """,
+
+    # v8: Unique constraint on anomalies(satellite_id, parameter, timestamp).
+    # Without this, re-running bulk analysis stores the same anomaly twice because
+    # insert_anomaly generates a fresh UUID each call — ON CONFLICT (id) never fires
+    # since the UUID is different every time.  The composite key makes every insert
+    # idempotent: same satellite + parameter + timestamp is silently discarded.
+    """
+    -- Remove pre-existing duplicates before adding the constraint.
+    -- Keep only the earliest-created record for each (sat, param, ts) triple.
+    DELETE FROM anomalies
+    WHERE id NOT IN (
+        SELECT DISTINCT ON (satellite_id, parameter, timestamp) id
+        FROM anomalies
+        ORDER BY satellite_id, parameter, timestamp, created_at
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_sat_param_ts
+        ON anomalies (satellite_id, parameter, timestamp);
     """,
 ]
 
