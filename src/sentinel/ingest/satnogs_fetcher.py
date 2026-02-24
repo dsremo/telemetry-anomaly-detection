@@ -76,8 +76,20 @@ class SatNOGSFetcher:
         }
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            for attempt in range(3):  # up to 3 attempts on rate-limit
-                resp = await client.get(url, headers=self._headers, params=params)
+            for attempt in range(3):  # up to 3 attempts on transient errors
+                try:
+                    resp = await client.get(url, headers=self._headers, params=params)
+                except (httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+                    wait = 10 * (attempt + 1)
+                    logger.warning(
+                        "satnogs_read_timeout",
+                        satellite=satellite_norad_id,
+                        attempt=attempt + 1,
+                        retry_in=wait,
+                        error=type(exc).__name__,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
 
                 if resp.status_code == 429:
                     retry_after = int(resp.headers.get("Retry-After", 60))
@@ -163,13 +175,14 @@ class SatNOGSFetcher:
                             headers=self._headers,
                             params=params if page == 1 else None,
                         )
-                    except httpx.TimeoutException:
+                    except (httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
                         wait = 10 * (attempt + 1)  # 10 s, 20 s, 30 s
                         logger.warning(
                             "satnogs_read_timeout",
                             satellite=satellite_norad_id,
                             attempt=attempt + 1,
                             retry_in=wait,
+                            error=type(exc).__name__,
                         )
                         await asyncio.sleep(wait)
                         continue
