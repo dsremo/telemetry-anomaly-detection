@@ -90,6 +90,10 @@ class SatNOGSFetcher:
                     await asyncio.sleep(retry_after)
                     continue
 
+                if resp.status_code == 404:
+                    logger.info("satnogs_no_data", satellite=satellite_norad_id)
+                    return []
+
                 resp.raise_for_status()
                 data = resp.json()
                 break
@@ -181,6 +185,9 @@ class SatNOGSFetcher:
                         await asyncio.sleep(retry_after)
                         continue
 
+                    if resp.status_code == 404:
+                        logger.info("satnogs_no_data", satellite=satellite_norad_id)
+                        return frames  # satellite has no telemetry in SatNOGS — not an error
                     resp.raise_for_status()
                     data = resp.json()
                     break
@@ -356,23 +363,25 @@ class SatNOGSFetcher:
         norad_ids: list[str],
         max_frames: int = 500,
         resample_minutes: int | None = None,
-        skip_if_rows_gte: int = 500,
+        skip_if_rows_gte: int | None = None,
         inter_page_delay: float = 2.0,
     ) -> dict[str, dict[str, int]]:
         """Fetch SatNOGS telemetry and bulk-insert into PostgreSQL.
 
         For each NORAD ID:
           1. Skip satellite if all signal parameters already have >= skip_if_rows_gte rows.
+             Defaults to int(max_frames * 0.8) — accounts for frames that yield no valid
+             data points (invalid hex, inter-day gaps filtered from frame_gap, etc.).
           2. Fetch raw frames via paginated API with rate-limit backoff.
           3. Extract four signal-level metrics per frame (frame_length, byte_mean,
              byte_entropy, frame_gap).
           4. Deduplicate timestamps, optionally resample, then bulk-insert.
 
         SatNOGS API limits respected:
-          - 500 frames/page maximum (hard API limit)
-          - 429 → Retry-After header honoured (default 60 s back-off)
+          - 25 frames/page observed for high-traffic satellites (e.g. ISS)
+          - 429 → Retry-After header honoured
           - max_frames hard cap per satellite (prevents runaway fetches)
-          - inter_page_delay courtesy sleep between pages (default 0.5 s = 2 req/s)
+          - inter_page_delay courtesy sleep between pages (default 2 s = 0.5 req/s)
 
         Returns {satellite_id: {parameter: rows_inserted_or_skipped}}.
         """
@@ -383,6 +392,11 @@ class SatNOGSFetcher:
 
         from sentinel.db import queries
         from sentinel.ingest.bulk_loader import bulk_insert_channel, check_channel_row_count
+
+        # ~10-15% of frames produce no valid data point (invalid hex, inter-day gaps).
+        # Tie the skip threshold to max_frames so re-runs skip already-loaded satellites
+        # instead of wasting API quota on duplicate inserts that ON CONFLICT silently drops.
+        _skip_rows = skip_if_rows_gte if skip_if_rows_gte is not None else int(max_frames * 0.8)
 
         _PARAMETERS: tuple[str, ...] = ("frame_length", "byte_mean", "byte_entropy", "frame_gap")
         _UNITS: dict[str, str] = {
@@ -399,8 +413,8 @@ class SatNOGSFetcher:
             print(f"\n  Satellite {sat_id} (NORAD {norad_id})")
 
             existing = {p: await check_channel_row_count(sat_id, p) for p in _PARAMETERS}
-            if all(cnt >= skip_if_rows_gte for cnt in existing.values()):
-                print(f"    Already loaded (>= {skip_if_rows_gte} rows/param) — skipping fetch")
+            if all(cnt >= _skip_rows for cnt in existing.values()):
+                print(f"    Already loaded (>= {_skip_rows} rows/param) — skipping fetch")
                 totals[sat_id] = existing
                 continue
 
