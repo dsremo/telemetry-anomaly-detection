@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import time
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -74,7 +75,7 @@ class SatNOGSFetcher:
             "limit": min(limit, 500),
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             for attempt in range(3):  # up to 3 attempts on rate-limit
                 resp = await client.get(url, headers=self._headers, params=params)
 
@@ -107,6 +108,118 @@ class SatNOGSFetcher:
             "satnogs_fetched",
             satellite=satellite_norad_id,
             frames=len(frames),
+        )
+        return frames
+
+    async def fetch_all_telemetry(
+        self,
+        satellite_norad_id: str,
+        max_frames: int = 500,
+        inter_page_delay: float = 2.0,
+    ) -> list[dict]:
+        """Fetch all available frames for a satellite, following pagination.
+
+        SatNOGS returns 25 frames/page for high-traffic satellites (e.g. ISS).
+        This method follows ``next`` cursor links until ``max_frames`` frames
+        have been collected or the server has no more pages.
+
+        Args:
+            satellite_norad_id: NORAD catalog ID (e.g. "25544").
+            max_frames:         Hard cap on total frames.  SatNOGS enforces
+                                aggressive rate limits; 500 (20 pages) is a
+                                safe default.  Increase with care.
+            inter_page_delay:   Seconds to sleep between pages.  2 s keeps
+                                request rate at ~0.5 req/s, well under the
+                                observed ~150-frame / 37 s throttle window.
+
+        Returns:
+            List of raw frame dicts in server-returned order.
+        """
+        if not self.api_token:
+            raise ValueError("SATNOGS_API_TOKEN not set — check .env file")
+
+        frames: list[dict] = []
+        url: str | None = f"{SATNOGS_API_BASE}/telemetry/"
+        params: dict = {
+            "satellite": satellite_norad_id,
+            "limit": min(100, max_frames),  # SatNOGS silently caps above ~100
+        }
+
+        # 60 s read timeout — slow responses occur after rate-limit back-offs.
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            page = 0
+            while url and len(frames) < max_frames:
+                page += 1
+                data: dict | list | None = None
+
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(
+                            url,
+                            headers=self._headers,
+                            params=params if page == 1 else None,
+                        )
+                    except httpx.TimeoutException:
+                        wait = 10 * (attempt + 1)  # 10 s, 20 s, 30 s
+                        logger.warning(
+                            "satnogs_read_timeout",
+                            satellite=satellite_norad_id,
+                            attempt=attempt + 1,
+                            retry_in=wait,
+                        )
+                        await asyncio.sleep(wait)
+                        continue
+
+                    if resp.status_code == 429:
+                        retry_after = int(resp.headers.get("Retry-After", 60))
+                        logger.warning(
+                            "satnogs_rate_limited",
+                            satellite=satellite_norad_id,
+                            retry_after=retry_after,
+                            attempt=attempt + 1,
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                else:
+                    logger.error("satnogs_page_failed", satellite=satellite_norad_id, page=page)
+                    break  # give up on this satellite
+
+                if data is None:
+                    break  # all retries exhausted (timeout path)
+
+                if isinstance(data, dict):
+                    page_frames = data.get("results", [])
+                    url = data.get("next")   # None → no more pages
+                else:
+                    page_frames = data
+                    url = None
+
+                frames.extend(page_frames)
+                logger.info(
+                    "satnogs_page_fetched",
+                    satellite=satellite_norad_id,
+                    page=page,
+                    page_frames=len(page_frames),
+                    total_so_far=len(frames),
+                )
+
+                # Respect max_frames ceiling.
+                if len(frames) >= max_frames:
+                    frames = frames[:max_frames]
+                    break
+
+                # Polite inter-page delay — SatNOGS is a community resource.
+                if url and inter_page_delay > 0:
+                    await asyncio.sleep(inter_page_delay)
+
+        logger.info(
+            "satnogs_fetched_all",
+            satellite=satellite_norad_id,
+            total_frames=len(frames),
         )
         return frames
 
@@ -237,6 +350,118 @@ class SatNOGSFetcher:
             telemetry_points=len(points),
         )
         return points
+
+    async def bulk_load_to_db(
+        self,
+        norad_ids: list[str],
+        max_frames: int = 500,
+        resample_minutes: int | None = None,
+        skip_if_rows_gte: int = 500,
+        inter_page_delay: float = 2.0,
+    ) -> dict[str, dict[str, int]]:
+        """Fetch SatNOGS telemetry and bulk-insert into PostgreSQL.
+
+        For each NORAD ID:
+          1. Skip satellite if all signal parameters already have >= skip_if_rows_gte rows.
+          2. Fetch raw frames via paginated API with rate-limit backoff.
+          3. Extract four signal-level metrics per frame (frame_length, byte_mean,
+             byte_entropy, frame_gap).
+          4. Deduplicate timestamps, optionally resample, then bulk-insert.
+
+        SatNOGS API limits respected:
+          - 500 frames/page maximum (hard API limit)
+          - 429 → Retry-After header honoured (default 60 s back-off)
+          - max_frames hard cap per satellite (prevents runaway fetches)
+          - inter_page_delay courtesy sleep between pages (default 0.5 s = 2 req/s)
+
+        Returns {satellite_id: {parameter: rows_inserted_or_skipped}}.
+        """
+        # Local imports keep satnogs_fetcher.py usable without pandas/DB (e.g. in tests).
+        from collections import defaultdict
+
+        import pandas as pd
+
+        from sentinel.db import queries
+        from sentinel.ingest.bulk_loader import bulk_insert_channel, check_channel_row_count
+
+        _PARAMETERS: tuple[str, ...] = ("frame_length", "byte_mean", "byte_entropy", "frame_gap")
+        _UNITS: dict[str, str] = {
+            "frame_length": "bytes",
+            "byte_mean": "",
+            "byte_entropy": "bits",
+            "frame_gap": "s",
+        }
+
+        totals: dict[str, dict[str, int]] = {}
+
+        for norad_id in norad_ids:
+            sat_id = f"SATNOGS-{norad_id}"
+            print(f"\n  Satellite {sat_id} (NORAD {norad_id})")
+
+            existing = {p: await check_channel_row_count(sat_id, p) for p in _PARAMETERS}
+            if all(cnt >= skip_if_rows_gte for cnt in existing.values()):
+                print(f"    Already loaded (>= {skip_if_rows_gte} rows/param) — skipping fetch")
+                totals[sat_id] = existing
+                continue
+
+            print(f"    Fetching up to {max_frames} frames ...")
+            t0 = time.monotonic()
+            raw_frames = await self.fetch_all_telemetry(
+                norad_id,
+                max_frames=max_frames,
+                inter_page_delay=inter_page_delay,
+            )
+            if not raw_frames:
+                print(f"    No frames returned — skipping")
+                continue
+
+            print(f"    Got {len(raw_frames)} frames in {time.monotonic() - t0:.1f}s")
+
+            points = self.convert_to_points(raw_frames, satellite_id=sat_id)
+            if not points:
+                print(f"    No valid points extracted — skipping")
+                continue
+
+            by_param: dict[str, list[tuple]] = defaultdict(list)
+            for pt in points:
+                by_param[pt.parameter].append((pt.timestamp, pt.value))
+
+            sat_totals: dict[str, int] = {}
+            for param in _PARAMETERS:
+                items = by_param.get(param, [])
+                if not items:
+                    sat_totals[param] = 0
+                    continue
+
+                items.sort(key=lambda x: x[0])
+                series = pd.Series(
+                    [v for _, v in items],
+                    index=pd.DatetimeIndex([t for t, _ in items], tz="UTC"),
+                    name=param,
+                )
+                # SatNOGS ground stations can produce duplicate timestamps — keep first.
+                series = series[~series.index.duplicated(keep="first")]
+
+                if resample_minutes and len(series) > 10:
+                    series = series.resample(f"{resample_minutes}min").median().dropna()
+
+                print(f"    {param}: {len(items):>6,} pts → {len(series):>6,} rows")
+
+                await queries.upsert_satellite_seen(sat_id, series.index[0].to_pydatetime())
+                await queries.upsert_channel_seen(sat_id, param, "comms", _UNITS[param])
+
+                sat_totals[param] = await bulk_insert_channel(
+                    satellite_id=sat_id,
+                    channel_name=param,
+                    subsystem="comms",
+                    unit=_UNITS[param],
+                    series=series,
+                    quality=0.9,
+                )
+
+            totals[sat_id] = sat_totals
+
+        return totals
 
 
 def _byte_entropy(data: bytes) -> float:

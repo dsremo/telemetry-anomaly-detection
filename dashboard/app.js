@@ -7,7 +7,8 @@
  */
 
 const API_BASE = window.location.origin + '/api/v1';
-const WS_URL = `ws://${window.location.host}/api/v1/ws/live`;
+const WS_SCHEME = window.location.protocol === 'https:' ? 'wss' : 'ws';
+const WS_URL = `${WS_SCHEME}://${window.location.host}/api/v1/ws/live`;
 
 // --- State ---
 const state = {
@@ -20,13 +21,15 @@ const state = {
         thermal: 'nominal',
         comms: 'nominal',
     },
-    pointsPerMinute: 0,
+    totalPoints: 0,
+    pointsLastHour: 0,
     connected: false,
 };
 
 // --- WebSocket ---
 let ws = null;
 let reconnectTimer = null;
+let pingInterval = null;
 
 function connectWebSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) return;
@@ -36,8 +39,9 @@ function connectWebSocket() {
     ws.onopen = () => {
         state.connected = true;
         updateConnectionStatus(true);
-        // Keep alive
-        setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('ping'); }, 30000);
+        // Single keep-alive interval — cleared on each reconnect to prevent leak
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('ping'); }, 30000);
     };
 
     ws.onmessage = (event) => {
@@ -146,6 +150,9 @@ function renderMetrics() {
 
     document.getElementById('satCount').textContent = state.satellites.length || '0';
     document.getElementById('satList').textContent = state.satellites.slice(0, 3).join(', ') || '--';
+
+    document.getElementById('totalPoints').textContent = formatLargeNumber(state.totalPoints);
+    document.getElementById('pointsTrend').textContent = `${formatLargeNumber(state.pointsLastHour)}/hr`;
 }
 
 function renderSubsystems() {
@@ -285,6 +292,16 @@ async function fetchSatellites() {
     } catch (e) { /* ignore */ }
 }
 
+async function fetchStats() {
+    try {
+        const resp = await fetch(`${API_BASE}/stats`);
+        const data = await resp.json();
+        state.totalPoints = data.total_telemetry_points ?? 0;
+        state.pointsLastHour = data.points_last_hour ?? 0;
+        renderMetrics();
+    } catch (e) { /* ignore */ }
+}
+
 // --- Utilities ---
 function formatTime(ts) {
     if (!ts) return '--:--';
@@ -302,6 +319,13 @@ function formatDuration(seconds) {
     return `${s}s`;
 }
 
+function formatLargeNumber(n) {
+    if (!n) return '0';
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return String(n);
+}
+
 // --- Filters ---
 document.getElementById('severityFilter').addEventListener('change', renderTimeline);
 document.getElementById('subsystemFilter').addEventListener('change', renderTimeline);
@@ -314,8 +338,10 @@ connectWebSocket();
 fetchHealth();
 fetchAnomalies();
 fetchSatellites();
+fetchStats();
 
 // Periodic refresh
 setInterval(fetchHealth, 15000);
 setInterval(fetchAnomalies, 10000);
 setInterval(fetchSatellites, 30000);
+setInterval(fetchStats, 30000);

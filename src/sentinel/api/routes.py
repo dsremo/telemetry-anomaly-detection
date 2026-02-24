@@ -31,6 +31,20 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
+
+@router.get("/stats", tags=["system"])
+async def get_stats(request: Request) -> dict:
+    """Aggregate telemetry and anomaly counts for the dashboard."""
+    if getattr(request.app.state, "demo_mode", False):
+        return {"total_telemetry_points": 0, "points_last_hour": 0, "active_satellites": 0, "total_anomalies": 0}
+    stats = await queries.get_telemetry_stats()
+    stats["total_anomalies"] = await queries.get_anomaly_count()
+    return stats
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 

@@ -13,6 +13,7 @@ from pathlib import Path
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from sentinel import __version__
@@ -138,6 +139,11 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     # --- Routes ---
     app.include_router(router, prefix="/api/v1")
     app.include_router(ws_router, prefix="/api/v1")
+
+    # --- Root redirect → dashboard ---
+    @app.get("/", include_in_schema=False)
+    async def _root_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/dashboard/", status_code=301)
 
     # --- Dashboard static files ---
     if _DASHBOARD_DIR.exists():

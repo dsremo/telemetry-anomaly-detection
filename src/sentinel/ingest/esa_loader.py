@@ -245,6 +245,82 @@ class ESADataLoader:
 
         return combined, list(combined.columns)
 
+    async def bulk_load_channels_to_db(
+        self,
+        channels: list[str],
+        satellite_id: str = "ESA-MISSION1",
+        resample_minutes: int = 60,
+        insert_batch: int = 10_000,
+        skip_if_rows_gte: int = 50_000,
+    ) -> dict[str, int]:
+        """Load ESA channels into PostgreSQL, skipping already-loaded channels.
+
+        For each channel: reads zip → resamples to resample_minutes intervals
+        (median aggregation) → bulk inserts via UNNEST batches.
+
+        Idempotent: channels with >= skip_if_rows_gte existing rows are skipped
+        so re-runs are safe.
+
+        Returns {channel_name: rows_inserted_or_skipped}.
+        """
+        # Local imports keep esa_loader usable without a DB connection (e.g. in tests).
+        from tqdm import tqdm
+
+        from sentinel.db import queries
+        from sentinel.ingest.bulk_loader import bulk_insert_channel, check_channel_row_count
+
+        resample_rule = f"{resample_minutes}min"
+        existing = {ch: await check_channel_row_count(satellite_id, ch) for ch in channels}
+        to_load = [c for c in channels if existing[c] < skip_if_rows_gte]
+        to_skip = [c for c in channels if existing[c] >= skip_if_rows_gte]
+
+        if to_skip:
+            print(f"  Skipping {len(to_skip)} channels already loaded"
+                  f" (>= {skip_if_rows_gte:,} rows each)")
+        print(f"  Loading {len(to_load)} channels @ {resample_minutes}-min resolution ...\n")
+
+        totals: dict[str, int] = {ch: existing[ch] for ch in to_skip}
+
+        for ch in tqdm(to_load, desc="Loading channels", unit="ch"):
+            meta = self._channels_meta.get(ch)
+            if meta is None:
+                tqdm.write(f"  SKIP {ch} — no metadata")
+                continue
+
+            try:
+                df = self.load_channel(ch)
+            except FileNotFoundError:
+                tqdm.write(f"  SKIP {ch} — file not found")
+                continue
+
+            series = df.iloc[:, 0].copy()
+            if series.index.tz is None:
+                series.index = series.index.tz_localize("UTC")
+            resampled = series.resample(resample_rule).median().dropna()
+
+            tqdm.write(
+                f"  {ch}: {len(df):>12,} raw → {len(resampled):>7,} rows"
+                f" @ {resample_minutes}-min"
+            )
+
+            await queries.upsert_satellite_seen(satellite_id, resampled.index[0].to_pydatetime())
+            await queries.upsert_channel_seen(satellite_id, ch, meta.subsystem, meta.unit)
+
+            with tqdm(total=len(resampled), desc=f"  {ch}", unit="pt", leave=False) as pbar:
+                totals[ch] = await bulk_insert_channel(
+                    satellite_id=satellite_id,
+                    channel_name=ch,
+                    subsystem=meta.subsystem,
+                    unit=meta.unit,
+                    series=resampled,
+                    batch_size=insert_batch,
+                    progress_cb=lambda n, p=pbar, last=[0]: (
+                        p.update(n - last[0]), last.__setitem__(0, n)
+                    ),
+                )
+
+        return totals
+
     def get_subsystem_map(self) -> dict[str, list[str]]:
         """Group channels by subsystem — matches Sentinel's subsystem concept."""
         groups: dict[str, list[str]] = {}

@@ -212,6 +212,44 @@ async def get_latest_values(satellite_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_telemetry_stats() -> dict:
+    """Aggregate telemetry statistics for the dashboard.
+
+    Uses pg_class for the total-row estimate (O(1) — no sequential scan)
+    and a bounded COUNT for the recent-activity metric.
+
+    Returns:
+        total_telemetry_points: Approximate total rows in the telemetry table.
+        points_last_hour:       Exact count of rows inserted in the past hour.
+        active_satellites:      Number of distinct satellites.
+    """
+    async with acquire() as conn:
+        # Approximate total from PostgreSQL table statistics (fast).
+        approx_total = await conn.fetchval(
+            "SELECT reltuples::bigint FROM pg_class WHERE relname = 'telemetry'"
+        )
+        # Exact count for the last hour (bounded, always fast).
+        last_hour = await conn.fetchval(
+            "SELECT COUNT(*) FROM telemetry"
+            " WHERE timestamp >= NOW() - INTERVAL '1 hour'"
+        )
+        active_sats = await conn.fetchval(
+            "SELECT COUNT(DISTINCT satellite_id) FROM satellites"
+        )
+    return {
+        "total_telemetry_points": int(approx_total or 0),
+        "points_last_hour":       int(last_hour    or 0),
+        "active_satellites":      int(active_sats  or 0),
+    }
+
+
+async def get_anomaly_count() -> int:
+    """Total anomaly count across all satellites."""
+    async with acquire() as conn:
+        cnt = await conn.fetchval("SELECT COUNT(*) FROM anomalies")
+    return int(cnt or 0)
+
+
 # ---------------------------------------------------------------------------
 # Satellites
 # ---------------------------------------------------------------------------
