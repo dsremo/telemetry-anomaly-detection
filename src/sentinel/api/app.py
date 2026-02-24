@@ -75,6 +75,12 @@ async def lifespan(app: FastAPI):
         )
         await run_migrations()
 
+        # Load api_key → tenant_id map for the auth middleware.
+        # Uses a direct pool connection (bypasses RLS) so it sees all tenants' keys.
+        from sentinel.db.queries import load_api_key_map
+        app.state.api_key_tenant_map = await load_api_key_map()
+        logger.info("api_key_map_loaded", count=len(app.state.api_key_tenant_map))
+
     # Wire config thresholds into detector singletons
     from sentinel.detection.detector import init_detectors
     init_detectors(settings)
@@ -118,6 +124,8 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     app.state.settings = settings
     app.state.start_time = time.monotonic()
     app.state.demo_mode = demo
+    # Populated in lifespan after DB connects. Empty dict = no keys loaded yet.
+    app.state.api_key_tenant_map: dict[str, str] = {}
 
     # --- Middleware stack (order matters: outermost runs first) ---
     sec = settings.get("security", {})
@@ -130,6 +138,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     app.add_middleware(
         ApiKeyMiddleware,
         enabled=False,  # disabled until first key is generated via CLI
+        # key→tenant map is read from app.state.api_key_tenant_map per-request
     )
     app.add_middleware(
         PayloadLimitMiddleware,

@@ -35,7 +35,8 @@ from uuid import UUID
 import structlog
 
 from sentinel.core.models import Anomaly, TelemetryPoint
-from sentinel.db.connection import acquire
+from sentinel.core.tenant import get_tenant
+from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
@@ -50,28 +51,31 @@ async def insert_telemetry(points: list[TelemetryPoint]) -> int:
     One SQL statement regardless of batch size — 10-100x faster than
     executemany for large payloads (ESA: 500 points → 1 round-trip vs 500).
 
-    ON CONFLICT DO NOTHING: exact duplicate (same sat + parameter + timestamp)
+    ON CONFLICT DO NOTHING: exact duplicate (same tenant + sat + parameter + timestamp)
     is silently discarded, making ingestion idempotent on retransmission.
     """
     if not points:
         return 0
 
+    tenant = get_tenant()
     async with acquire() as conn:
         await conn.execute(
             """
             INSERT INTO telemetry
-                (satellite_id, timestamp, subsystem, parameter, value, unit, quality)
+                (tenant_id, satellite_id, timestamp, subsystem, parameter, value, unit, quality)
             SELECT * FROM UNNEST(
                 $1::text[],
-                $2::timestamptz[],
-                $3::text[],
+                $2::text[],
+                $3::timestamptz[],
                 $4::text[],
-                $5::float8[],
-                $6::text[],
-                $7::float4[]
+                $5::text[],
+                $6::float8[],
+                $7::text[],
+                $8::float4[]
             )
-            ON CONFLICT (satellite_id, parameter, timestamp) DO NOTHING
+            ON CONFLICT (tenant_id, satellite_id, parameter, timestamp) DO NOTHING
             """,
+            [tenant]        * len(points),
             [p.satellite_id for p in points],
             [p.timestamp    for p in points],
             [p.subsystem    for p in points],
@@ -259,14 +263,14 @@ async def upsert_satellite_seen(satellite_id: str, ts: datetime) -> None:
     async with acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO satellites (satellite_id, first_telemetry_at, last_telemetry_at)
-            VALUES ($1, $2, $2)
-            ON CONFLICT (satellite_id) DO UPDATE
+            INSERT INTO satellites (tenant_id, satellite_id, first_telemetry_at, last_telemetry_at)
+            VALUES ($1, $2, $3, $3)
+            ON CONFLICT (tenant_id, satellite_id) DO UPDATE
                 SET last_telemetry_at = EXCLUDED.last_telemetry_at
                 WHERE satellites.last_telemetry_at IS NULL
                    OR satellites.last_telemetry_at < EXCLUDED.last_telemetry_at
             """,
-            satellite_id, ts,
+            get_tenant(), satellite_id, ts,
         )
 
 
@@ -295,15 +299,15 @@ async def upsert_channel_seen(
         await conn.execute(
             """
             INSERT INTO channel_registry
-                (satellite_id, parameter, subsystem, unit, total_points)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (satellite_id, parameter) DO UPDATE
+                (tenant_id, satellite_id, parameter, subsystem, unit, total_points)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (tenant_id, satellite_id, parameter) DO UPDATE
                 SET last_seen_at = NOW(),
                     total_points = channel_registry.total_points + EXCLUDED.total_points,
                     subsystem    = EXCLUDED.subsystem,
                     unit         = EXCLUDED.unit
             """,
-            satellite_id, parameter, subsystem, unit, point_count,
+            get_tenant(), satellite_id, parameter, subsystem, unit, point_count,
         )
 
 
@@ -368,12 +372,12 @@ async def upsert_channel_calibration(
         await conn.execute(
             """
             INSERT INTO channel_calibration
-                (satellite_id, parameter, state, ref_mean, ref_std,
+                (tenant_id, satellite_id, parameter, state, ref_mean, ref_std,
                  ref_sample_count, calibrated_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6,
-                    CASE WHEN $3 = 'calibrated' THEN NOW() ELSE NULL END,
+            VALUES ($1, $2, $3, $4, $5, $6, $7,
+                    CASE WHEN $4 = 'calibrated' THEN NOW() ELSE NULL END,
                     NOW())
-            ON CONFLICT (satellite_id, parameter) DO UPDATE
+            ON CONFLICT (tenant_id, satellite_id, parameter) DO UPDATE
                 SET state            = EXCLUDED.state,
                     ref_mean         = EXCLUDED.ref_mean,
                     ref_std          = EXCLUDED.ref_std,
@@ -381,7 +385,7 @@ async def upsert_channel_calibration(
                     calibrated_at    = EXCLUDED.calibrated_at,
                     updated_at       = NOW()
             """,
-            satellite_id, parameter, state, ref_mean, ref_std, ref_sample_count,
+            get_tenant(), satellite_id, parameter, state, ref_mean, ref_std, ref_sample_count,
         )
 
 
@@ -435,13 +439,13 @@ async def upsert_detector_state(
         await conn.execute(
             """
             INSERT INTO detector_state
-                (satellite_id, parameter, detector_name, state_data, last_updated_at)
-            VALUES ($1, $2, $3, $4::jsonb, NOW())
-            ON CONFLICT (satellite_id, parameter, detector_name) DO UPDATE
+                (tenant_id, satellite_id, parameter, detector_name, state_data, last_updated_at)
+            VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+            ON CONFLICT (tenant_id, satellite_id, parameter, detector_name) DO UPDATE
                 SET state_data      = EXCLUDED.state_data,
                     last_updated_at = NOW()
             """,
-            satellite_id, parameter, detector_name, json.dumps(state_data),
+            get_tenant(), satellite_id, parameter, detector_name, json.dumps(state_data),
         )
 
 
@@ -459,17 +463,20 @@ async def bulk_upsert_detector_states(
     if not states:
         return
 
+    tenant = get_tenant()
     async with acquire() as conn:
         await conn.execute(
             """
             INSERT INTO detector_state
-                (satellite_id, parameter, detector_name, state_data, last_updated_at)
-            SELECT s, p, d, data::jsonb, NOW()
-            FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[]) AS t(s, p, d, data)
-            ON CONFLICT (satellite_id, parameter, detector_name) DO UPDATE
+                (tenant_id, satellite_id, parameter, detector_name, state_data, last_updated_at)
+            SELECT t, s, p, d, data::jsonb, NOW()
+            FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+                AS u(t, s, p, d, data)
+            ON CONFLICT (tenant_id, satellite_id, parameter, detector_name) DO UPDATE
                 SET state_data      = EXCLUDED.state_data,
                     last_updated_at = NOW()
             """,
+            [tenant]                        * len(states),
             [s["satellite_id"]              for s in states],
             [s["parameter"]                 for s in states],
             [s["detector_name"]             for s in states],
@@ -508,12 +515,13 @@ async def insert_anomaly(anomaly: Anomaly) -> str:
         await conn.execute(
             """
             INSERT INTO anomalies
-                (id, satellite_id, timestamp, subsystem, parameter, value,
+                (tenant_id, id, satellite_id, timestamp, subsystem, parameter, value,
                  severity, confidence, detectors_triggered, explanation,
                  root_cause_group, contributing_params, stl_residual)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
-            ON CONFLICT (satellite_id, parameter, timestamp) DO NOTHING
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
+            ON CONFLICT (tenant_id, satellite_id, parameter, timestamp) DO NOTHING
             """,
+            get_tenant(),
             anomaly.id,
             anomaly.satellite_id,
             anomaly.timestamp,
@@ -664,12 +672,12 @@ async def open_incident(
         row = await conn.fetchrow(
             """
             INSERT INTO incidents
-                (satellite_id, subsystem, severity, title,
+                (tenant_id, satellite_id, subsystem, severity, title,
                  first_anomaly_at, last_anomaly_at)
-            VALUES ($1, $2, $3, $4, $5, $5)
+            VALUES ($1, $2, $3, $4, $5, $6, $6)
             RETURNING id::text
             """,
-            satellite_id, subsystem, severity, title, first_anomaly_at,
+            get_tenant(), satellite_id, subsystem, severity, title, first_anomaly_at,
         )
     return row["id"]
 
@@ -832,13 +840,31 @@ async def acknowledge_alert(alert_id: str) -> bool:
 # API Keys
 # ---------------------------------------------------------------------------
 
+async def load_api_key_map() -> dict[str, str]:
+    """Load all active api_key hashes → tenant_id for the in-memory auth cache.
+
+    Uses the raw pool directly (not acquire()) so it bypasses RLS.
+    api_keys has ENABLE-only RLS — the table owner (sentinel user) sees all
+    rows across all tenants without needing app.tenant_id set.
+
+    Called once at server startup by the lifespan function in app.py.
+    The result is passed to ApiKeyMiddleware which uses it for every request.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT key_hash, tenant_id FROM api_keys WHERE active = TRUE"
+        )
+    return {r["key_hash"]: r["tenant_id"] for r in rows}
+
+
 async def store_api_key(key_hash: str, label: str) -> None:
     """Persist a hashed API key. Plain-text key is never stored."""
     async with acquire() as conn:
         await conn.execute(
-            "INSERT INTO api_keys (key_hash, label) VALUES ($1, $2) "
+            "INSERT INTO api_keys (tenant_id, key_hash, label) VALUES ($1, $2, $3) "
             "ON CONFLICT (key_hash) DO NOTHING",
-            key_hash, label,
+            get_tenant(), key_hash, label,
         )
 
 

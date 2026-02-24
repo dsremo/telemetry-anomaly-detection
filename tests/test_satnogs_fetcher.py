@@ -148,13 +148,14 @@ class TestConvertToPoints:
         assert length_pts[0].value == 4.0
 
     def test_byte_mean_value_correct(self, fetcher: SatNOGSFetcher):
-        # All 0x40 bytes → mean = 64.0
-        hex_data = "40" * 10  # 10 bytes, all value 64
+        # 10 distinct bytes 0x40-0x49 (64-73) → mean = 68.5, entropy ≈ 3.32 (passes filter)
+        # All-identical bytes have entropy = 0 and are filtered by the entropy guard.
+        hex_data = "40414243444546474849"
         raw = [self._make_frame(hex_data=hex_data)]
         points = fetcher.convert_to_points(raw)
         mean_pts = [p for p in points if p.parameter == "byte_mean"]
         assert len(mean_pts) == 1
-        assert mean_pts[0].value == 64.0
+        assert mean_pts[0].value == pytest.approx(68.5)
 
     def test_byte_entropy_value_range(self, fetcher: SatNOGSFetcher):
         raw = [self._make_frame(hex_data="deadbeef0102030405060708")]

@@ -29,7 +29,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +377,115 @@ _MIGRATIONS: list[str] = [
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_sat_param_ts
         ON anomalies (satellite_id, parameter, timestamp);
+    """,
+
+    # v9: Multi-tenancy — tenant registry + tenant_id on all data tables + RLS.
+    #
+    # Design rationale:
+    #   - All data tables gain tenant_id TEXT NOT NULL DEFAULT 'default'.
+    #     Existing rows automatically belong to the 'default' tenant — no data loss.
+    #   - Composite PKs are widened to include tenant_id so two tenants can own
+    #     the same satellite_id, channel, etc. without collision.
+    #   - Unique indexes (telemetry, anomalies) are also widened.
+    #   - FORCE ROW LEVEL SECURITY on data tables: sentinel user is the table owner,
+    #     so without FORCE it would bypass RLS. FORCE closes that gap.
+    #   - api_keys uses ENABLE-only (not FORCE): the table owner (sentinel) needs to
+    #     read all tenants' keys at startup to build the in-memory auth cache.
+    #   - The RLS policy uses current_setting('app.tenant_id', true) which is set
+    #     per-connection by connection.acquire() via set_config(). asyncpg's
+    #     RESET ALL on connection return clears it automatically.
+    """
+    -- 1. Tenants registry
+    CREATE TABLE IF NOT EXISTS tenants (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        active      BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO tenants (id, name) VALUES ('default', 'Default')
+    ON CONFLICT (id) DO NOTHING;
+
+    -- 2. Add tenant_id column to every data table (safe re-run: IF NOT EXISTS)
+    ALTER TABLE api_keys            ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE telemetry           ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE satellites          ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE channel_registry    ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE channel_calibration ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE detector_state      ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE anomalies           ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE incidents           ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+    ALTER TABLE alerts              ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+
+    -- 3. Widen composite PKs to include tenant_id.
+    --    Two tenants can legitimately track the same satellite_id — the PK must
+    --    be scoped per-tenant.  Table owner can always ALTER TABLE regardless of RLS.
+    ALTER TABLE satellites          DROP CONSTRAINT IF EXISTS satellites_pkey;
+    ALTER TABLE satellites          ADD PRIMARY KEY (tenant_id, satellite_id);
+
+    ALTER TABLE channel_registry    DROP CONSTRAINT IF EXISTS channel_registry_pkey;
+    ALTER TABLE channel_registry    ADD PRIMARY KEY (tenant_id, satellite_id, parameter);
+
+    ALTER TABLE channel_calibration DROP CONSTRAINT IF EXISTS channel_calibration_pkey;
+    ALTER TABLE channel_calibration ADD PRIMARY KEY (tenant_id, satellite_id, parameter);
+
+    ALTER TABLE detector_state      DROP CONSTRAINT IF EXISTS detector_state_pkey;
+    ALTER TABLE detector_state      ADD PRIMARY KEY (tenant_id, satellite_id, parameter, detector_name);
+
+    -- 4. Widen unique indexes to include tenant_id.
+    --    Both include 'timestamp' — required by TimescaleDB for hypertable uniqueness.
+    DROP INDEX IF EXISTS idx_telemetry_unique;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_unique
+        ON telemetry (tenant_id, satellite_id, parameter, timestamp);
+
+    DROP INDEX IF EXISTS idx_anomalies_sat_param_ts;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_sat_param_ts
+        ON anomalies (tenant_id, satellite_id, parameter, timestamp);
+
+    -- 5. Enable Row Level Security.
+    --    FORCE on data tables: sentinel user is the table owner and would otherwise
+    --    bypass RLS — FORCE closes that gap so every query is filtered.
+    --    api_keys: ENABLE-only so the table owner can load all keys at startup.
+    ALTER TABLE telemetry           ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE telemetry           FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE satellites          ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE satellites          FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE channel_registry    ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE channel_registry    FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE channel_calibration ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE channel_calibration FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE detector_state      ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE detector_state      FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE anomalies           ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE anomalies           FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE incidents           ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE incidents           FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE alerts              ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE alerts              FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE api_keys            ENABLE ROW LEVEL SECURITY;
+
+    -- 6. Create RLS policies (idempotent: DROP IF EXISTS then CREATE).
+    --    USING  — filters rows on SELECT/UPDATE/DELETE.
+    --    WITH CHECK — enforces tenant_id on INSERT/UPDATE.
+    --    The second arg to current_setting() is 'true' (missing-ok): returns NULL
+    --    rather than raising an error when app.tenant_id has not been set, which
+    --    makes the policy a safe no-op in that case (NULL != any tenant_id → 0 rows).
+    DO $$
+    DECLARE tbl TEXT;
+    BEGIN
+        FOREACH tbl IN ARRAY ARRAY[
+            'telemetry', 'satellites', 'channel_registry', 'channel_calibration',
+            'detector_state', 'anomalies', 'incidents', 'alerts', 'api_keys'
+        ] LOOP
+            EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', tbl);
+            EXECUTE format(
+                $pol$CREATE POLICY tenant_isolation ON %I
+                     USING     (tenant_id = current_setting('app.tenant_id', true))
+                     WITH CHECK (tenant_id = current_setting('app.tenant_id', true))$pol$,
+                tbl
+            );
+        END LOOP;
+    END;
+    $$;
     """,
 ]
 

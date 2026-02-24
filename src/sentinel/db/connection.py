@@ -17,6 +17,8 @@ from typing import AsyncIterator
 import asyncpg
 import structlog
 
+from sentinel.core.tenant import get_tenant
+
 logger = structlog.get_logger()
 
 _pool: asyncpg.Pool | None = None
@@ -99,9 +101,18 @@ def get_pool() -> asyncpg.Pool:
 
 @asynccontextmanager
 async def acquire() -> AsyncIterator[asyncpg.Connection]:
-    """Acquire a connection from the pool with automatic release."""
+    """Acquire a connection from the pool with automatic release.
+
+    Sets app.tenant_id so PostgreSQL RLS policies filter to the current tenant.
+    asyncpg calls RESET ALL on connection return — clears the session variable
+    automatically, so no manual cleanup is needed.
+    """
     pool = get_pool()
     async with pool.acquire() as conn:
+        await conn.execute(
+            "SELECT set_config('app.tenant_id', $1, false)",
+            get_tenant(),
+        )
         yield conn
 
 

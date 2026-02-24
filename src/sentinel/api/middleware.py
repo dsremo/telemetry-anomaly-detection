@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 
 from sentinel.core.security import RateLimiter
+from sentinel.core.tenant import set_tenant
 
 logger = structlog.get_logger()
 
@@ -50,16 +51,21 @@ class PayloadLimitMiddleware(BaseHTTPMiddleware):
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Validate API key on every request (except health check and docs).
 
-    Keys are hashed with SHA-256 and compared against stored hashes.
+    The key→tenant map is read from request.app.state.api_key_tenant_map on
+    every request — populated by lifespan after DB connects, refreshable at
+    any time (e.g., when new keys are created via CLI).
+
+    On success, the request's tenant is set via ContextVar so all downstream
+    DB calls are filtered to that tenant by PostgreSQL RLS.
+
     The unhashed key never touches disk or logs.
     """
 
     EXEMPT_PATHS = frozenset({"/api/v1/health", "/docs", "/openapi.json", "/", "/dashboard"})
 
-    def __init__(self, app, api_key_hashes: set[str] | None = None, enabled: bool = True):
+    def __init__(self, app, enabled: bool = True):
         super().__init__(app)
         self.enabled = enabled
-        self.key_hashes = api_key_hashes or set()
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if _is_websocket(request.scope):
@@ -76,10 +82,17 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=401, content={"detail": "Missing API key"})
 
         key_hash = hashlib.sha256(f"sentinel::{api_key}".encode()).hexdigest()
-        if key_hash not in self.key_hashes:
+        # Read the live map from app.state — safe to refresh without restart.
+        key_tenant_map: dict[str, str] = getattr(
+            request.app.state, "api_key_tenant_map", {}
+        )
+        tenant_id = key_tenant_map.get(key_hash)
+        if tenant_id is None:
             logger.warning("auth_failed", path=path, key_prefix=api_key[:8] if api_key else "")
             return JSONResponse(status_code=403, content={"detail": "Invalid API key"})
 
+        # Propagate tenant to all DB calls made during this request.
+        set_tenant(tenant_id)
         return await call_next(request)
 
 
