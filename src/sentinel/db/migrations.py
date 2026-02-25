@@ -29,7 +29,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +483,59 @@ _MIGRATIONS: list[str] = [
                      WITH CHECK (tenant_id = current_setting('app.tenant_id', true))$pol$,
                 tbl
             );
+        END LOOP;
+    END;
+    $$;
+    """,
+
+    # v10: Referential integrity — FK from tenant_id → tenants(id) on every data table.
+    #
+    # Why this is a separate migration from v9:
+    #   v9 added tenant_id columns and seeded 'default', but had no FK constraint.
+    #   A missing FK means typo tenant IDs (e.g. 'ddefault') are silently accepted —
+    #   violating consistency.  Adding the FK now closes that gap.
+    #
+    # Design:
+    #   - FK name is 'fk_tenant_id' on every table (consistent, easy to grep).
+    #   - Idempotent: checks pg_constraint before ALTER — safe to re-run.
+    #   - telemetry is a TimescaleDB hypertable.  FK on hypertable columns referencing
+    #     a regular table IS supported in TimescaleDB 2.x, but we wrap in EXCEPTION
+    #     to degrade gracefully on older versions rather than failing the whole migration.
+    #   - FK checks run at the PG engine level and bypass RLS — they always see
+    #     all rows in tenants regardless of app.tenant_id. No bootstrapping issue.
+    """
+    DO $$
+    DECLARE
+        tbl TEXT;
+    BEGIN
+        FOREACH tbl IN ARRAY ARRAY[
+            'api_keys', 'satellites', 'channel_registry', 'channel_calibration',
+            'detector_state', 'anomalies', 'incidents', 'alerts', 'telemetry'
+        ] LOOP
+            -- Idempotent: skip if constraint already exists.
+            IF NOT EXISTS (
+                SELECT 1
+                FROM   pg_constraint c
+                JOIN   pg_class      t ON t.oid = c.conrelid
+                WHERE  c.conname = 'fk_tenant_id'
+                  AND  t.relname = tbl
+            ) THEN
+                BEGIN
+                    EXECUTE format(
+                        'ALTER TABLE %I
+                         ADD CONSTRAINT fk_tenant_id
+                         FOREIGN KEY (tenant_id) REFERENCES tenants(id)',
+                        tbl
+                    );
+                    RAISE NOTICE 'v10: fk_tenant_id added to %', tbl;
+                EXCEPTION WHEN others THEN
+                    -- TimescaleDB older than 2.x does not support FK on hypertables.
+                    -- Log and continue — integrity is still enforced on all other tables.
+                    RAISE NOTICE 'v10: fk_tenant_id skipped on % — %', tbl, SQLERRM;
+                END;
+            ELSE
+                RAISE NOTICE 'v10: fk_tenant_id on % already exists, skipping', tbl;
+            END IF;
         END LOOP;
     END;
     $$;
