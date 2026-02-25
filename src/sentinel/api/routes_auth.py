@@ -22,10 +22,18 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from sentinel.api.dependencies import get_current_user
-from sentinel.api.schemas import LoginRequest, RefreshRequest, TokenResponse, UserOut
+from sentinel.api.schemas import (
+    ChangePasswordRequest,
+    LoginRequest,
+    RefreshRequest,
+    TokenResponse,
+    UserOut,
+)
 from sentinel.core.security import (
     create_access_token,
+    create_sentinel_token,
     decode_access_token,
+    hash_password,
     verify_password,
 )
 from sentinel.core.tenant import set_tenant
@@ -234,5 +242,142 @@ async def me(_user: dict = Depends(get_current_user)) -> UserOut:
         user_id=_user.get("user_id") or "api-key",
         email="",  # not stored in JWT — client can cache it from login response
         role=_user["role"],
-        tenant_id=_user["tenant_id"],
+        tenant_id=_user.get("tenant_id") or "",
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/sentinel-login  (Sentinel internal users)
+# ---------------------------------------------------------------------------
+
+@auth_router.post("/sentinel-login", response_model=TokenResponse)
+async def sentinel_login(body: LoginRequest, request: Request) -> TokenResponse:
+    """Authenticate a Sentinel internal user (superuser / sentinel_admin / developer).
+
+    Returns a sentinel-scoped JWT — no tenant_id embedded; use X-Tenant-ID header
+    on subsequent requests to scope operations to a specific customer tenant.
+    """
+    secret      = _get_jwt_secret(request)
+    access_ttl  = _get_access_ttl(request)
+    refresh_ttl = _get_refresh_ttl(request)
+
+    user = await queries.get_sentinel_user_by_email(body.email)
+
+    if user is None or not verify_password(body.password, user.get("password_hash", "")):
+        logger.warning(
+            "sentinel_login_failed",
+            email=body.email[:3] + "***",
+        )
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not user["active"]:
+        raise HTTPException(status_code=403, detail="Account is inactive")
+
+    access_token  = create_sentinel_token(
+        user_id=user["id"],
+        role=user["role"],
+        secret=secret,
+        ttl_seconds=access_ttl,
+    )
+    refresh_token = secrets.token_urlsafe(48)
+    token_hash    = _hash_token(refresh_token)
+    expires_at    = datetime.now(timezone.utc) + timedelta(seconds=refresh_ttl)
+
+    await queries.store_sentinel_refresh_token(user["id"], token_hash, expires_at)
+    await queries.update_sentinel_last_login(user["id"])
+
+    logger.info("sentinel_login_success", user_id=user["id"], role=user["role"])
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=access_ttl,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/sentinel-refresh
+# ---------------------------------------------------------------------------
+
+@auth_router.post("/sentinel-refresh", response_model=TokenResponse)
+async def sentinel_refresh(body: RefreshRequest, request: Request) -> TokenResponse:
+    """Exchange a sentinel refresh token for a new sentinel access token (with rotation)."""
+    secret      = _get_jwt_secret(request)
+    access_ttl  = _get_access_ttl(request)
+    refresh_ttl = _get_refresh_ttl(request)
+
+    token_hash = _hash_token(body.refresh_token)
+    row = await queries.get_sentinel_refresh_token(token_hash)
+
+    if row is None:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if row["revoked"]:
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked")
+    if row["expires_at"] < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Refresh token has expired")
+    if not row["active"]:
+        raise HTTPException(status_code=403, detail="Account is inactive")
+
+    access_token = create_sentinel_token(
+        user_id=row["user_id"],
+        role=row["role"],
+        secret=secret,
+        ttl_seconds=access_ttl,
+    )
+
+    # Rotate refresh token
+    new_refresh = secrets.token_urlsafe(48)
+    new_hash    = _hash_token(new_refresh)
+    new_expires = datetime.now(timezone.utc) + timedelta(seconds=refresh_ttl)
+
+    await queries.revoke_sentinel_refresh_token(token_hash)
+    await queries.store_sentinel_refresh_token(row["user_id"], new_hash, new_expires)
+
+    logger.info("sentinel_token_refreshed", user_id=row["user_id"])
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=new_refresh,
+        expires_in=access_ttl,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/change-password
+# ---------------------------------------------------------------------------
+
+@auth_router.post("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    _user: dict = Depends(get_current_user),
+) -> dict:
+    """Change the current user's password.
+
+    Verifies the current password, hashes the new one, and revokes all
+    existing refresh tokens — forcing re-login on all devices.
+    Only works for tenant users (not sentinel users — no password field in sentinel JWT).
+    """
+    user_id = _user.get("user_id")
+    if not user_id or _user.get("scope") == "sentinel":
+        raise HTTPException(
+            status_code=400,
+            detail="Password change not supported for this account type",
+        )
+
+    # Load full user row to verify current password
+    from sentinel.db.connection import get_pool
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT password_hash FROM users WHERE id = $1::uuid",
+            user_id,
+        )
+
+    if row is None or not verify_password(body.current_password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    new_hash = hash_password(body.new_password)
+    await queries.update_user_password(user_id, new_hash)
+    await queries.revoke_all_user_tokens(user_id)
+
+    logger.info("password_changed", user_id=user_id, tenant=_user.get("tenant_id"))
+    return {"message": "Password changed. Please log in again."}

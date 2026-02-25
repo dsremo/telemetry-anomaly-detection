@@ -185,3 +185,27 @@ def decode_access_token(token: str, secret: str) -> dict:
     Raises jwt.InvalidTokenError (or subclass) on expiry, bad signature, etc.
     """
     return jwt.decode(token, secret, algorithms=["HS256"])
+
+
+def create_sentinel_token(
+    user_id: str,
+    role: str,
+    secret: str,
+    ttl_seconds: int = 900,
+) -> str:
+    """Create a signed HS256 JWT for a Sentinel internal user.
+
+    Differs from create_access_token:
+      - No 'tid' claim (sentinel users are cross-tenant).
+      - 'scope' = 'sentinel' so get_current_user can detect this type and
+        read X-Tenant-ID header instead of a fixed tenant from the token.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "role": role,
+        "scope": "sentinel",
+        "iat": now,
+        "exp": now + timedelta(seconds=ttl_seconds),
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")

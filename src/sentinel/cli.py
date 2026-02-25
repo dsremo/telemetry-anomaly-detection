@@ -1,13 +1,18 @@
 """Sentinel CLI — the operational interface for the engine.
 
 Commands:
-  sentinel serve          — Start the API server
-  sentinel simulate       — Run spacecraft simulator
-  sentinel key generate   — Generate a new API key (plaintext shown ONCE)
-  sentinel key list       — List active API keys (hashed, never plaintext)
-  sentinel key revoke     — Revoke an API key
-  sentinel health         — Check system health
-  sentinel scenarios      — List available fault injection scenarios
+  sentinel serve                    — Start the API server
+  sentinel simulate                 — Run spacecraft simulator
+  sentinel key generate             — Generate a new API key (plaintext shown ONCE)
+  sentinel key list                 — List active API keys (hashed, never plaintext)
+  sentinel key revoke               — Revoke an API key
+  sentinel health                   — Check system health
+  sentinel scenarios                — List available fault injection scenarios
+  sentinel users create             — Create a tenant user
+  sentinel users list               — List users in a tenant
+  sentinel users deactivate         — Deactivate a tenant user
+  sentinel sentinel-users create    — Create a Sentinel internal user (bootstrap)
+  sentinel sentinel-users list      — List all Sentinel internal users
 """
 
 from __future__ import annotations
@@ -28,6 +33,11 @@ app.add_typer(key_app, name="key")
 
 users_app = typer.Typer(help="User management (B2B SaaS — tenant admin creates users)")
 app.add_typer(users_app, name="users")
+
+sentinel_users_app = typer.Typer(
+    help="Sentinel internal user management (superuser/sentinel_admin/developer)"
+)
+app.add_typer(sentinel_users_app, name="sentinel-users")
 
 
 @app.command()
@@ -399,3 +409,95 @@ async def _revoke_key(hash_prefix: str) -> None:
             hash_prefix,
         )
     await close_pool()
+
+
+# ---------------------------------------------------------------------------
+# Sentinel internal users subcommand group
+# ---------------------------------------------------------------------------
+
+_SENTINEL_VALID_ROLES = ("superuser", "sentinel_admin", "developer")
+
+
+@sentinel_users_app.command("create")
+def sentinel_users_create(
+    email: str = typer.Option(..., prompt="Email address"),
+    role: str = typer.Option("developer", help="Role: superuser | sentinel_admin | developer"),
+    password: str = typer.Option("", help="Password (prompted if not provided)"),
+) -> None:
+    """Create a Sentinel internal user (bootstrap the first superuser)."""
+    import getpass
+
+    if role not in _SENTINEL_VALID_ROLES:
+        typer.echo(
+            f"Invalid role '{role}'. Choose from: {', '.join(_SENTINEL_VALID_ROLES)}", err=True
+        )
+        raise typer.Exit(1)
+
+    if not password:
+        password = getpass.getpass("Password: ")
+        confirm  = getpass.getpass("Confirm password: ")
+        if password != confirm:
+            typer.echo("Passwords do not match.", err=True)
+            raise typer.Exit(1)
+
+    if len(password) < 8:
+        typer.echo("Password must be at least 8 characters.", err=True)
+        raise typer.Exit(1)
+
+    asyncio.run(_create_sentinel_user(email, password, role))
+    typer.echo(f"\nSentinel user created: {email} [{role}]")
+
+
+@sentinel_users_app.command("list")
+def sentinel_users_list() -> None:
+    """List all Sentinel internal users."""
+    asyncio.run(_list_sentinel_users())
+
+
+async def _create_sentinel_user(email: str, password: str, role: str) -> None:
+    from sentinel.core.config import load_config
+    from sentinel.core.security import hash_password
+    from sentinel.db.connection import close_pool, init_pool
+    from sentinel.db.queries import create_sentinel_user
+
+    settings = load_config()
+    db = settings.get("database", {})
+    await init_pool(
+        host=db.get("host", "localhost"),
+        database=db.get("name", "sentinel"),
+        user=db.get("user", "sentinel"),
+        password=db.get("password", ""),
+    )
+    password_hash = hash_password(password)
+    await create_sentinel_user(email, password_hash, role)
+    await close_pool()
+
+
+async def _list_sentinel_users() -> None:
+    from sentinel.core.config import load_config
+    from sentinel.db.connection import close_pool, init_pool
+    from sentinel.db.queries import list_sentinel_users
+
+    settings = load_config()
+    db = settings.get("database", {})
+    await init_pool(
+        host=db.get("host", "localhost"),
+        database=db.get("name", "sentinel"),
+        user=db.get("user", "sentinel"),
+        password=db.get("password", ""),
+    )
+    users = await list_sentinel_users()
+    await close_pool()
+
+    if not users:
+        typer.echo("No Sentinel internal users found.")
+        return
+
+    typer.echo("\nSentinel Internal Users:")
+    typer.echo(f"  {'Email':<40} {'Role':<16} {'Active':<8} {'Created'}")
+    typer.echo("  " + "-" * 80)
+    for u in users:
+        created = str(u["created_at"])[:19] if u.get("created_at") else "?"
+        typer.echo(
+            f"  {u['email']:<40} {u['role']:<16} {str(u['active']):<8} {created}"
+        )

@@ -1039,6 +1039,16 @@ async def deactivate_user(email: str) -> bool:
     return result == "UPDATE 1"
 
 
+async def deactivate_user_by_id(user_id: str) -> bool:
+    """Deactivate a user by UUID within the current tenant. Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET active = FALSE WHERE id = $1::uuid AND active = TRUE",
+            user_id,
+        )
+    return result == "UPDATE 1"
+
+
 # ---------------------------------------------------------------------------
 # Refresh Tokens
 # ---------------------------------------------------------------------------
@@ -1088,5 +1098,255 @@ async def revoke_all_user_tokens(user_id: str) -> None:
     async with acquire() as conn:
         await conn.execute(
             "UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1::uuid",
+            user_id,
+        )
+
+
+# ---------------------------------------------------------------------------
+# User management (RLS-scoped — acquire())
+# ---------------------------------------------------------------------------
+
+async def update_user_role(user_id: str, new_role: str) -> bool:
+    """Change the role of a user within the current tenant. Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET role = $1::user_role WHERE id = $2::uuid AND active = TRUE",
+            new_role, user_id,
+        )
+    return result == "UPDATE 1"
+
+
+async def reactivate_user(user_id: str) -> bool:
+    """Re-enable a previously deactivated user. Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET active = TRUE WHERE id = $1::uuid AND active = FALSE",
+            user_id,
+        )
+    return result == "UPDATE 1"
+
+
+async def update_user_password(user_id: str, new_hash: str) -> None:
+    """Replace the password hash for a user (change-password flow)."""
+    async with acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET password_hash = $1 WHERE id = $2::uuid",
+            new_hash, user_id,
+        )
+
+
+# ---------------------------------------------------------------------------
+# API key management (RLS-scoped — acquire())
+# ---------------------------------------------------------------------------
+
+async def list_api_keys_for_tenant() -> list[dict]:
+    """List all API keys for the current tenant (hash_prefix, not full hash)."""
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT label,
+                   SUBSTRING(key_hash, 1, 16) AS hash_prefix,
+                   created_at,
+                   last_used_at,
+                   active
+            FROM api_keys
+            ORDER BY created_at DESC
+            """,
+        )
+    return [dict(r) for r in rows]
+
+
+async def revoke_api_key_by_prefix(prefix: str) -> bool:
+    """Deactivate keys whose hash starts with the given prefix. Returns True if any found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "UPDATE api_keys SET active = FALSE WHERE key_hash LIKE $1 || '%' AND active = TRUE",
+            prefix,
+        )
+    return result != "UPDATE 0"
+
+
+# ---------------------------------------------------------------------------
+# Tenant CRUD (pool direct — tenants has no RLS)
+# ---------------------------------------------------------------------------
+
+async def list_tenants() -> list[dict]:
+    """List all tenants (sentinel admin access — bypasses RLS via direct pool)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, name, plan, active, created_at FROM tenants ORDER BY created_at ASC"
+        )
+    return [dict(r) for r in rows]
+
+
+async def get_tenant_by_id(tenant_id: str) -> dict | None:
+    """Fetch a single tenant by ID (direct pool — no RLS on tenants table)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name, plan, active, created_at, settings FROM tenants WHERE id = $1",
+            tenant_id,
+        )
+    return dict(row) if row else None
+
+
+async def create_tenant(tenant_id: str, name: str, plan: str = "free") -> dict:
+    """Insert a new tenant. Raises asyncpg.UniqueViolationError on duplicate id."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO tenants (id, name, plan)
+            VALUES ($1, $2, $3)
+            RETURNING id, name, plan, active, created_at
+            """,
+            tenant_id, name, plan,
+        )
+    return dict(row)
+
+
+async def update_tenant(
+    tenant_id: str,
+    name: str | None = None,
+    active: bool | None = None,
+) -> bool:
+    """Patch a tenant's name and/or active flag. Returns True if found."""
+    updates: list[str] = []
+    params: list = []
+
+    if name is not None:
+        params.append(name)
+        updates.append(f"name = ${len(params)}")
+    if active is not None:
+        params.append(active)
+        updates.append(f"active = ${len(params)}")
+
+    if not updates:
+        return False
+
+    params.append(tenant_id)
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            f"UPDATE tenants SET {', '.join(updates)} WHERE id = ${len(params)}",
+            *params,
+        )
+    return result == "UPDATE 1"
+
+
+# ---------------------------------------------------------------------------
+# Sentinel users (pool direct — no RLS on sentinel_users)
+# ---------------------------------------------------------------------------
+
+async def get_sentinel_user_by_email(email: str) -> dict | None:
+    """Look up a sentinel user by email (direct pool, no RLS)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, email, password_hash, role::text, active, created_at, last_login
+            FROM sentinel_users
+            WHERE email = $1
+            """,
+            email,
+        )
+    return dict(row) if row else None
+
+
+async def create_sentinel_user(email: str, password_hash: str, role: str) -> dict:
+    """Insert a new Sentinel internal user.
+
+    Raises asyncpg.UniqueViolationError if email already exists.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO sentinel_users (email, password_hash, role)
+            VALUES ($1, $2, $3::sentinel_role)
+            RETURNING id::text, email, role::text, active, created_at
+            """,
+            email, password_hash, role,
+        )
+    return dict(row)
+
+
+async def update_sentinel_last_login(user_id: str) -> None:
+    """Record the current time as last_login for a sentinel user."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sentinel_users SET last_login = NOW() WHERE id = $1::uuid",
+            user_id,
+        )
+
+
+async def list_sentinel_users() -> list[dict]:
+    """List all sentinel internal users (direct pool, no RLS)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id::text, email, role::text, active, created_at, last_login "
+            "FROM sentinel_users ORDER BY created_at ASC"
+        )
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Sentinel refresh tokens (pool direct — no RLS)
+# ---------------------------------------------------------------------------
+
+async def store_sentinel_refresh_token(
+    user_id: str,
+    token_hash: str,
+    expires_at: datetime,
+) -> None:
+    """Persist a hashed sentinel refresh token."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO sentinel_refresh_tokens (user_id, token_hash, expires_at)
+            VALUES ($1::uuid, $2, $3)
+            ON CONFLICT (token_hash) DO NOTHING
+            """,
+            user_id, token_hash, expires_at,
+        )
+
+
+async def get_sentinel_refresh_token(token_hash: str) -> dict | None:
+    """Look up a sentinel refresh token by hash (with user info joined)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT srt.id::text, srt.user_id::text, srt.expires_at, srt.revoked,
+                   su.role::text AS role, su.email, su.active
+            FROM sentinel_refresh_tokens srt
+            JOIN sentinel_users su ON su.id = srt.user_id
+            WHERE srt.token_hash = $1
+            """,
+            token_hash,
+        )
+    return dict(row) if row else None
+
+
+async def revoke_sentinel_refresh_token(token_hash: str) -> None:
+    """Mark a sentinel refresh token as revoked."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sentinel_refresh_tokens SET revoked = TRUE WHERE token_hash = $1",
+            token_hash,
+        )
+
+
+async def revoke_all_sentinel_user_tokens(user_id: str) -> None:
+    """Revoke all refresh tokens for a sentinel user."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE sentinel_refresh_tokens SET revoked = TRUE WHERE user_id = $1::uuid",
             user_id,
         )

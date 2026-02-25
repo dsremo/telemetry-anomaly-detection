@@ -18,6 +18,10 @@ Tables:
   incidents          — root-cause groups of related anomalies
   alerts             — dispatched notifications
   api_keys           — hashed API credentials
+  users              — tenant-scoped human users (RLS)
+  refresh_tokens     — tenant-scoped refresh tokens (RLS)
+  sentinel_users     — Sentinel internal staff (no RLS, no tenant_id)
+  sentinel_refresh_tokens — Sentinel staff refresh tokens (no RLS)
   schema_version     — migration tracking
 """
 
@@ -29,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +606,62 @@ _MIGRATIONS: list[str] = [
     CREATE POLICY tenant_isolation ON refresh_tokens
         USING     (tenant_id = current_setting('app.tenant_id', true))
         WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    """,
+
+    # v12: Sentinel internal users + extended role system.
+    #
+    # Design:
+    #   - sentinel_users: no tenant_id, no RLS — Sentinel staff are cross-tenant.
+    #     Role hierarchy: superuser > sentinel_admin > developer.
+    #   - sentinel_refresh_tokens: mirrors refresh_tokens but references sentinel_users,
+    #     no tenant_id, no RLS — same reasoning.
+    #   - user_role ENUM extended with 'tenant_manager': a step below admin that can
+    #     manage operations + users but not billing/settings. Added via ALTER TYPE …
+    #     ADD VALUE (idempotent in PG12+ via IF NOT EXISTS).
+    #   - tenants table gains plan + settings columns for future B2B config.
+    """
+    DO $$ BEGIN
+        CREATE TYPE sentinel_role AS ENUM ('superuser', 'sentinel_admin', 'developer');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END; $$;
+
+    CREATE TABLE IF NOT EXISTS sentinel_users (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email         TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role          sentinel_role NOT NULL DEFAULT 'developer',
+        active        BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_login    TIMESTAMPTZ
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sentinel_users_email
+        ON sentinel_users (email);
+
+    CREATE TABLE IF NOT EXISTS sentinel_refresh_tokens (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     UUID NOT NULL REFERENCES sentinel_users(id) ON DELETE CASCADE,
+        token_hash  TEXT NOT NULL UNIQUE,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        revoked     BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sentinel_rt_user
+        ON sentinel_refresh_tokens (user_id, revoked, expires_at);
+
+    -- Extend customer role enum with tenant_manager (idempotent via IF NOT EXISTS).
+    -- PostgreSQL 12+ supports IF NOT EXISTS on ALTER TYPE ADD VALUE.
+    -- Wrapped in DO/EXCEPTION for safety on older versions.
+    DO $$ BEGIN
+        ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'tenant_manager';
+    EXCEPTION WHEN others THEN NULL;
+    END; $$;
+
+    -- Extend tenants table with plan tier and per-tenant config blob.
+    ALTER TABLE tenants
+        ADD COLUMN IF NOT EXISTS plan     TEXT NOT NULL DEFAULT 'free',
+        ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}';
     """,
 ]
 

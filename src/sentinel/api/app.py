@@ -25,6 +25,9 @@ from sentinel.api.middleware import (
 )
 from sentinel.api.routes import router
 from sentinel.api.routes_auth import auth_router
+from sentinel.api.routes_keys import keys_router
+from sentinel.api.routes_tenants import tenants_router
+from sentinel.api.routes_users import users_router
 from sentinel.api.websocket import ws_router
 from sentinel.core.config import load_config
 
@@ -172,6 +175,9 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     # --- Routes ---
     app.include_router(router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(tenants_router, prefix="/api/v1")
+    app.include_router(users_router, prefix="/api/v1")
+    app.include_router(keys_router, prefix="/api/v1")
     app.include_router(ws_router, prefix="/api/v1")
 
     # --- Root redirect → dashboard ---

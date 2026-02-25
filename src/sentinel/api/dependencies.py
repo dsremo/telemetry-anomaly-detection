@@ -55,6 +55,20 @@ async def get_current_user(
                 status_code=401,
                 detail=f"Invalid or expired token: {exc}",
             ) from exc
+
+        if payload.get("scope") == "sentinel":
+            # Sentinel internal user — cross-tenant; X-Tenant-ID header sets context.
+            x_tenant = request.headers.get("X-Tenant-ID", "")
+            if x_tenant:
+                set_tenant(x_tenant)
+            return {
+                "user_id": payload["sub"],
+                "tenant_id": x_tenant or None,
+                "role": payload["role"],
+                "scope": "sentinel",
+            }
+
+        # Normal tenant JWT
         set_tenant(payload["tid"])
         return {
             "user_id": payload["sub"],
@@ -106,7 +120,18 @@ def require_role(*allowed_roles: str):
 # Convenience shortcuts — import directly in route files
 # ---------------------------------------------------------------------------
 
-require_admin    = require_role("admin")
-require_operator = require_role("admin", "operator")
-# viewer includes all roles that should be able to read data
-require_viewer   = require_role("admin", "operator", "viewer", "report_only")
+# Sentinel-internal routes (cross-tenant, no X-Tenant-ID needed)
+require_sentinel        = require_role("superuser", "sentinel_admin", "developer")
+require_sentinel_admin  = require_role("superuser", "sentinel_admin")
+
+# Tenant admin-level — includes sentinel roles so they can operate via X-Tenant-ID
+require_tenant_admin    = require_role("admin", "superuser", "sentinel_admin")
+require_tenant_manager  = require_role("admin", "tenant_manager", "superuser", "sentinel_admin")
+
+# Updated to include sentinel roles (they can act as any tenant role via X-Tenant-ID)
+require_admin    = require_role("admin", "superuser", "sentinel_admin")
+require_operator = require_role("admin", "tenant_manager", "operator", "superuser", "sentinel_admin")
+require_viewer   = require_role(
+    "admin", "tenant_manager", "operator", "viewer", "report_only",
+    "superuser", "sentinel_admin", "developer",
+)

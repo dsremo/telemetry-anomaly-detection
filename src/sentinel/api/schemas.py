@@ -145,3 +145,118 @@ class UserOut(BaseModel):
     email: str
     role: str
     tenant_id: str
+
+
+# ---------------------------------------------------------------------------
+# Tenant management schemas
+# ---------------------------------------------------------------------------
+
+class TenantIn(BaseModel):
+    """Create a new tenant."""
+
+    id: str = Field(..., min_length=2, max_length=64, pattern=r"^[a-z0-9\-]+$")
+    name: str = Field(..., min_length=1, max_length=128)
+    plan: str = Field(default="free", max_length=32)
+
+
+class TenantPatch(BaseModel):
+    """Partial update for a tenant (name and/or active)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    active: bool | None = None
+
+
+class TenantOut(BaseModel):
+    """Tenant record as returned by the API."""
+
+    id: str
+    name: str
+    plan: str
+    active: bool
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# User management schemas
+# ---------------------------------------------------------------------------
+
+_VALID_TENANT_ROLES = frozenset({"admin", "tenant_manager", "operator", "viewer", "report_only"})
+
+
+class UserCreateRequest(BaseModel):
+    """Create a new user within the current tenant."""
+
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    role: str = Field(default="viewer")
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in _VALID_TENANT_ROLES:
+            raise ValueError(f"Invalid role. Choose from: {', '.join(sorted(_VALID_TENANT_ROLES))}")
+        return v
+
+
+class UpdateRoleRequest(BaseModel):
+    """Change the role of a tenant user."""
+
+    role: str = Field(..., min_length=1)
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, v: str) -> str:
+        if v not in _VALID_TENANT_ROLES:
+            raise ValueError(f"Invalid role. Choose from: {', '.join(sorted(_VALID_TENANT_ROLES))}")
+        return v
+
+
+class UserDetailOut(BaseModel):
+    """Full user record returned by user management endpoints."""
+
+    id: str
+    email: str
+    role: str
+    active: bool
+    created_at: datetime
+    last_login: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Password management schemas
+# ---------------------------------------------------------------------------
+
+class ChangePasswordRequest(BaseModel):
+    """Authenticated user changes their own password."""
+
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+# ---------------------------------------------------------------------------
+# API key management schemas
+# ---------------------------------------------------------------------------
+
+class ApiKeyCreateRequest(BaseModel):
+    """Request to generate a new API key for the current tenant."""
+
+    label: str = Field(..., min_length=1, max_length=64)
+
+
+class ApiKeyCreateResponse(BaseModel):
+    """Returned once on key creation — key plaintext shown ONCE."""
+
+    key: str          # full plaintext key (never stored)
+    label: str
+    hash_prefix: str  # first 16 chars of hash for identification
+    tenant_id: str
+
+
+class ApiKeyOut(BaseModel):
+    """API key record as returned by the list endpoint."""
+
+    label: str
+    hash_prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+    active: bool
