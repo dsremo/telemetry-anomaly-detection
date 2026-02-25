@@ -83,6 +83,7 @@ def _apply_env_overrides(settings: Dynaconf) -> None:
         "SENTINEL_DB_NAME": "database.name",
         "SENTINEL_HMAC_SECRET": "security.hmac_secret",
         "SENTINEL_WEBHOOK_URL": "alerts.webhook_url",
+        "SENTINEL_JWT_SECRET":  "auth.jwt_secret",
     }
 
     for env_var, config_key in env_map.items():

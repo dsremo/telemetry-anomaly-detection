@@ -13,8 +13,11 @@ import re
 import secrets
 import time
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import bcrypt
+import jwt
 import structlog
 
 logger = structlog.get_logger()
@@ -127,3 +130,58 @@ class RateLimiter:
 def validate_payload_size(data: bytes, max_bytes: int = 1_048_576) -> bool:
     """Reject payloads exceeding size limit (default 1MB)."""
     return len(data) <= max_bytes
+
+
+# ---------------------------------------------------------------------------
+# Password hashing (bcrypt)
+# ---------------------------------------------------------------------------
+
+
+def hash_password(password: str) -> str:
+    """Hash a plaintext password using bcrypt (rounds=12, constant work factor)."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def verify_password(plaintext: str, hashed: str) -> bool:
+    """Verify a password against its bcrypt hash. Constant-time comparison."""
+    return bcrypt.checkpw(plaintext.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# JWT access tokens (HS256)
+# ---------------------------------------------------------------------------
+
+
+def create_access_token(
+    user_id: str,
+    tenant_id: str,
+    role: str,
+    secret: str,
+    ttl_seconds: int = 900,
+) -> str:
+    """Create a signed HS256 JWT access token.
+
+    Claims:
+        sub  — user UUID
+        tid  — tenant ID (used by get_current_user to set RLS context)
+        role — RBAC role string
+        iat  — issued at
+        exp  — expiry (default 15 min)
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "tid": tenant_id,
+        "role": role,
+        "iat": now,
+        "exp": now + timedelta(seconds=ttl_seconds),
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def decode_access_token(token: str, secret: str) -> dict:
+    """Decode and validate a JWT access token.
+
+    Raises jwt.InvalidTokenError (or subclass) on expiry, bad signature, etc.
+    """
+    return jwt.decode(token, secret, algorithms=["HS256"])

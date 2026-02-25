@@ -24,6 +24,7 @@ from sentinel.api.middleware import (
     RateLimitMiddleware,
 )
 from sentinel.api.routes import router
+from sentinel.api.routes_auth import auth_router
 from sentinel.api.websocket import ws_router
 from sentinel.core.config import load_config
 
@@ -81,6 +82,18 @@ async def lifespan(app: FastAPI):
         app.state.api_key_tenant_map = await load_api_key_map()
         logger.info("api_key_map_loaded", count=len(app.state.api_key_tenant_map))
 
+        # Load JWT secret from env/config. Warn (not fail) so server still
+        # starts in dev mode without a secret — auth routes return 503.
+        import os
+        jwt_secret = settings.get("auth", {}).get(
+            "jwt_secret", os.environ.get("SENTINEL_JWT_SECRET", "")
+        )
+        app.state.jwt_secret = jwt_secret
+        if jwt_secret:
+            logger.info("jwt_secret_loaded", length=len(jwt_secret))
+        else:
+            logger.warning("jwt_secret_missing", hint="Set SENTINEL_JWT_SECRET env var")
+
     # Wire config thresholds into detector singletons
     from sentinel.detection.detector import init_detectors
     init_detectors(settings)
@@ -126,6 +139,8 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     app.state.demo_mode = demo
     # Populated in lifespan after DB connects. Empty dict = no keys loaded yet.
     app.state.api_key_tenant_map: dict[str, str] = {}
+    # JWT secret — populated in lifespan from SENTINEL_JWT_SECRET env var.
+    app.state.jwt_secret: str = ""
 
     # --- Middleware stack (order matters: outermost runs first) ---
     sec = settings.get("security", {})
@@ -156,6 +171,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
 
     # --- Routes ---
     app.include_router(router, prefix="/api/v1")
+    app.include_router(auth_router, prefix="/api/v1")
     app.include_router(ws_router, prefix="/api/v1")
 
     # --- Root redirect → dashboard ---

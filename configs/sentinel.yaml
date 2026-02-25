@@ -102,6 +102,11 @@ features:
     - 3600   # 1 hour
   orbital_period: 5400  # 90 minutes in seconds (LEO)
 
+auth:
+  access_token_ttl_seconds: 900      # 15 minutes
+  refresh_token_ttl_seconds: 604800  # 7 days
+  # jwt_secret: MUST be set via SENTINEL_JWT_SECRET env var — never hardcode here
+
 alerts:
   webhook_url: ""
   smtp_host: ""

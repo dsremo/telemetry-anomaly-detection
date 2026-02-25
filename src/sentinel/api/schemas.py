@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class TelemetryIn(BaseModel):
@@ -109,3 +109,39 @@ class PaginatedResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# Auth schemas
+# ---------------------------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    """Email + password login. tenant_id scopes the lookup (B2B pattern)."""
+
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=128)
+    tenant_id: str = Field(default="default", min_length=1, max_length=64)
+
+
+class RefreshRequest(BaseModel):
+    """Opaque refresh token sent by the client to obtain a new access token."""
+
+    refresh_token: str = Field(..., min_length=1)
+
+
+class TokenResponse(BaseModel):
+    """Returned on successful login or token refresh."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int  # seconds until the access token expires
+
+
+class UserOut(BaseModel):
+    """Current user info (GET /auth/me)."""
+
+    user_id: str
+    email: str
+    role: str
+    tenant_id: str

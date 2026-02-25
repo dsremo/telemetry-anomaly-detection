@@ -27,6 +27,7 @@ Query map:
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from typing import Any
@@ -951,3 +952,141 @@ async def get_hourly_stats(
             )
 
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+async def get_user_by_email(email: str) -> dict | None:
+    """Look up a user by email within the current tenant (RLS-scoped)."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, tenant_id, email, password_hash, role::text, active,
+                   created_at, last_login
+            FROM users
+            WHERE email = $1 AND active = TRUE
+            """,
+            email,
+        )
+    return dict(row) if row else None
+
+
+async def get_user_by_id(user_id: str) -> dict | None:
+    """Look up a user by UUID within the current tenant (RLS-scoped)."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, tenant_id, email, role::text, active, created_at, last_login
+            FROM users
+            WHERE id = $1::uuid
+            """,
+            user_id,
+        )
+    return dict(row) if row else None
+
+
+async def create_user(email: str, password_hash: str, role: str) -> dict:
+    """Insert a new user. tenant_id comes from the current ContextVar.
+
+    Returns the new user row (id, email, role, tenant_id, created_at).
+    Raises asyncpg.UniqueViolationError if email already exists in this tenant.
+    """
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO users (tenant_id, email, password_hash, role)
+            VALUES ($1, $2, $3, $4::user_role)
+            RETURNING id::text, tenant_id, email, role::text, active, created_at
+            """,
+            get_tenant(), email, password_hash, role,
+        )
+    return dict(row)
+
+
+async def update_last_login(user_id: str) -> None:
+    """Record the current time as last_login for the given user."""
+    async with acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET last_login = NOW() WHERE id = $1::uuid",
+            user_id,
+        )
+
+
+async def list_users(limit: int = 100) -> list[dict]:
+    """List all active users within the current tenant (RLS-scoped)."""
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id::text, email, role::text, active, created_at, last_login
+            FROM users
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            min(limit, 1000),
+        )
+    return [dict(r) for r in rows]
+
+
+async def deactivate_user(email: str) -> bool:
+    """Deactivate a user by email within the current tenant. Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET active = FALSE WHERE email = $1 AND active = TRUE",
+            email,
+        )
+    return result == "UPDATE 1"
+
+
+# ---------------------------------------------------------------------------
+# Refresh Tokens
+# ---------------------------------------------------------------------------
+
+async def store_refresh_token(
+    user_id: str,
+    token_hash: str,
+    expires_at: datetime,
+) -> None:
+    """Persist a hashed refresh token. Plain token is never stored."""
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO refresh_tokens (user_id, tenant_id, token_hash, expires_at)
+            VALUES ($1::uuid, $2, $3, $4)
+            ON CONFLICT (token_hash) DO NOTHING
+            """,
+            user_id, get_tenant(), token_hash, expires_at,
+        )
+
+
+async def get_refresh_token(token_hash: str) -> dict | None:
+    """Load a refresh token row by hash (RLS-scoped to current tenant)."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id::text, user_id::text, tenant_id, expires_at, revoked
+            FROM refresh_tokens
+            WHERE token_hash = $1
+            """,
+            token_hash,
+        )
+    return dict(row) if row else None
+
+
+async def revoke_refresh_token(token_hash: str) -> None:
+    """Mark a specific refresh token as revoked (logout)."""
+    async with acquire() as conn:
+        await conn.execute(
+            "UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1",
+            token_hash,
+        )
+
+
+async def revoke_all_user_tokens(user_id: str) -> None:
+    """Revoke all refresh tokens for a user (password reset, account deactivation)."""
+    async with acquire() as conn:
+        await conn.execute(
+            "UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1::uuid",
+            user_id,
+        )

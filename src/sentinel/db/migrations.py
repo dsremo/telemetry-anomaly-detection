@@ -29,7 +29,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +490,7 @@ _MIGRATIONS: list[str] = [
 
     # v10: Referential integrity — FK from tenant_id → tenants(id) on every data table.
     #
+    #
     # Why this is a separate migration from v9:
     #   v9 added tenant_id columns and seeded 'default', but had no FK constraint.
     #   A missing FK means typo tenant IDs (e.g. 'ddefault') are silently accepted —
@@ -539,6 +540,68 @@ _MIGRATIONS: list[str] = [
         END LOOP;
     END;
     $$;
+    """,
+
+    # v11: User Auth — users table + refresh_tokens table with RLS.
+    #
+    # Design:
+    #   - users(id UUID PK, tenant_id FK, email, password_hash, role enum, active, timestamps)
+    #     UNIQUE (tenant_id, email) — one account per email per tenant (B2B pattern).
+    #   - user_role ENUM: admin > operator > viewer > report_only
+    #   - refresh_tokens: opaque random bytes hashed with SHA-256; 7-day TTL;
+    #     can be revoked individually (logout) or all at once (password reset).
+    #   - Both tables have FORCE RLS with the standard tenant_isolation policy.
+    #   - FK to tenants(id) is embedded in REFERENCES — no separate DO block needed.
+    #   - RLS on users is FORCE — even admin users only see their own tenant's users
+    #     (table owner bypass is prevented by FORCE, same pattern as other data tables).
+    """
+    DO $$ BEGIN
+        CREATE TYPE user_role AS ENUM ('admin', 'operator', 'viewer', 'report_only');
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END; $$;
+
+    CREATE TABLE IF NOT EXISTS users (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id     TEXT NOT NULL REFERENCES tenants(id),
+        email         TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        role          user_role NOT NULL DEFAULT 'viewer',
+        active        BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_login    TIMESTAMPTZ,
+        UNIQUE (tenant_id, email)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_users_tenant_email
+        ON users (tenant_id, email);
+
+    CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tenant_id   TEXT NOT NULL REFERENCES tenants(id),
+        token_hash  TEXT NOT NULL UNIQUE,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        revoked     BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user
+        ON refresh_tokens (user_id, revoked, expires_at);
+
+    ALTER TABLE users           ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE users           FORCE  ROW LEVEL SECURITY;
+    ALTER TABLE refresh_tokens  ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE refresh_tokens  FORCE  ROW LEVEL SECURITY;
+
+    DROP POLICY IF EXISTS tenant_isolation ON users;
+    CREATE POLICY tenant_isolation ON users
+        USING     (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+    DROP POLICY IF EXISTS tenant_isolation ON refresh_tokens;
+    CREATE POLICY tenant_isolation ON refresh_tokens
+        USING     (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
     """,
 ]
 

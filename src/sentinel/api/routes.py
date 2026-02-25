@@ -10,7 +10,8 @@ import time
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sentinel.api.dependencies import get_current_user, require_admin, require_operator, require_viewer
 
 from sentinel import __version__
 from sentinel.api.schemas import (
@@ -35,7 +36,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 @router.get("/stats", tags=["system"])
-async def get_stats(request: Request) -> dict:
+async def get_stats(request: Request, _user: dict = Depends(get_current_user)) -> dict:
     """Aggregate telemetry and anomaly counts for the dashboard."""
     if getattr(request.app.state, "demo_mode", False):
         return {"total_telemetry_points": 0, "points_last_hour": 0, "active_satellites": 0, "total_anomalies": 0}
@@ -79,7 +80,7 @@ async def health_check(request: Request) -> HealthResponse:
 # ---------------------------------------------------------------------------
 
 @router.post("/telemetry", response_model=IngestResponse, tags=["telemetry"])
-async def ingest_telemetry(body: TelemetryBatchIn) -> IngestResponse:
+async def ingest_telemetry(body: TelemetryBatchIn, _user: dict = Depends(require_operator)) -> IngestResponse:
     """Ingest a batch of telemetry points.
 
     Partial success: valid points are stored, invalid ones reported as errors.
@@ -111,7 +112,7 @@ async def ingest_telemetry(body: TelemetryBatchIn) -> IngestResponse:
 
 
 @router.post("/telemetry/single", response_model=IngestResponse, tags=["telemetry"])
-async def ingest_single(body: TelemetryIn) -> IngestResponse:
+async def ingest_single(body: TelemetryIn, _user: dict = Depends(require_operator)) -> IngestResponse:
     """Convenience endpoint for a single telemetry point."""
     try:
         point = adapt_single(body.model_dump())
@@ -129,6 +130,7 @@ async def get_telemetry(
     since: datetime | None = Query(default=None),
     until: datetime | None = Query(default=None),
     limit: int = Query(default=500, ge=1, le=10_000),
+    _user: dict = Depends(require_viewer),
 ) -> list[TelemetryOut]:
     """Query historical telemetry for a satellite."""
     rows = await queries.get_telemetry(
@@ -151,6 +153,7 @@ async def list_anomalies(
     severity: str | None = Query(default=None),
     since: datetime | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
+    _user: dict = Depends(require_viewer),
 ) -> list[AnomalyOut]:
     """List detected anomalies with optional filters."""
     rows = await queries.get_anomalies(
@@ -163,7 +166,7 @@ async def list_anomalies(
 
 
 @router.get("/anomalies/{anomaly_id}", tags=["anomalies"])
-async def get_anomaly(anomaly_id: str) -> AnomalyOut:
+async def get_anomaly(anomaly_id: str, _user: dict = Depends(require_viewer)) -> AnomalyOut:
     """Get a single anomaly with full explanation."""
     row = await queries.get_anomaly_by_id(anomaly_id)
     if not row:
@@ -176,7 +179,7 @@ async def get_anomaly(anomaly_id: str) -> AnomalyOut:
 # ---------------------------------------------------------------------------
 
 @router.get("/satellites", tags=["satellites"])
-async def list_satellites() -> list[str]:
+async def list_satellites(_user: dict = Depends(require_viewer)) -> list[str]:
     """List all satellites that have sent telemetry."""
     return await queries.get_known_satellites()
 
@@ -186,7 +189,7 @@ async def list_satellites() -> list[str]:
 # ---------------------------------------------------------------------------
 
 @router.post("/simulate/start", tags=["simulator"])
-async def start_simulation(body: SimulateRequest) -> dict:
+async def start_simulation(body: SimulateRequest, _user: dict = Depends(require_admin)) -> dict:
     """Start generating synthetic telemetry. For demos and testing."""
     try:
         from sentinel.simulate.spacecraft import SpacecraftSimulator
@@ -210,7 +213,7 @@ async def start_simulation(body: SimulateRequest) -> dict:
 
 
 @router.post("/simulate/inject", tags=["simulator"])
-async def inject_fault(body: InjectRequest) -> dict:
+async def inject_fault(body: InjectRequest, _user: dict = Depends(require_admin)) -> dict:
     """Inject a fault into running simulation. For testing anomaly detection."""
     return {
         "status": "injected",

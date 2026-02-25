@@ -26,6 +26,9 @@ app = typer.Typer(
 key_app = typer.Typer(help="API key management")
 app.add_typer(key_app, name="key")
 
+users_app = typer.Typer(help="User management (B2B SaaS — tenant admin creates users)")
+app.add_typer(users_app, name="users")
+
 
 @app.command()
 def serve(
@@ -224,6 +227,138 @@ def health(
         typer.echo(f"Uptime:       {data.get('uptime_seconds', 0):.0f}s")
     except httpx.HTTPError as e:
         typer.echo(f"Health check failed: {e}", err=True)
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Users subcommand group
+# ---------------------------------------------------------------------------
+
+@users_app.command("create")
+def users_create(
+    email: str = typer.Option(..., prompt="Email address"),
+    role: str = typer.Option("viewer", help="Role: admin | operator | viewer | report_only"),
+    tenant: str = typer.Option("default", help="Tenant ID"),
+    password: str = typer.Option("", help="Password (prompted if not provided)"),
+) -> None:
+    """Create a new user in the given tenant."""
+    import getpass
+
+    valid_roles = ("admin", "operator", "viewer", "report_only")
+    if role not in valid_roles:
+        typer.echo(f"Invalid role '{role}'. Choose from: {', '.join(valid_roles)}", err=True)
+        raise typer.Exit(1)
+
+    if not password:
+        password = getpass.getpass("Password: ")
+        confirm  = getpass.getpass("Confirm password: ")
+        if password != confirm:
+            typer.echo("Passwords do not match.", err=True)
+            raise typer.Exit(1)
+
+    if len(password) < 8:
+        typer.echo("Password must be at least 8 characters.", err=True)
+        raise typer.Exit(1)
+
+    asyncio.run(_create_user(email, password, role, tenant))
+    typer.echo(f"\nUser created: {email} [{role}] in tenant '{tenant}'")
+
+
+@users_app.command("list")
+def users_list(
+    tenant: str = typer.Option("default", help="Tenant ID"),
+) -> None:
+    """List all users in a tenant."""
+    asyncio.run(_list_users(tenant))
+
+
+@users_app.command("deactivate")
+def users_deactivate(
+    email: str = typer.Option(..., prompt="Email address to deactivate"),
+    tenant: str = typer.Option("default", help="Tenant ID"),
+) -> None:
+    """Deactivate a user account."""
+    asyncio.run(_deactivate_user(email, tenant))
+
+
+async def _create_user(email: str, password: str, role: str, tenant_id: str) -> None:
+    from sentinel.core.config import load_config
+    from sentinel.core.security import hash_password
+    from sentinel.core.tenant import set_tenant
+    from sentinel.db.connection import close_pool, init_pool
+    from sentinel.db.queries import create_user
+
+    settings = load_config()
+    db = settings.get("database", {})
+    await init_pool(
+        host=db.get("host", "localhost"),
+        database=db.get("name", "sentinel"),
+        user=db.get("user", "sentinel"),
+        password=db.get("password", ""),
+    )
+    set_tenant(tenant_id)
+    password_hash = hash_password(password)
+    await create_user(email, password_hash, role)
+    await close_pool()
+
+
+async def _list_users(tenant_id: str) -> None:
+    from sentinel.core.config import load_config
+    from sentinel.core.tenant import set_tenant
+    from sentinel.db.connection import close_pool, init_pool
+    from sentinel.db.queries import list_users
+
+    settings = load_config()
+    db = settings.get("database", {})
+    await init_pool(
+        host=db.get("host", "localhost"),
+        database=db.get("name", "sentinel"),
+        user=db.get("user", "sentinel"),
+        password=db.get("password", ""),
+    )
+    set_tenant(tenant_id)
+    users = await list_users()
+    await close_pool()
+
+    if not users:
+        typer.echo(f"No users in tenant '{tenant_id}'")
+        return
+
+    typer.echo(f"\nUsers in tenant '{tenant_id}':")
+    typer.echo(f"  {'Email':<40} {'Role':<15} {'Active':<8} {'Created'}")
+    typer.echo("  " + "-" * 80)
+    for u in users:
+        created = str(u["created_at"])[:19] if u.get("created_at") else "?"
+        typer.echo(
+            f"  {u['email']:<40} {u['role']:<15} {str(u['active']):<8} {created}"
+        )
+
+
+async def _deactivate_user(email: str, tenant_id: str) -> None:
+    from sentinel.core.config import load_config
+    from sentinel.core.tenant import set_tenant
+    from sentinel.db.connection import close_pool, init_pool
+    from sentinel.db.queries import deactivate_user, revoke_all_user_tokens, get_user_by_email
+
+    settings = load_config()
+    db = settings.get("database", {})
+    await init_pool(
+        host=db.get("host", "localhost"),
+        database=db.get("name", "sentinel"),
+        user=db.get("user", "sentinel"),
+        password=db.get("password", ""),
+    )
+    set_tenant(tenant_id)
+    user = await get_user_by_email(email)
+    if user:
+        await revoke_all_user_tokens(user["id"])
+    found = await deactivate_user(email)
+    await close_pool()
+
+    if found:
+        typer.echo(f"User deactivated: {email} (all refresh tokens revoked)")
+    else:
+        typer.echo(f"User not found: {email}", err=True)
         raise typer.Exit(1)
 
 
