@@ -155,6 +155,19 @@ def _make_csv(tmp_path: Path, content: str, name: str = "test.csv") -> Path:
 
 @pytest.mark.asyncio
 class TestCSVConnectorBulkLoad:
+    # Sprint 3.5 added upsert_satellite_seen + upsert_channel_seen calls to
+    # CSVConnector.bulk_load_to_db().  Auto-mock them so these unit tests
+    # stay DB-free without modifying every individual test.
+    @pytest.fixture(autouse=True)
+    def _mock_upserts(self):
+        with (
+            patch("sentinel.ingest.csv_connector.queries.upsert_satellite_seen",
+                  new_callable=AsyncMock),
+            patch("sentinel.ingest.csv_connector.queries.upsert_channel_seen",
+                  new_callable=AsyncMock),
+        ):
+            yield
+
     async def test_inserts_two_columns(self, tmp_path):
         f = _make_csv(tmp_path, """
             timestamp,voltage,current

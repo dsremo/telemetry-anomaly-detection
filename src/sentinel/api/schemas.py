@@ -75,6 +75,17 @@ class IngestResponse(BaseModel):
     errors: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class CsvUploadResult(BaseModel):
+    """Result of a CSV telemetry file upload."""
+
+    satellite_id: str
+    channels_loaded: int
+    channels_skipped: int        # channels that already had >= skip_if_rows_gte rows
+    total_rows_inserted: int
+    rows_per_channel: dict[str, int]
+    source_name: str
+
+
 class HealthResponse(BaseModel):
     """System health check response."""
 

@@ -6,16 +6,18 @@ Business logic lives in domain modules, never in route handlers.
 
 from __future__ import annotations
 
+import io
 import time
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sentinel.api.dependencies import get_current_user, require_admin, require_operator, require_viewer
 
 from sentinel import __version__
 from sentinel.api.schemas import (
     AnomalyOut,
+    CsvUploadResult,
     HealthResponse,
     IngestResponse,
     InjectRequest,
@@ -121,6 +123,65 @@ async def ingest_single(body: TelemetryIn, _user: dict = Depends(require_operato
 
     await queries.insert_telemetry([point])
     return IngestResponse(accepted=1, rejected=0)
+
+
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB per upload
+
+
+@router.post("/telemetry/upload", response_model=CsvUploadResult, tags=["telemetry"])
+async def upload_telemetry_csv(
+    satellite_id: str = Form(..., min_length=1, max_length=128),
+    subsystem: str = Form(default="unknown", max_length=32),
+    timestamp_col: str = Form(default="timestamp", max_length=64),
+    resample_minutes: int = Form(default=1, ge=1, le=1440),
+    file: UploadFile = File(..., description="Wide-format CSV: timestamp + parameter columns"),
+    _user: dict = Depends(require_operator),
+) -> CsvUploadResult:
+    """Upload a wide-format CSV file and bulk-load it into Sentinel.
+
+    CSV format::
+
+        timestamp,param1,param2,...
+        2024-01-01T00:00:00Z,1.2,3.4,...
+
+    All non-timestamp columns are treated as telemetry parameters.
+    Channels already having ≥ 50 000 rows are skipped (idempotent re-uploads).
+    Max file size: 10 MB.  Returns per-channel row counts.
+    """
+    raw = await file.read()
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large: {len(raw):,} bytes (max {_MAX_UPLOAD_BYTES:,})",
+        )
+
+    try:
+        from sentinel.ingest.csv_connector import CSVConnector
+        connector = CSVConnector(
+            source=io.BytesIO(raw),
+            satellite_id=satellite_id,
+            subsystem=subsystem,
+            timestamp_col=timestamp_col,
+        )
+        totals = await connector.bulk_load_to_db(
+            resample_minutes=resample_minutes,
+            skip_if_rows_gte=50_000,
+        )
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.error("csv_upload_failed", satellite=satellite_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="CSV processing failed — check server logs")
+
+    channels_skipped = sum(1 for v in totals.values() if v >= 50_000)
+    return CsvUploadResult(
+        satellite_id=satellite_id,
+        channels_loaded=len(totals),
+        channels_skipped=channels_skipped,
+        total_rows_inserted=sum(totals.values()),
+        rows_per_channel=totals,
+        source_name=connector.source_name,
+    )
 
 
 @router.get("/telemetry/{satellite_id}", tags=["telemetry"])

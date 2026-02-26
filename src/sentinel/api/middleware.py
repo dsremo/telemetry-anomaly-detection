@@ -29,7 +29,12 @@ class PayloadLimitMiddleware(BaseHTTPMiddleware):
     """Reject requests with bodies exceeding the size limit.
 
     First line of defense against memory exhaustion attacks.
+    Upload paths are excluded so large CSV files can be sent
+    (the route handler enforces its own per-endpoint limit).
     """
+
+    # Paths exempt from the global payload cap (each handler owns its limit).
+    _UPLOAD_PATHS: frozenset[str] = frozenset({"/api/v1/telemetry/upload"})
 
     def __init__(self, app, max_bytes: int = 1_048_576):
         super().__init__(app)
@@ -37,6 +42,8 @@ class PayloadLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if _is_websocket(request.scope):
+            return await call_next(request)
+        if request.url.path in self._UPLOAD_PATHS:
             return await call_next(request)
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > self.max_bytes:

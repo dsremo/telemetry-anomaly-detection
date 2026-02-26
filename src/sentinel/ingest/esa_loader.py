@@ -31,6 +31,7 @@ import structlog
 
 from sentinel.core.models import TelemetryPoint
 from sentinel.ingest.connector import DataConnector
+from sentinel.ingest.utils import ensure_utc_series, validated_resample
 
 logger = structlog.get_logger()
 
@@ -162,12 +163,24 @@ class ESADataLoader(DataConnector):
         zip_path = self.data_dir / "channels" / f"{channel_name}.zip"
 
         if pickle_path.exists() and pickle_path.stat().st_size > 100:
-            return pd.read_pickle(pickle_path)
+            try:
+                return pd.read_pickle(pickle_path)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load ESA channel {channel_name!r} from pickle: {exc}. "
+                    "Re-extract from ESA-Mission1.zip."
+                ) from exc
 
         if zip_path.exists():
-            with zipfile.ZipFile(zip_path, "r") as zf:
-                with zf.open(channel_name) as f:
-                    return pd.read_pickle(f)
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    with zf.open(channel_name) as f:
+                        return pd.read_pickle(f)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to load ESA channel {channel_name!r} from zip: {exc}. "
+                    "Re-extract from ESA-Mission1.zip."
+                ) from exc
 
         raise FileNotFoundError(
             f"Channel data not found: {channel_name}. "
@@ -279,6 +292,7 @@ class ESADataLoader(DataConnector):
         from sentinel.db import queries
         from sentinel.ingest.bulk_loader import bulk_insert_channel, check_channel_row_count
 
+        resample_minutes = validated_resample(resample_minutes)
         resample_rule = f"{resample_minutes}min"
         existing = {ch: await check_channel_row_count(satellite_id, ch) for ch in channels}
         to_load = [c for c in channels if existing[c] < skip_if_rows_gte]
@@ -299,13 +313,11 @@ class ESADataLoader(DataConnector):
 
             try:
                 df = self.load_channel(ch)
-            except FileNotFoundError:
-                tqdm.write(f"  SKIP {ch} — file not found")
+            except (FileNotFoundError, RuntimeError) as exc:
+                tqdm.write(f"  SKIP {ch} — {exc}")
                 continue
 
-            series = df.iloc[:, 0].copy()
-            if series.index.tz is None:
-                series.index = series.index.tz_localize("UTC")
+            series = ensure_utc_series(df.iloc[:, 0].copy())
             resampled = series.resample(resample_rule).median().dropna()
 
             tqdm.write(

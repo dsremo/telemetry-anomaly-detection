@@ -28,6 +28,7 @@ import structlog
 
 from sentinel.core.models import TelemetryPoint
 from sentinel.ingest.connector import DataConnector
+from sentinel.ingest.utils import validated_resample
 
 logger = structlog.get_logger()
 
@@ -51,6 +52,17 @@ class SatNOGSFetcher(DataConnector):
             self.api_token = os.environ.get("SATNOGS_API_TOKEN", "")
         if not self.api_token:
             logger.warning("satnogs_no_token", hint="Set SATNOGS_API_TOKEN in .env")
+
+    # Signal-level metrics extracted from raw SatNOGS hex frames.
+    # Class-level so scripts can reference SatNOGSFetcher.PARAMETERS
+    # without needing an instance (removes the duplicate definition in scripts).
+    PARAMETERS: tuple[str, ...] = ("frame_length", "byte_mean", "byte_entropy", "frame_gap")
+    UNITS: dict[str, str] = {
+        "frame_length": "bytes",
+        "byte_mean": "",
+        "byte_entropy": "bits",
+        "frame_gap": "s",
+    }
 
     @property
     def source_name(self) -> str:
@@ -296,9 +308,19 @@ class SatNOGSFetcher(DataConnector):
         """
         points: list[TelemetryPoint] = []
         prev_ts: datetime | None = None
+        dropped: dict[str, int] = {
+            "bad_type": 0,
+            "bad_timestamp": 0,
+            "no_hex": 0,
+            "hex_error": 0,
+            "too_short": 0,
+            "too_long": 0,
+            "zero_entropy": 0,
+        }
 
         for frame in raw_frames:
             if not isinstance(frame, dict):
+                dropped["bad_type"] += 1
                 continue
 
             sat_id = satellite_id or str(frame.get("norad_cat_id", "UNKNOWN"))
@@ -307,32 +329,38 @@ class SatNOGSFetcher(DataConnector):
             try:
                 ts = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
+                dropped["bad_timestamp"] += 1
                 continue
 
             frame_hex = frame.get("frame", "")
             if not frame_hex:
+                dropped["no_hex"] += 1
                 continue
 
             try:
                 frame_bytes = bytes.fromhex(frame_hex)
             except ValueError:
+                dropped["hex_error"] += 1
                 continue
 
             n = len(frame_bytes)
             if n < 4:
                 # Fewer than 4 bytes → not a valid protocol frame; discard.
+                dropped["too_short"] += 1
                 continue
             if n > 2048:
                 # Frames above 2 kB are implausible for LEO amateur downlinks
                 # (AX.25 max = 330 B, most CubeSats < 512 B).  Large values
                 # indicate ground-station test injections or corrupted hex
                 # that skew the calibration reference distribution.
+                dropped["too_long"] += 1
                 continue
 
             # Entropy guard: all bytes identical → zero-entropy → corrupted or
             # padding frame.  These produce entropy=0 and contaminate σ_ref.
             raw_entropy = _byte_entropy(frame_bytes)
             if raw_entropy < 0.1:
+                dropped["zero_entropy"] += 1
                 continue
 
             # --- Extract signal-level metrics ---
@@ -389,11 +417,16 @@ class SatNOGSFetcher(DataConnector):
                     ))
             prev_ts = ts
 
+        total_dropped = sum(dropped.values())
         logger.info(
             "satnogs_converted",
             raw_frames=len(raw_frames),
             telemetry_points=len(points),
+            dropped=total_dropped,
+            drop_reasons={k: v for k, v in dropped.items() if v},
         )
+        if total_dropped:
+            logger.debug("satnogs_frame_drop_detail", **dropped)
         return points
 
     async def bulk_load_to_db(  # type: ignore[override]
@@ -435,18 +468,13 @@ class SatNOGSFetcher(DataConnector):
         if norad_ids is None:
             norad_ids = self.norad_ids or []
 
+        if resample_minutes is not None:
+            resample_minutes = validated_resample(resample_minutes)
+
         # ~10-15% of frames produce no valid data point (invalid hex, inter-day gaps).
         # Tie the skip threshold to max_frames so re-runs skip already-loaded satellites
         # instead of wasting API quota on duplicate inserts that ON CONFLICT silently drops.
         _skip_rows = skip_if_rows_gte if skip_if_rows_gte is not None else int(max_frames * 0.8)
-
-        _PARAMETERS: tuple[str, ...] = ("frame_length", "byte_mean", "byte_entropy", "frame_gap")
-        _UNITS: dict[str, str] = {
-            "frame_length": "bytes",
-            "byte_mean": "",
-            "byte_entropy": "bits",
-            "frame_gap": "s",
-        }
 
         totals: dict[str, dict[str, int]] = {}
 
@@ -454,7 +482,7 @@ class SatNOGSFetcher(DataConnector):
             sat_id = f"SATNOGS-{norad_id}"
             print(f"\n  Satellite {sat_id} (NORAD {norad_id})")
 
-            existing = {p: await check_channel_row_count(sat_id, p) for p in _PARAMETERS}
+            existing = {p: await check_channel_row_count(sat_id, p) for p in self.PARAMETERS}
             if all(cnt >= _skip_rows for cnt in existing.values()):
                 print(f"    Already loaded (>= {_skip_rows} rows/param) — skipping fetch")
                 totals[sat_id] = existing
@@ -483,7 +511,7 @@ class SatNOGSFetcher(DataConnector):
                 by_param[pt.parameter].append((pt.timestamp, pt.value))
 
             sat_totals: dict[str, int] = {}
-            for param in _PARAMETERS:
+            for param in self.PARAMETERS:
                 items = by_param.get(param, [])
                 if not items:
                     sat_totals[param] = 0
@@ -504,13 +532,13 @@ class SatNOGSFetcher(DataConnector):
                 print(f"    {param}: {len(items):>6,} pts → {len(series):>6,} rows")
 
                 await queries.upsert_satellite_seen(sat_id, series.index[0].to_pydatetime())
-                await queries.upsert_channel_seen(sat_id, param, "comms", _UNITS[param])
+                await queries.upsert_channel_seen(sat_id, param, "comms", self.UNITS[param])
 
                 sat_totals[param] = await bulk_insert_channel(
                     satellite_id=sat_id,
                     channel_name=param,
                     subsystem="comms",
-                    unit=_UNITS[param],
+                    unit=self.UNITS[param],
                     series=series,
                     quality=0.9,
                 )
