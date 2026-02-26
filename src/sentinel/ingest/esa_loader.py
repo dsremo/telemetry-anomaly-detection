@@ -30,6 +30,7 @@ import pandas as pd
 import structlog
 
 from sentinel.core.models import TelemetryPoint
+from sentinel.ingest.connector import DataConnector
 
 logger = structlog.get_logger()
 
@@ -72,13 +73,22 @@ class LabeledAnomaly:
     length: str          # "Point" or "Subsequence"
 
 
-class ESADataLoader:
+class ESADataLoader(DataConnector):
     """Loads and streams ESA OPS-SAT telemetry for Sentinel processing."""
 
-    def __init__(self, data_dir: Path | None = None):
+    def __init__(
+        self,
+        data_dir: Path | None = None,
+        channels: list[str] | None = None,
+    ):
         self.data_dir = data_dir or _DEFAULT_DATA_DIR
+        self._default_channels = channels
         self._channels_meta: dict[str, ChannelMeta] = {}
         self._anomalies: list[LabeledAnomaly] = []
+
+    @property
+    def source_name(self) -> str:
+        return "esa-mission1"
 
     def load_metadata(self) -> None:
         """Load channel definitions and anomaly labels."""
@@ -320,6 +330,24 @@ class ESADataLoader:
                 )
 
         return totals
+
+    async def bulk_load_to_db(  # type: ignore[override]
+        self,
+        *,
+        resample_minutes: int = 60,
+        skip_if_rows_gte: int = 50_000,
+    ) -> dict[str, int]:
+        """DataConnector interface — delegates to bulk_load_channels_to_db().
+
+        Uses channels supplied at construction time, falling back to all
+        target channels (those with labeled anomalies) if none were given.
+        """
+        channels = self._default_channels or self.target_channels
+        return await self.bulk_load_channels_to_db(
+            channels=channels,
+            resample_minutes=resample_minutes,
+            skip_if_rows_gte=skip_if_rows_gte,
+        )
 
     def get_subsystem_map(self) -> dict[str, list[str]]:
         """Group channels by subsystem — matches Sentinel's subsystem concept."""

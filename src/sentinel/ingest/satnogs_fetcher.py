@@ -27,16 +27,22 @@ import httpx
 import structlog
 
 from sentinel.core.models import TelemetryPoint
+from sentinel.ingest.connector import DataConnector
 
 logger = structlog.get_logger()
 
 SATNOGS_API_BASE = "https://db.satnogs.org/api"
 
 
-class SatNOGSFetcher:
+class SatNOGSFetcher(DataConnector):
     """Fetches satellite telemetry from the SatNOGS DB API."""
 
-    def __init__(self, api_token: str | None = None):
+    def __init__(
+        self,
+        api_token: str | None = None,
+        norad_ids: list[str] | None = None,
+    ):
+        self.norad_ids = norad_ids
         self.api_token = api_token or os.environ.get("SATNOGS_API_TOKEN", "")
         if not self.api_token:
             # .env might not be loaded yet (standalone usage outside API server)
@@ -45,6 +51,10 @@ class SatNOGSFetcher:
             self.api_token = os.environ.get("SATNOGS_API_TOKEN", "")
         if not self.api_token:
             logger.warning("satnogs_no_token", hint="Set SATNOGS_API_TOKEN in .env")
+
+    @property
+    def source_name(self) -> str:
+        return "satnogs"
 
     @property
     def _headers(self) -> dict[str, str]:
@@ -386,9 +396,9 @@ class SatNOGSFetcher:
         )
         return points
 
-    async def bulk_load_to_db(
+    async def bulk_load_to_db(  # type: ignore[override]
         self,
-        norad_ids: list[str],
+        norad_ids: list[str] | None = None,
         max_frames: int = 500,
         resample_minutes: int | None = None,
         skip_if_rows_gte: int | None = None,
@@ -420,6 +430,10 @@ class SatNOGSFetcher:
 
         from sentinel.db import queries
         from sentinel.ingest.bulk_loader import bulk_insert_channel, check_channel_row_count
+
+        # Fall back to IDs stored in __init__ (supports DataConnector polymorphic usage).
+        if norad_ids is None:
+            norad_ids = self.norad_ids or []
 
         # ~10-15% of frames produce no valid data point (invalid hex, inter-day gaps).
         # Tie the skip threshold to max_frames so re-runs skip already-loaded satellites
