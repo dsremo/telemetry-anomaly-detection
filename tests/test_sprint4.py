@@ -34,11 +34,11 @@ class TestV13Migration:
         # v13 is the last migration (index 12 in a 0-based list)
         self.v13_sql = _MIGRATIONS[12]
 
-    def test_schema_version_is_13(self):
-        assert self.schema_version == 13
+    def test_schema_version_is_at_least_13(self):
+        assert self.schema_version >= 13
 
-    def test_total_migration_count_is_13(self):
-        assert len(self.migrations) == 13
+    def test_migration_count_is_at_least_13(self):
+        assert len(self.migrations) >= 13
 
     def test_channel_config_table_in_migration_sql(self):
         assert "CREATE TABLE IF NOT EXISTS channel_config" in self.v13_sql

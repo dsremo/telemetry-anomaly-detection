@@ -22,7 +22,9 @@ Query map:
                     get_anomaly_stats, mark_false_positive
   Incidents       — open_incident, get_open_incident, update_incident_stats,
                     link_anomaly_to_incident, close_incident, get_incidents
-  Alerts          — get_alerts, acknowledge_alert
+  Alerts          — insert_alert, get_alerts, acknowledge_alert,
+                    upsert_alert_config, get_alert_config, delete_alert_config,
+                    load_all_alert_configs
   API Keys        — store_api_key, verify_api_key_exists, touch_api_key
   Rollups         — get_hourly_stats (uses telemetry_hourly cagg if available)
 """
@@ -31,7 +33,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+import uuid as _uuid
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -928,32 +931,66 @@ async def get_incidents(
 # Alerts
 # ---------------------------------------------------------------------------
 
+async def insert_alert(anomaly: "Anomaly") -> str:
+    """Persist a dispatched alert. Returns the alert id.
+
+    BUG FIX: Previously alerts were dispatched (webhook/email) but never stored.
+    This ensures the alerts table is populated for the history endpoint.
+    """
+    alert_id = _uuid.uuid4().hex[:12]
+    title = f"[{anomaly.severity.value.upper()}] {anomaly.satellite_id} — {anomaly.parameter}"
+    async with acquire() as conn:
+        await conn.execute(
+            "INSERT INTO alerts (id, tenant_id, anomaly_id, satellite_id, severity, "
+            "title, message, dispatched_at) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) "
+            "ON CONFLICT (id) DO NOTHING",
+            alert_id, get_tenant(), anomaly.id, anomaly.satellite_id,
+            anomaly.severity.value, title, anomaly.explanation,
+        )
+    return alert_id
+
+
 async def get_alerts(
     satellite_id: str | None = None,
+    severity: str | None = None,
+    since: datetime | None = None,
     acknowledged: bool | None = None,
     limit: int = 100,
 ) -> list[dict]:
-    """Query alert dispatch records."""
+    """Query alert dispatch records, joined with anomaly details."""
     conditions: list[str] = []
     params: list[Any] = []
 
     if satellite_id is not None:
         params.append(satellite_id)
-        conditions.append(f"satellite_id = ${len(params)}")
+        conditions.append(f"al.satellite_id = ${len(params)}")
+
+    if severity is not None:
+        params.append(severity)
+        conditions.append(f"al.severity = ${len(params)}")
+
+    if since is not None:
+        params.append(since)
+        conditions.append(f"al.dispatched_at >= ${len(params)}")
 
     if acknowledged is not None:
         params.append(acknowledged)
-        conditions.append(f"acknowledged = ${len(params)}")
+        conditions.append(f"al.acknowledged = ${len(params)}")
 
     params.append(min(limit, 1000))
     limit_ph = f"${len(params)}"
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     sql = (
-        f"SELECT id, anomaly_id, satellite_id, severity, title, message, "
-        f"dispatched_at, acknowledged "
-        f"FROM alerts {where} "
-        f"ORDER BY dispatched_at DESC LIMIT {limit_ph}"
+        f"SELECT al.id, al.satellite_id, al.severity, al.acknowledged, "
+        f"al.dispatched_at, al.title, al.message, "
+        f"an.subsystem, an.parameter, an.value, an.confidence, "
+        f"an.timestamp AS anomaly_timestamp, an.explanation "
+        f"FROM alerts al "
+        f"LEFT JOIN anomalies an ON an.id = al.anomaly_id "
+        f"{where} "
+        f"ORDER BY al.dispatched_at DESC LIMIT {limit_ph}"
     )
 
     async with acquire() as conn:
@@ -969,6 +1006,108 @@ async def acknowledge_alert(alert_id: str) -> bool:
             alert_id,
         )
     return result == "UPDATE 1"
+
+
+# ---------------------------------------------------------------------------
+# Alert configs (per-tenant delivery settings)
+# ---------------------------------------------------------------------------
+
+async def upsert_alert_config(
+    tenant_id: str,
+    *,
+    webhook_url: str | None = None,
+    webhook_secret: str | None = None,
+    email_to: list[str] | None = None,
+    smtp_host: str | None = None,
+    smtp_port: int | None = None,
+    smtp_user: str | None = None,
+    smtp_password: str | None = None,
+    min_severity: str | None = None,
+    dedup_window_s: int | None = None,
+    escalation_delay_s: int | None = None,
+    enabled: bool | None = None,
+) -> dict:
+    """Insert or partial-update per-tenant alert config.
+
+    COALESCE pattern: only non-None fields overwrite existing values.
+    Omitted fields retain their current DB value.
+    """
+    _FIELDS = (
+        "webhook_url", "webhook_secret", "email_to", "smtp_host", "smtp_port",
+        "smtp_user", "smtp_password", "min_severity", "dedup_window_s",
+        "escalation_delay_s", "enabled",
+    )
+    new_vals = (
+        webhook_url, webhook_secret, email_to, smtp_host, smtp_port,
+        smtp_user, smtp_password, min_severity, dedup_window_s,
+        escalation_delay_s, enabled,
+    )
+
+    # Build SET clause with COALESCE for partial update
+    set_parts = [
+        f"{f} = COALESCE(${i + 2}, {f})"
+        for i, f in enumerate(_FIELDS)
+    ]
+    set_parts.append(f"updated_at = NOW()")
+
+    # INSERT defaults: use provided values or fallback literals
+    insert_cols = ", ".join(["tenant_id"] + list(_FIELDS))
+    insert_placeholders = ", ".join(
+        ["$1"] + [f"${i + 2}" for i in range(len(_FIELDS))]
+    )
+
+    sql = (
+        f"INSERT INTO alert_configs ({insert_cols}) "
+        f"VALUES ({insert_placeholders}) "
+        f"ON CONFLICT (tenant_id) DO UPDATE SET "
+        + ", ".join(set_parts) +
+        " RETURNING *"
+    )
+
+    async with acquire() as conn:
+        row = await conn.fetchrow(sql, tenant_id, *new_vals)
+    return dict(row)
+
+
+async def get_alert_config(tenant_id: str | None = None) -> dict | None:
+    """Return alert_configs row for the given tenant, or None if not set.
+
+    Uses RLS-scoped acquire() — tenant_id defaults to current tenant context.
+    Pass tenant_id explicitly only when bypassing RLS (e.g. startup load).
+    """
+    if tenant_id is not None:
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alert_configs WHERE tenant_id = $1", tenant_id
+            )
+    else:
+        async with acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM alert_configs WHERE tenant_id = $1", get_tenant()
+            )
+    return dict(row) if row else None
+
+
+async def delete_alert_config(tenant_id: str) -> bool:
+    """Remove alert config for a tenant. Returns True if row existed."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM alert_configs WHERE tenant_id = $1", tenant_id
+        )
+    return result == "DELETE 1"
+
+
+async def load_all_alert_configs() -> list[dict]:
+    """Load all alert_config rows without RLS filter.
+
+    Uses direct pool connection (bypasses RLS) — same pattern as load_api_key_map().
+    Called at startup to populate AlertService class-level config cache.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM alert_configs WHERE enabled = TRUE")
+    return [dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

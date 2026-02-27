@@ -7,7 +7,7 @@ Strict validation here is our first line of defense.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -338,3 +338,58 @@ class ChannelConfigOut(BaseModel):
     overrides: dict[str, Any]   # non-None DB fields (empty dict if no row exists)
     effective: dict[str, Any]   # full merged thresholds as used by detection pipeline
     updated_at: datetime | None
+
+
+# ---------------------------------------------------------------------------
+# Alert delivery schemas
+# ---------------------------------------------------------------------------
+
+class AlertConfigIn(BaseModel):
+    """Per-tenant alert delivery settings — all fields optional (partial update)."""
+
+    webhook_url: str | None = Field(default=None, max_length=2048)
+    webhook_secret: str | None = Field(default=None, max_length=256)
+    email_to: list[str] | None = None
+    smtp_host: str | None = Field(default=None, max_length=256)
+    smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    smtp_user: str | None = Field(default=None, max_length=256)
+    smtp_password: str | None = Field(default=None, max_length=256)
+    min_severity: Literal["warning", "critical"] | None = None
+    dedup_window_s: int | None = Field(default=None, ge=0)
+    escalation_delay_s: int | None = Field(default=None, ge=0)
+    enabled: bool | None = None
+
+
+class AlertConfigOut(BaseModel):
+    """Current per-tenant alert config as returned by the API."""
+
+    tenant_id: str
+    webhook_url: str | None
+    email_to: list[str] | None
+    smtp_host: str | None
+    smtp_port: int | None
+    smtp_user: str | None
+    min_severity: str
+    dedup_window_s: int
+    escalation_delay_s: int
+    enabled: bool
+    updated_at: datetime | None
+
+
+class AlertHistoryItem(BaseModel):
+    """Single alert record from the alerts history endpoint."""
+
+    id: str
+    satellite_id: str
+    severity: str
+    acknowledged: bool
+    dispatched_at: datetime
+    title: str
+    message: str
+    # Enriched from anomaly JOIN (may be None if anomaly was deleted)
+    subsystem: str | None = None
+    parameter: str | None = None
+    value: float | None = None
+    confidence: float | None = None
+    anomaly_timestamp: datetime | None = None
+    explanation: str | None = None

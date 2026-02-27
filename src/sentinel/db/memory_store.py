@@ -25,8 +25,10 @@ logger = structlog.get_logger()
 _lock = Lock()
 _telemetry: list[dict] = []
 _anomalies: list[dict] = []
+_alerts: list[dict] = []
 _api_keys: list[dict] = []
 _channel_configs: dict[tuple[str, str], dict] = {}  # (satellite_id, parameter) → config
+_alert_configs: dict[str, dict] = {}               # tenant_id → config
 _MAX_TELEMETRY = 100_000  # cap to prevent OOM in long demos
 
 
@@ -246,3 +248,146 @@ async def load_all_channel_configs(satellite_id: str | None = None) -> list[dict
     if satellite_id is not None:
         configs = [c for c in configs if c.get("satellite_id") == satellite_id]
     return configs
+
+
+# ---------------------------------------------------------------------------
+# Alert dispatch records (demo stubs)
+# ---------------------------------------------------------------------------
+
+async def insert_alert(anomaly: "Anomaly") -> str:  # type: ignore[name-defined]
+    """Stub: store alert in-memory."""
+    from datetime import timezone
+    import uuid as _uuid
+    alert_id = _uuid.uuid4().hex[:12]
+    title = f"[{anomaly.severity.value.upper()}] {anomaly.satellite_id} — {anomaly.parameter}"
+    with _lock:
+        _alerts.append({
+            "id": alert_id,
+            "satellite_id": anomaly.satellite_id,
+            "severity": anomaly.severity.value,
+            "title": title,
+            "message": anomaly.explanation,
+            "dispatched_at": datetime.now(timezone.utc),
+            "acknowledged": False,
+            "subsystem": anomaly.subsystem,
+            "parameter": anomaly.parameter,
+            "value": anomaly.value,
+            "confidence": anomaly.confidence,
+            "anomaly_timestamp": anomaly.timestamp,
+            "explanation": anomaly.explanation,
+        })
+    return alert_id
+
+
+async def get_alerts(
+    satellite_id: str | None = None,
+    severity: str | None = None,
+    since: "datetime | None" = None,
+    acknowledged: bool | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """Demo stub: return in-memory alert records."""
+    with _lock:
+        results = list(_alerts)
+    if satellite_id:
+        results = [r for r in results if r["satellite_id"] == satellite_id]
+    if severity:
+        results = [r for r in results if r["severity"] == severity]
+    if since:
+        results = [r for r in results if r["dispatched_at"] >= since]
+    if acknowledged is not None:
+        results = [r for r in results if r["acknowledged"] == acknowledged]
+    results.sort(key=lambda r: r["dispatched_at"], reverse=True)
+    return results[:min(limit, 1000)]
+
+
+async def acknowledge_alert(alert_id: str) -> bool:
+    """Demo stub: mark alert acknowledged."""
+    with _lock:
+        for alert in _alerts:
+            if alert["id"] == alert_id and not alert["acknowledged"]:
+                alert["acknowledged"] = True
+                return True
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Alert configs (per-tenant delivery settings — demo stubs)
+# ---------------------------------------------------------------------------
+
+async def upsert_alert_config(
+    tenant_id: str,
+    *,
+    webhook_url: str | None = None,
+    webhook_secret: str | None = None,
+    email_to: list[str] | None = None,
+    smtp_host: str | None = None,
+    smtp_port: int | None = None,
+    smtp_user: str | None = None,
+    smtp_password: str | None = None,
+    min_severity: str | None = None,
+    dedup_window_s: int | None = None,
+    escalation_delay_s: int | None = None,
+    enabled: bool | None = None,
+) -> dict:
+    """Demo stub: insert or partial-update alert config in memory."""
+    from datetime import timezone
+    with _lock:
+        existing = _alert_configs.get(tenant_id, {
+            "tenant_id": tenant_id,
+            "webhook_url": None,
+            "webhook_secret": None,
+            "email_to": None,
+            "smtp_host": None,
+            "smtp_port": 587,
+            "smtp_user": None,
+            "smtp_password": None,
+            "min_severity": "warning",
+            "dedup_window_s": 300,
+            "escalation_delay_s": 600,
+            "enabled": True,
+            "updated_at": None,
+        })
+        # Partial update: only overwrite non-None values
+        updates = {
+            "webhook_url": webhook_url,
+            "webhook_secret": webhook_secret,
+            "email_to": email_to,
+            "smtp_host": smtp_host,
+            "smtp_port": smtp_port,
+            "smtp_user": smtp_user,
+            "smtp_password": smtp_password,
+            "min_severity": min_severity,
+            "dedup_window_s": dedup_window_s,
+            "escalation_delay_s": escalation_delay_s,
+            "enabled": enabled,
+        }
+        merged = dict(existing)
+        for k, v in updates.items():
+            if v is not None:
+                merged[k] = v
+        merged["updated_at"] = datetime.now(timezone.utc)
+        _alert_configs[tenant_id] = merged
+    return dict(merged)
+
+
+async def get_alert_config(tenant_id: str | None = None) -> dict | None:
+    """Demo stub: return alert config for the given (or default) tenant."""
+    key = tenant_id or "default"
+    with _lock:
+        row = _alert_configs.get(key)
+    return dict(row) if row else None
+
+
+async def delete_alert_config(tenant_id: str) -> bool:
+    """Demo stub: remove alert config."""
+    with _lock:
+        existed = tenant_id in _alert_configs
+        _alert_configs.pop(tenant_id, None)
+    return existed
+
+
+async def load_all_alert_configs() -> list[dict]:
+    """Demo stub: return all alert configs."""
+    with _lock:
+        return [dict(v) for v in _alert_configs.values() if v.get("enabled", True)]

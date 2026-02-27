@@ -41,6 +41,7 @@ from sentinel.core.models import Anomaly, TelemetryPoint
 from sentinel.db import connection as db_connection
 from sentinel.db import queries
 from sentinel.detection.detector import analyze_channel_history, flush_all_states
+from sentinel.ingest.utils import prepare_series, validated_satellite_id
 
 logger = structlog.get_logger()
 
@@ -290,3 +291,107 @@ def print_detection_report(
         print("\n" + "=" * 65)
         print(ground_truth_note)
     print("=" * 65)
+
+
+# ---------------------------------------------------------------------------
+# DRY channel loader — shared by YAMCS, InfluxDB, and future HTTP connectors
+# ---------------------------------------------------------------------------
+
+async def load_channels_from_series(
+    satellite_id: str,
+    channels: dict[str, pd.Series],
+    *,
+    subsystem_map: dict[str, str] | None = None,
+    unit_map: dict[str, str] | None = None,
+    resample_minutes: int = 1,
+    skip_if_rows_gte: int = 50_000,
+    source_name: str = "unknown",
+) -> dict[str, int]:
+    """Bulk-insert a dict of pre-fetched time-series channels into the DB.
+
+    Encapsulates the per-channel pipeline that all HTTP connectors share:
+      1. Validate satellite_id and resample_minutes.
+      2. For each channel: prepare series (UTC + resample + drop NaN).
+      3. Skip channels that already have >= skip_if_rows_gte rows.
+      4. Register satellite + channel (upsert_satellite_seen / upsert_channel_seen).
+      5. Bulk-insert via bulk_insert_channel (UNNEST batches, idempotent).
+
+    Args:
+        satellite_id:    Sentinel satellite identifier (must be non-empty).
+        channels:        {parameter_name: pandas.Series(DatetimeIndex, float)}.
+        subsystem_map:   Optional {parameter → subsystem label}. Defaults to source_name.
+        unit_map:        Optional {parameter → unit string}.
+        resample_minutes: Resampling interval (>= 1).
+        skip_if_rows_gte: Skip a channel that already has this many rows.
+        source_name:     Label stored in logs for traceability.
+
+    Returns:
+        {parameter: rows_inserted} for each processed channel.
+        Skipped channels include their existing row count.
+    """
+    satellite_id = validated_satellite_id(satellite_id)
+    if resample_minutes < 1:
+        raise ValueError(f"resample_minutes must be >= 1, got {resample_minutes!r}")
+
+    _subsystem_map = subsystem_map or {}
+    _unit_map = unit_map or {}
+    totals: dict[str, int] = {}
+
+    for param, raw_series in channels.items():
+        subsystem = _subsystem_map.get(param, source_name)
+        unit = _unit_map.get(param, "")
+
+        try:
+            series = prepare_series(raw_series, resample_minutes)
+        except Exception as exc:
+            logger.warning(
+                "load_channels_series_prep_failed",
+                satellite_id=satellite_id,
+                param=param,
+                error=str(exc),
+            )
+            continue
+
+        if series.empty:
+            logger.warning(
+                "load_channels_series_empty",
+                satellite_id=satellite_id,
+                param=param,
+                source=source_name,
+            )
+            continue
+
+        existing = await check_channel_row_count(satellite_id, param)
+        if skip_if_rows_gte > 0 and existing >= skip_if_rows_gte:
+            logger.info(
+                "load_channels_skipped",
+                satellite_id=satellite_id,
+                param=param,
+                existing_rows=existing,
+            )
+            totals[param] = existing
+            continue
+
+        await queries.upsert_satellite_seen(
+            satellite_id, series.index[0].to_pydatetime()
+        )
+        await queries.upsert_channel_seen(satellite_id, param, subsystem, unit)
+
+        inserted = await bulk_insert_channel(
+            satellite_id=satellite_id,
+            channel_name=param,
+            subsystem=subsystem,
+            unit=unit,
+            series=series,
+        )
+        totals[param] = inserted
+
+        logger.info(
+            "load_channels_inserted",
+            satellite_id=satellite_id,
+            param=param,
+            rows=inserted,
+            source=source_name,
+        )
+
+    return totals

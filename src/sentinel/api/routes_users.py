@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import sentinel.db.queries as queries
 from sentinel.api.dependencies import require_tenant_admin
+from sentinel.api.errors import handle_unique_constraint
 from sentinel.api.schemas import UpdateRoleRequest, UserCreateRequest, UserDetailOut
 from sentinel.core.security import hash_password
 
@@ -86,17 +87,11 @@ async def create_user(
     _check_role_escalation(_user["role"], body.role)
 
     password_hash = hash_password(body.password)
-    try:
-        row = await queries.create_user(body.email, password_hash, body.role)
-    except Exception as exc:
-        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
-            raise HTTPException(
-                status_code=409,
-                detail=f"User '{body.email}' already exists in this tenant",
-            ) from exc
-        logger.error("create_user_failed", email=body.email, error=str(exc))
-        raise HTTPException(status_code=500, detail="Failed to create user") from exc
-
+    row = await handle_unique_constraint(
+        queries.create_user(body.email, password_hash, body.role),
+        conflict_msg=f"User '{body.email}' already exists in this tenant",
+        log_ctx={"email": body.email},
+    )
     logger.info(
         "user_created",
         email=body.email,

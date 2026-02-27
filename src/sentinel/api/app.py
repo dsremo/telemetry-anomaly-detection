@@ -24,6 +24,7 @@ from sentinel.api.middleware import (
     RateLimitMiddleware,
 )
 from sentinel.api.routes import router
+from sentinel.api.routes_alerts import alerts_router
 from sentinel.api.routes_auth import auth_router
 from sentinel.api.routes_channels import channels_router
 from sentinel.api.routes_keys import keys_router
@@ -52,8 +53,11 @@ def _activate_demo_mode() -> None:
     import sentinel.api.routes_channels as routes_channels_mod
     import sentinel.detection.detector as detector_mod
 
+    import sentinel.api.routes_alerts as routes_alerts_mod
+
     routes_mod.queries = memory_store  # type: ignore[attr-defined]
     routes_channels_mod.queries = memory_store  # type: ignore[attr-defined]
+    routes_alerts_mod.queries = memory_store  # type: ignore[attr-defined]
     detector_mod.queries = memory_store  # type: ignore[attr-defined]
 
     logger.info("demo_mode_activated", storage="in-memory")
@@ -96,6 +100,27 @@ async def lifespan(app: FastAPI):
         load_channel_configs(channel_configs)
         logger.info("channel_configs_loaded", count=len(channel_configs))
 
+        # Load per-tenant alert configs into the AlertService class-level cache.
+        from sentinel.alerts.service import AlertService
+        from sentinel.db.queries import load_all_alert_configs
+        alert_configs = await load_all_alert_configs()
+        AlertService.load_configs(alert_configs)
+
+        # Background task: check for anomaly escalations every 60s.
+        import asyncio
+
+        async def _escalation_loop() -> None:
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    n = await AlertService.check_escalations()
+                    if n:
+                        logger.info("escalations_dispatched", count=n)
+                except Exception as exc:
+                    logger.error("escalation_loop_error", error=str(exc))
+
+        asyncio.create_task(_escalation_loop())
+
         # Load JWT secret from env/config. Warn (not fail) so server still
         # starts in dev mode without a secret — auth routes return 503.
         import os
@@ -111,15 +136,6 @@ async def lifespan(app: FastAPI):
     # Wire config thresholds into detector singletons
     from sentinel.detection.detector import init_detectors
     init_detectors(settings)
-
-    # Wire alert service — dispatches webhooks/email on WARNING+ anomalies.
-    from sentinel.alerts.service import init_alert_service
-    al = settings.get("alerts", {})
-    init_alert_service(
-        webhook_url=al.get("webhook_url", ""),
-        dedup_window_sec=float(al.get("dedup_window_seconds", 300)),
-        escalation_delay_sec=float(al.get("escalation_delay_seconds", 600)),
-    )
 
     app.state.start_time = time.monotonic()
     logger.info("sentinel_started", version=__version__, demo=app.state.demo_mode)
@@ -186,6 +202,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     # --- Routes ---
     app.include_router(router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(alerts_router, prefix="/api/v1")
     app.include_router(channels_router, prefix="/api/v1")
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")

@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import sentinel.db.queries as queries
 from sentinel.api.dependencies import require_sentinel_admin
+from sentinel.api.errors import handle_unique_constraint
 from sentinel.api.schemas import TenantIn, TenantOut, TenantPatch
 
 logger = structlog.get_logger()
@@ -33,17 +34,11 @@ async def create_tenant(
     The tenant ID must be lowercase alphanumeric + hyphens (used as the RLS
     context value — no spaces or special chars).
     """
-    try:
-        row = await queries.create_tenant(body.id, body.name, body.plan)
-    except Exception as exc:
-        if "unique" in str(exc).lower() or "duplicate" in str(exc).lower():
-            raise HTTPException(
-                status_code=409,
-                detail=f"Tenant '{body.id}' already exists",
-            ) from exc
-        logger.error("create_tenant_failed", tenant_id=body.id, error=str(exc))
-        raise HTTPException(status_code=500, detail="Failed to create tenant") from exc
-
+    row = await handle_unique_constraint(
+        queries.create_tenant(body.id, body.name, body.plan),
+        conflict_msg=f"Tenant '{body.id}' already exists",
+        log_ctx={"tenant_id": body.id},
+    )
     logger.info("tenant_created", tenant_id=row["id"], by=_user.get("user_id"))
     return TenantOut(**row)
 

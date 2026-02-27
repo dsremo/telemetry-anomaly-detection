@@ -1,4 +1,4 @@
-"""Shared ingest utilities — timezone handling, series preparation, validation.
+"""Shared ingest utilities — timezone handling, series preparation, validation, retry.
 
 All connectors (CSVConnector, SatNOGSFetcher, ESADataLoader, …) use these
 helpers to ensure consistent behaviour without duplicating code.
@@ -6,7 +6,59 @@ helpers to ensure consistent behaviour without duplicating code.
 
 from __future__ import annotations
 
+import asyncio
+import functools
+from typing import Any, Callable, Coroutine, TypeVar
+
+import httpx
 import pandas as pd
+import structlog
+
+logger = structlog.get_logger()
+
+_T = TypeVar("_T")
+
+
+def retry_with_backoff(
+    max_attempts: int = 3,
+    base_delay: float = 1.0,
+    exceptions: tuple[type[Exception], ...] = (httpx.TransportError,),
+) -> Callable[[Callable[..., Coroutine[Any, Any, _T]]], Callable[..., Coroutine[Any, Any, _T]]]:
+    """Decorator: retry an async function on specified exceptions with exponential backoff.
+
+    Args:
+        max_attempts: Total attempts before re-raising (default 3).
+        base_delay:   Initial delay in seconds; doubles each attempt (1s, 2s, 4s, …).
+        exceptions:   Exception types to catch and retry (default: httpx.TransportError).
+
+    Usage:
+        @retry_with_backoff(max_attempts=3)
+        async def fetch_page(self, url: str) -> bytes:
+            ...
+    """
+    def decorator(
+        func: Callable[..., Coroutine[Any, Any, _T]]
+    ) -> Callable[..., Coroutine[Any, Any, _T]]:
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> _T:
+            for attempt in range(max_attempts):
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as exc:
+                    if attempt == max_attempts - 1:
+                        raise
+                    wait = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "retry_backoff",
+                        func=func.__qualname__,
+                        attempt=attempt + 1,
+                        retry_in=wait,
+                        error=str(exc),
+                    )
+                    await asyncio.sleep(wait)
+            raise RuntimeError("retry_with_backoff: unreachable")  # pragma: no cover
+        return wrapper
+    return decorator
 
 
 def ensure_utc_series(series: pd.Series) -> pd.Series:

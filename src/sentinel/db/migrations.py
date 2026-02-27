@@ -33,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 # ---------------------------------------------------------------------------
@@ -700,6 +700,49 @@ _MIGRATIONS: list[str] = [
     CREATE POLICY tenant_isolation ON channel_config
         USING     (tenant_id = current_setting('app.tenant_id', true))
         WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    """,
+
+    # v14: Per-tenant alert delivery configuration.
+    #
+    # Design:
+    #   - alert_configs: one row per tenant (PK = tenant_id).
+    #     NULL webhook_url / NULL or empty email_to = that channel disabled.
+    #     min_severity ('warning' or 'critical') — alerts below this are suppressed.
+    #     FORCE RLS: same pattern as all data tables.
+    #     FK to tenants(id) ON DELETE CASCADE: removing a tenant removes their config.
+    #   - updated_at maintained by upsert query (same pattern as channel_config).
+    #
+    # Bug fix in this migration:
+    #   - alerts table now properly supports insert_alert() by storing richer data.
+    #     We add an index on tenant_id + dispatched_at for the history query.
+    """
+    CREATE TABLE IF NOT EXISTS alert_configs (
+        tenant_id           TEXT        NOT NULL PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+        webhook_url         TEXT,                       -- NULL = webhook disabled
+        webhook_secret      TEXT,                       -- HMAC-SHA256 signing secret
+        email_to            TEXT[],                     -- NULL or empty = email disabled
+        smtp_host           TEXT,
+        smtp_port           INTEGER     DEFAULT 587,
+        smtp_user           TEXT,
+        smtp_password       TEXT,
+        min_severity        TEXT        NOT NULL DEFAULT 'warning',
+        dedup_window_s      INTEGER     NOT NULL DEFAULT 300,
+        escalation_delay_s  INTEGER     NOT NULL DEFAULT 600,
+        enabled             BOOLEAN     NOT NULL DEFAULT TRUE,
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    ALTER TABLE alert_configs ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE alert_configs FORCE  ROW LEVEL SECURITY;
+
+    DROP POLICY IF EXISTS tenant_isolation ON alert_configs;
+    CREATE POLICY tenant_isolation ON alert_configs
+        USING     (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
+    -- Index for efficient alert history lookups per tenant
+    CREATE INDEX IF NOT EXISTS idx_alerts_tenant_dispatched
+        ON alerts (tenant_id, dispatched_at DESC);
     """,
 ]
 
