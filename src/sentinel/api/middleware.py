@@ -34,7 +34,10 @@ class PayloadLimitMiddleware(BaseHTTPMiddleware):
     """
 
     # Paths exempt from the global payload cap (each handler owns its limit).
-    _UPLOAD_PATHS: frozenset[str] = frozenset({"/api/v1/telemetry/upload"})
+    _UPLOAD_PATHS: frozenset[str] = frozenset({
+        "/api/v1/telemetry/upload",
+        "/api/v1/parameters/import-xtce",
+    })
 
     def __init__(self, app, max_bytes: int = 1_048_576):
         super().__init__(app)

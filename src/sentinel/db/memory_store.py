@@ -29,6 +29,8 @@ _alerts: list[dict] = []
 _api_keys: list[dict] = []
 _channel_configs: dict[tuple[str, str], dict] = {}  # (satellite_id, parameter) → config
 _alert_configs: dict[str, dict] = {}               # tenant_id → config
+_channels_seen: dict[tuple[str, str], dict] = {}   # (satellite_id, parameter) → metadata
+_satellites_seen: dict[str, dict] = {}             # satellite_id → metadata
 _MAX_TELEMETRY = 100_000  # cap to prevent OOM in long demos
 
 
@@ -179,17 +181,57 @@ async def verify_api_key_exists(key_hash: str) -> bool:
 
 async def get_known_satellites() -> list[str]:
     with _lock:
-        sats = sorted({r["satellite_id"] for r in _telemetry})
+        sats = sorted(
+            {r["satellite_id"] for r in _telemetry}
+            | set(_satellites_seen.keys())
+        )
     return sats
+
+
+async def upsert_satellite_seen(satellite_id: str, ts: "datetime") -> None:
+    """Demo stub: register or update satellite first/last seen timestamps."""
+    with _lock:
+        existing = _satellites_seen.get(satellite_id, {})
+        _satellites_seen[satellite_id] = {
+            "satellite_id": satellite_id,
+            "first_telemetry_at": existing.get("first_telemetry_at", ts),
+            "last_telemetry_at": ts,
+        }
 
 
 # ---------------------------------------------------------------------------
 # Channel registry + per-channel config (demo stubs)
 # ---------------------------------------------------------------------------
 
+async def upsert_channel_seen(
+    satellite_id: str,
+    parameter: str,
+    subsystem: str,
+    unit: str,
+    point_count: int = 1,
+) -> None:
+    """Demo stub: register or update channel metadata."""
+    key = (satellite_id, parameter)
+    with _lock:
+        existing = _channels_seen.get(key, {})
+        _channels_seen[key] = {
+            "satellite_id": satellite_id,
+            "parameter": parameter,
+            "subsystem": subsystem,
+            "unit": unit,
+            "total_points": existing.get("total_points", 0) + point_count,
+            "first_seen": existing.get("first_seen"),
+            "last_seen": None,
+        }
+
+
 async def get_channel_stats(satellite_id: str | None = None) -> list[dict]:
-    """Demo stub — returns empty list (no channels until telemetry is ingested)."""
-    return []
+    """Return registered channels. Includes XTCE-imported channels in demo mode."""
+    with _lock:
+        rows = list(_channels_seen.values())
+    if satellite_id is not None:
+        rows = [r for r in rows if r["satellite_id"] == satellite_id]
+    return rows
 
 
 async def get_channel_config(satellite_id: str, parameter: str) -> dict | None:

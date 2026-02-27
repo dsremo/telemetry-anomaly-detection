@@ -393,3 +393,30 @@ class AlertHistoryItem(BaseModel):
     confidence: float | None = None
     anomaly_timestamp: datetime | None = None
     explanation: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Sprint 6 — XTCE Parameter Import
+# ---------------------------------------------------------------------------
+
+class AlarmRangeOut(BaseModel):
+    """Inclusive [low, high] alarm boundary extracted from XTCE."""
+    low: float | None
+    high: float | None
+
+
+class ParameterDefOut(BaseModel):
+    """One XTCE parameter definition as returned by the import endpoint."""
+    name: str
+    subsystem: str
+    unit: str
+    watch_range: AlarmRangeOut | None = None
+    warning_range: AlarmRangeOut | None = None
+    description: str = ""
+
+
+class XTCEImportResult(BaseModel):
+    """Response from POST /parameters/import-xtce."""
+    satellite_id: str
+    parameters_imported: int
+    parameters: list[ParameterDefOut]

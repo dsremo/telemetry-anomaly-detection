@@ -28,6 +28,7 @@ from sentinel.api.routes_alerts import alerts_router
 from sentinel.api.routes_auth import auth_router
 from sentinel.api.routes_channels import channels_router
 from sentinel.api.routes_keys import keys_router
+from sentinel.api.routes_parameters import parameters_router
 from sentinel.api.routes_tenants import tenants_router
 from sentinel.api.routes_users import users_router
 from sentinel.api.websocket import ws_router
@@ -54,10 +55,12 @@ def _activate_demo_mode() -> None:
     import sentinel.detection.detector as detector_mod
 
     import sentinel.api.routes_alerts as routes_alerts_mod
+    import sentinel.api.routes_parameters as routes_parameters_mod
 
     routes_mod.queries = memory_store  # type: ignore[attr-defined]
     routes_channels_mod.queries = memory_store  # type: ignore[attr-defined]
     routes_alerts_mod.queries = memory_store  # type: ignore[attr-defined]
+    routes_parameters_mod.queries = memory_store  # type: ignore[attr-defined]
     detector_mod.queries = memory_store  # type: ignore[attr-defined]
 
     logger.info("demo_mode_activated", storage="in-memory")
@@ -207,6 +210,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
     app.include_router(keys_router, prefix="/api/v1")
+    app.include_router(parameters_router, prefix="/api/v1")
     app.include_router(ws_router, prefix="/api/v1")
 
     # --- Root redirect → dashboard ---
