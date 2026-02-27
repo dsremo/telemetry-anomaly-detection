@@ -24,6 +24,9 @@ const state = {
     totalPoints: 0,
     pointsLastHour: 0,
     connected: false,
+    // Channels tab
+    channels: [],
+    selectedChannel: null,
 };
 
 // --- WebSocket ---
@@ -331,6 +334,239 @@ document.getElementById('severityFilter').addEventListener('change', renderTimel
 document.getElementById('subsystemFilter').addEventListener('change', renderTimeline);
 document.getElementById('clearAlerts').addEventListener('click', () => {
     document.getElementById('alertList').innerHTML = '<div class="empty-state">No alerts dispatched</div>';
+});
+
+// ---------------------------------------------------------------------------
+// Channels Tab
+// ---------------------------------------------------------------------------
+
+async function loadChannels() {
+    const satelliteId = document.getElementById('chanSatFilter').value;
+    const url = satelliteId
+        ? `${API_BASE}/channels?satellite_id=${encodeURIComponent(satelliteId)}`
+        : `${API_BASE}/channels`;
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            document.getElementById('channelTableWrap').innerHTML =
+                `<div class="empty-state">Error ${resp.status}: ${resp.statusText}</div>`;
+            return;
+        }
+        state.channels = await resp.json();
+        renderChannelTable();
+    } catch (e) {
+        document.getElementById('channelTableWrap').innerHTML =
+            '<div class="empty-state">Could not load channels — is the server running?</div>';
+    }
+}
+
+function renderChannelTable() {
+    const wrap = document.getElementById('channelTableWrap');
+    if (state.channels.length === 0) {
+        wrap.innerHTML = '<div class="empty-state">No channels found. Ingest telemetry data first.</div>';
+        return;
+    }
+
+    // Populate satellite filter dropdown
+    const satFilter = document.getElementById('chanSatFilter');
+    const knownSats = new Set(state.channels.map(c => c.satellite_id));
+    knownSats.forEach(sat => {
+        if (!satFilter.querySelector(`option[value="${sat}"]`)) {
+            const opt = document.createElement('option');
+            opt.value = sat;
+            opt.textContent = sat;
+            satFilter.appendChild(opt);
+        }
+    });
+
+    wrap.innerHTML = `
+        <table class="channel-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Subsystem</th>
+                    <th>Points</th>
+                    <th>Last Seen</th>
+                    <th>Cal State</th>
+                    <th>z-thresh</th>
+                    <th>Cooldown</th>
+                    <th>Override</th>
+                </tr>
+            </thead>
+            <tbody id="channelTableBody">
+                ${state.channels.map((ch, i) => renderChannelRow(ch, i)).join('')}
+            </tbody>
+        </table>
+    `;
+}
+
+function renderChannelRow(ch, i) {
+    const selected = state.selectedChannel &&
+        state.selectedChannel.satellite_id === ch.satellite_id &&
+        state.selectedChannel.parameter === ch.parameter ? 'selected' : '';
+    const calClass = ch.calibration_state || 'unknown';
+    const lastSeen = ch.last_seen ? new Date(ch.last_seen).toLocaleDateString() : '--';
+    const overrideBadge = ch.has_overrides
+        ? '<span class="override-badge">CUSTOM</span>'
+        : '<span style="color:var(--text-muted);font-size:11px">global</span>';
+
+    return `
+        <tr class="${selected}" onclick="selectChannel(${i})">
+            <td class="chan-param">${ch.parameter}</td>
+            <td>${(ch.subsystem || '').toUpperCase()}</td>
+            <td>${ch.total_points?.toLocaleString() || '0'}</td>
+            <td>${lastSeen}</td>
+            <td><span class="cal-state ${ch.calibration_state || ''}">${ch.calibration_state || '--'}</span></td>
+            <td>${ch.effective_z_threshold?.toFixed(1) || '--'}</td>
+            <td>${ch.effective_alert_cooldown_s != null ? ch.effective_alert_cooldown_s + 's' : '--'}</td>
+            <td>${overrideBadge}</td>
+        </tr>
+    `;
+}
+
+window.selectChannel = function(index) {
+    state.selectedChannel = state.channels[index];
+    renderChannelTable();
+    renderChannelEditor();
+};
+
+function renderChannelEditor() {
+    const ch = state.selectedChannel;
+    const editor = document.getElementById('thresholdEditor');
+    if (!ch) { editor.style.display = 'none'; return; }
+    editor.style.display = '';
+
+    document.getElementById('editorTitle').textContent =
+        `${ch.satellite_id} / ${ch.parameter}`;
+
+    const effRows = [
+        ['z-threshold', ch.effective_z_threshold?.toFixed(2)],
+        ['min confidence', (ch.effective_min_confidence * 100)?.toFixed(0) + '%'],
+        ['cooldown', ch.effective_alert_cooldown_s + 's'],
+    ].map(([k, v]) => `<div class="eff-row"><span>${k}</span><span class="eff-val">${v}</span></div>`).join('');
+
+    document.getElementById('editorBody').innerHTML = `
+        <div class="editor-field">
+            <div class="editor-label">
+                <span>z-threshold</span>
+                <span class="editor-value">global: ${ch.effective_z_threshold?.toFixed(2)}</span>
+            </div>
+            <input class="editor-input" id="ei-z_threshold" type="number" step="0.1" min="0.1"
+                placeholder="e.g. 3.5"
+                value="${ch.has_overrides ? (ch.effective_z_threshold?.toFixed(2) || '') : ''}">
+        </div>
+        <div class="editor-field">
+            <div class="editor-label">
+                <span>min confidence (0–1)</span>
+                <span class="editor-value">${(ch.effective_min_confidence || 0).toFixed(2)}</span>
+            </div>
+            <input class="editor-input" id="ei-min_confidence" type="number" step="0.05" min="0" max="1"
+                placeholder="e.g. 0.5"
+                value="${ch.has_overrides ? (ch.effective_min_confidence?.toFixed(2) || '') : ''}">
+        </div>
+        <div class="editor-field">
+            <div class="editor-label">
+                <span>alert cooldown (seconds)</span>
+                <span class="editor-value">${ch.effective_alert_cooldown_s}s</span>
+            </div>
+            <input class="editor-input" id="ei-alert_cooldown_s" type="number" step="60" min="0"
+                placeholder="e.g. 3600"
+                value="${ch.has_overrides ? (ch.effective_alert_cooldown_s || '') : ''}">
+        </div>
+        <div class="editor-actions">
+            <button class="btn-primary" onclick="saveChannelConfig()">Save Overrides</button>
+            <button class="btn-danger" onclick="resetChannelConfig()">Reset to Global</button>
+        </div>
+        <div class="editor-effective">
+            <div style="margin-bottom:6px;font-size:10px;text-transform:uppercase;letter-spacing:1px">
+                Effective (what detection uses)
+            </div>
+            ${effRows}
+        </div>
+    `;
+}
+
+window.saveChannelConfig = async function() {
+    const ch = state.selectedChannel;
+    if (!ch) return;
+
+    const body = {};
+    const z = parseFloat(document.getElementById('ei-z_threshold').value);
+    const mc = parseFloat(document.getElementById('ei-min_confidence').value);
+    const cd = parseInt(document.getElementById('ei-alert_cooldown_s').value, 10);
+    if (!isNaN(z) && z > 0)   body.z_threshold = z;
+    if (!isNaN(mc))            body.min_confidence = mc;
+    if (!isNaN(cd) && cd >= 0) body.alert_cooldown_s = cd;
+
+    if (Object.keys(body).length === 0) {
+        alert('Enter at least one override value.');
+        return;
+    }
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/channels/${encodeURIComponent(ch.satellite_id)}/${encodeURIComponent(ch.parameter)}/config`,
+            { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        );
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            alert(`Error ${resp.status}: ${err.detail || resp.statusText}`);
+            return;
+        }
+        await loadChannels();
+        // Re-select the same channel (it may be at a different index after reload)
+        const idx = state.channels.findIndex(
+            c => c.satellite_id === ch.satellite_id && c.parameter === ch.parameter
+        );
+        if (idx >= 0) { state.selectedChannel = state.channels[idx]; renderChannelEditor(); }
+    } catch (e) {
+        alert('Failed to save: ' + e.message);
+    }
+};
+
+window.resetChannelConfig = async function() {
+    const ch = state.selectedChannel;
+    if (!ch) return;
+    if (!ch.has_overrides) { alert('No overrides to reset.'); return; }
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/channels/${encodeURIComponent(ch.satellite_id)}/${encodeURIComponent(ch.parameter)}/config`,
+            { method: 'DELETE' }
+        );
+        if (!resp.ok) {
+            alert(`Error ${resp.status}: ${resp.statusText}`);
+            return;
+        }
+        await loadChannels();
+        const idx = state.channels.findIndex(
+            c => c.satellite_id === ch.satellite_id && c.parameter === ch.parameter
+        );
+        if (idx >= 0) { state.selectedChannel = state.channels[idx]; renderChannelEditor(); }
+    } catch (e) {
+        alert('Failed to reset: ' + e.message);
+    }
+};
+
+// --- Tab Switching ---
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.tab-content').forEach(el => {
+            el.style.display = el.id === `tab-${tab}` ? '' : 'none';
+        });
+        if (tab === 'channels' && state.channels.length === 0) loadChannels();
+    });
+});
+
+document.getElementById('refreshChannelsBtn').addEventListener('click', loadChannels);
+document.getElementById('chanSatFilter').addEventListener('change', loadChannels);
+document.getElementById('editorClose').addEventListener('click', () => {
+    state.selectedChannel = null;
+    document.getElementById('thresholdEditor').style.display = 'none';
+    renderChannelTable();
 });
 
 // --- Init ---

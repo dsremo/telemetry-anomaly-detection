@@ -27,7 +27,12 @@
         </div>
     </header>
 
-    <main class="grid">
+    <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="monitor">Monitor</button>
+        <button class="tab-btn" data-tab="channels">Channels</button>
+    </nav>
+
+    <main class="grid tab-content" id="tab-monitor">
         <!-- Health Cards Row -->
         <section class="card-row">
             <div class="metric-card" id="card-total-points">
@@ -133,6 +138,36 @@
             </div>
         </section>
     </main>
+
+    <!-- Channels Tab -->
+    <div class="grid tab-content" id="tab-channels" style="display:none">
+        <div class="channels-layout">
+            <!-- Channel Registry Table -->
+            <section class="panel channels-panel">
+                <div class="panel-header">
+                    <h2>Channel Registry</h2>
+                    <div class="filter-group">
+                        <select id="chanSatFilter" class="filter-select">
+                            <option value="">All Satellites</option>
+                        </select>
+                        <button class="btn-secondary" id="refreshChannelsBtn">Refresh</button>
+                    </div>
+                </div>
+                <div class="channel-table-wrap" id="channelTableWrap">
+                    <div class="empty-state">Click Refresh to load channel registry.</div>
+                </div>
+            </section>
+
+            <!-- Inline Threshold Editor (shown on row click) -->
+            <section class="panel threshold-editor" id="thresholdEditor" style="display:none">
+                <div class="panel-header">
+                    <h2 id="editorTitle">Threshold Config</h2>
+                    <button class="btn-secondary" id="editorClose">&#x2715;</button>
+                </div>
+                <div class="editor-body" id="editorBody"></div>
+            </section>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>

@@ -25,6 +25,7 @@ from sentinel.api.middleware import (
 )
 from sentinel.api.routes import router
 from sentinel.api.routes_auth import auth_router
+from sentinel.api.routes_channels import channels_router
 from sentinel.api.routes_keys import keys_router
 from sentinel.api.routes_tenants import tenants_router
 from sentinel.api.routes_users import users_router
@@ -48,9 +49,11 @@ def _activate_demo_mode() -> None:
 
     # Patch routes and detection pipeline to use memory_store instead of DB queries
     import sentinel.api.routes as routes_mod
+    import sentinel.api.routes_channels as routes_channels_mod
     import sentinel.detection.detector as detector_mod
 
     routes_mod.queries = memory_store  # type: ignore[attr-defined]
+    routes_channels_mod.queries = memory_store  # type: ignore[attr-defined]
     detector_mod.queries = memory_store  # type: ignore[attr-defined]
 
     logger.info("demo_mode_activated", storage="in-memory")
@@ -84,6 +87,14 @@ async def lifespan(app: FastAPI):
         from sentinel.db.queries import load_api_key_map
         app.state.api_key_tenant_map = await load_api_key_map()
         logger.info("api_key_map_loaded", count=len(app.state.api_key_tenant_map))
+
+        # Load per-channel threshold configs into the detector cache.
+        # Uses a direct pool connection (bypasses RLS) — same pattern as api_key_map.
+        from sentinel.db.queries import load_all_channel_configs
+        from sentinel.detection.detector import load_channel_configs
+        channel_configs = await load_all_channel_configs()
+        load_channel_configs(channel_configs)
+        logger.info("channel_configs_loaded", count=len(channel_configs))
 
         # Load JWT secret from env/config. Warn (not fail) so server still
         # starts in dev mode without a secret — auth routes return 503.
@@ -168,13 +179,14 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
         CORSMiddleware,
         allow_origins=cors,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
     )
 
     # --- Routes ---
     app.include_router(router, prefix="/api/v1")
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(channels_router, prefix="/api/v1")
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
     app.include_router(keys_router, prefix="/api/v1")

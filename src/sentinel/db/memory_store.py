@@ -26,6 +26,7 @@ _lock = Lock()
 _telemetry: list[dict] = []
 _anomalies: list[dict] = []
 _api_keys: list[dict] = []
+_channel_configs: dict[tuple[str, str], dict] = {}  # (satellite_id, parameter) → config
 _MAX_TELEMETRY = 100_000  # cap to prevent OOM in long demos
 
 
@@ -178,3 +179,70 @@ async def get_known_satellites() -> list[str]:
     with _lock:
         sats = sorted({r["satellite_id"] for r in _telemetry})
     return sats
+
+
+# ---------------------------------------------------------------------------
+# Channel registry + per-channel config (demo stubs)
+# ---------------------------------------------------------------------------
+
+async def get_channel_stats(satellite_id: str | None = None) -> list[dict]:
+    """Demo stub — returns empty list (no channels until telemetry is ingested)."""
+    return []
+
+
+async def get_channel_config(satellite_id: str, parameter: str) -> dict | None:
+    """Return in-memory config override for the channel, or None."""
+    with _lock:
+        return dict(_channel_configs.get((satellite_id, parameter), {})) or None
+
+
+async def upsert_channel_config(
+    satellite_id: str,
+    parameter: str,
+    *,
+    z_threshold: float | None = None,
+    cusum_h: float | None = None,
+    cusum_k: float | None = None,
+    ewma_lambda: float | None = None,
+    ewma_sigma_mult: float | None = None,
+    min_confidence: float | None = None,
+    alert_cooldown_s: int | None = None,
+) -> dict:
+    """Insert or partial-update in-memory channel config. Returns the full row."""
+    from datetime import timezone
+    key = (satellite_id, parameter)
+    with _lock:
+        existing = _channel_configs.get(key, {})
+        _FIELDS = ("z_threshold", "cusum_h", "cusum_k", "ewma_lambda",
+                   "ewma_sigma_mult", "min_confidence", "alert_cooldown_s")
+        new_vals = dict(zip(
+            _FIELDS,
+            (z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult, min_confidence, alert_cooldown_s),
+        ))
+        merged = {
+            f: (new_vals[f] if new_vals[f] is not None else existing.get(f))
+            for f in _FIELDS
+        }
+        merged["updated_at"] = datetime.now(timezone.utc)
+        merged["satellite_id"] = satellite_id
+        merged["parameter"] = parameter
+        _channel_configs[key] = merged
+        return dict(merged)
+
+
+async def delete_channel_config(satellite_id: str, parameter: str) -> bool:
+    """Remove in-memory config override. Returns True if row existed."""
+    key = (satellite_id, parameter)
+    with _lock:
+        existed = key in _channel_configs
+        _channel_configs.pop(key, None)
+    return existed
+
+
+async def load_all_channel_configs(satellite_id: str | None = None) -> list[dict]:
+    """Return all in-memory channel config rows (no RLS needed in demo mode)."""
+    with _lock:
+        configs = list(_channel_configs.values())
+    if satellite_id is not None:
+        configs = [c for c in configs if c.get("satellite_id") == satellite_id]
+    return configs

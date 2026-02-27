@@ -105,6 +105,11 @@ _last_processed_ts: dict[str, float] = {}
 _alert_cooldown_s: float = 72.0 * 3600.0   # default 72 h; overridden by init
 _last_anomaly_ts:  dict[str, float] = {}    # key → epoch of last stored anomaly
 
+# Per-channel threshold overrides — keyed by (satellite_id, parameter).
+# NULL/missing fields fall through to global defaults.
+# Refreshed at startup and after any PUT/DELETE via load_channel_configs().
+_channel_config_cache: dict[tuple[str, str], dict] = {}
+
 
 # ── Initialisation ───────────────────────────────────────────────────────────
 
@@ -204,6 +209,72 @@ def init_detectors(settings: object) -> None:
     )
 
 
+# ── Per-channel config cache + threshold helpers ──────────────────────────────
+
+def load_channel_configs(configs: list[dict]) -> None:
+    """Replace the in-memory channel config cache from a list of DB rows.
+
+    Called once at server startup and again after any PUT/DELETE to a channel
+    config so the detection pipeline picks up new overrides immediately.
+    """
+    global _channel_config_cache
+    _channel_config_cache = {
+        (row["satellite_id"], row["parameter"]): row
+        for row in configs
+    }
+    logger.debug("channel_config_cache_updated", count=len(_channel_config_cache))
+
+
+def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
+    """Return merged thresholds: per-channel overrides applied on top of globals.
+
+    DRY single source of truth — used by both the detection pipeline AND the
+    GET /channels API response. NULL fields fall through to global defaults.
+    """
+    cfg = _channel_config_cache.get((satellite_id, parameter), {})
+
+    def _get(key: str, default):  # type: ignore[no-untyped-def]
+        v = cfg.get(key)
+        return v if v is not None else default
+
+    return {
+        "z_threshold":      _get("z_threshold",     _stat_detector.z_threshold),
+        "cusum_h":          _get("cusum_h",          None),   # None = calibration-computed
+        "cusum_k":          _get("cusum_k",          None),   # None = calibration-computed
+        "ewma_lambda":      _get("ewma_lambda",      None),   # None = calibration-computed
+        "ewma_sigma_mult":  _get("ewma_sigma_mult",  None),   # None = calibration-computed
+        "min_confidence":   _get("min_confidence",   0.0),
+        "alert_cooldown_s": _get("alert_cooldown_s", _alert_cooldown_s),
+    }
+
+
+def _apply_calibration_overrides(cal: "CalibrationState", eff: dict) -> None:  # type: ignore[name-defined]
+    """Mutate a CalibrationState in-place with any non-None override values.
+
+    asyncio is single-threaded — this is race-free. CalibrationState is
+    per-channel and not shared across concurrent calls.
+    Only applies CUSUM/EWMA overrides when the channel has a valid σ_ref
+    (i.e., after calibration completes).
+    """
+    if eff.get("cusum_h") is not None:
+        cal.cusum_h = float(eff["cusum_h"])
+    if eff.get("cusum_k") is not None:
+        cal.cusum_k = float(eff["cusum_k"])
+
+    # EWMA control limits depend on both lambda and sigma_mult.
+    ewma_lambda     = eff.get("ewma_lambda")
+    ewma_sigma_mult = eff.get("ewma_sigma_mult")
+    if (ewma_lambda is not None or ewma_sigma_mult is not None) and cal.ref_std > 1e-9:
+        import math
+        import sentinel.detection.calibration as _cal_mod_local
+        sigma  = cal.ref_std
+        lam    = float(ewma_lambda)     if ewma_lambda     is not None else _cal_mod_local.EWMA_LAMBDA
+        smult  = float(ewma_sigma_mult) if ewma_sigma_mult is not None else _cal_mod_local.EWMA_SIGMA_FACTOR
+        spread = math.sqrt(lam / (2.0 - lam))
+        cal.ewma_ucl = +smult * sigma * spread
+        cal.ewma_lcl = -smult * sigma * spread
+
+
 async def flush_all_states(satellite_id: str | None = None) -> None:
     """Persist CUSUM, EWMA, and calibration states to DB.
 
@@ -296,6 +367,9 @@ async def analyze_channel_history(
     key       = f"{satellite_id}:{parameter}"
     anomalies: list[Anomaly] = []
 
+    # Load per-channel overrides once for the entire analysis run.
+    eff = get_effective_thresholds(satellite_id, parameter)
+
     # Rolling context window: stores the last ≤600 (ts_epoch, value) tuples
     # so STL always has enough history.
     ctx_ts:  list[float] = []
@@ -367,6 +441,7 @@ async def analyze_channel_history(
         for idx in new_indices:
             res         = float(residuals[idx])
             calibration = _calibration_mgr.update(key, res)
+            _apply_calibration_overrides(calibration, eff)   # Point 1: CUSUM/EWMA overrides
             cr          = _cusum_detector.detect(key, res, calibration)
             er          = _ewma_detector.detect(key, res, calibration)
 
@@ -384,8 +459,14 @@ async def analyze_channel_history(
         final_residual = float(residuals[final_idx])
         final_ts_epoch = float(wt[final_idx])
 
-        feat_res    = _feature_engine.compute(f"{parameter}:res", final_residual, final_ts_epoch)
-        stat_result = _stat_detector.detect(feat_res, residuals)
+        feat_res = _feature_engine.compute(f"{parameter}:res", final_residual, final_ts_epoch)
+        # Point 2: temporarily patch z_threshold with per-channel override
+        _orig_z = _stat_detector.z_threshold
+        _stat_detector.z_threshold = eff["z_threshold"]
+        try:
+            stat_result = _stat_detector.detect(feat_res, residuals)
+        finally:
+            _stat_detector.z_threshold = _orig_z
         cp_result   = (
             _cp_detector.detect(residuals, parameter)
             if len(residuals) >= 60
@@ -403,12 +484,16 @@ async def analyze_channel_history(
         all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
+        # Point 3: per-channel min_confidence gate
+        if is_anomaly and eff["min_confidence"] > 0.0 and confidence < eff["min_confidence"]:
+            is_anomaly = False
+
         if is_anomaly and alarm_idx is not None:
-            # Cooldown guard: suppress repeated alarms for the same channel
-            # within _alert_cooldown_s seconds of the last stored anomaly.
+            # Cooldown guard: suppress repeated alarms for the same channel.
+            # Point 4: use per-channel cooldown instead of global.
             alarm_ts_epoch = float(wt[alarm_idx])
             last_alarm = _last_anomaly_ts.get(key, 0.0)
-            if alarm_ts_epoch - last_alarm < _alert_cooldown_s:
+            if alarm_ts_epoch - last_alarm < eff["alert_cooldown_s"]:
                 # Still within cooldown window — skip but keep advancing state.
                 after_ts    = batch[-1]["timestamp"]
                 n_processed += len(batch)
@@ -504,6 +589,9 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         decomp = _stl_decomposer.decompose(key, window_values, window_ts)
         residuals = decomp.residual
 
+        # Load per-channel overrides once per parameter (Point 1–4 below).
+        eff = get_effective_thresholds(satellite_id, param)
+
         # ── 3. Identify NEW points (not yet fed to state machines) ───────
         # _last_processed_ts tracks the epoch of the last residual fed to
         # calibration/CUSUM/EWMA.  Only timestamps strictly after this value
@@ -541,6 +629,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         for idx in new_indices:
             res         = float(residuals[idx])
             calibration = _calibration_mgr.update(key, res)
+            _apply_calibration_overrides(calibration, eff)   # Point 1: CUSUM/EWMA overrides
             cr          = _cusum_detector.detect(key, res, calibration)
             er          = _ewma_detector.detect(key, res, calibration)
             # Promote to best result seen so far in this batch.
@@ -556,8 +645,14 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         current_residual = float(residuals[new_indices[-1]])
         current_ts_epoch = float(window_ts[new_indices[-1]])
 
-        feat_res    = _feature_engine.compute(f"{param}:res", current_residual, current_ts_epoch)
-        stat_result = _stat_detector.detect(feat_res, residuals)
+        feat_res = _feature_engine.compute(f"{param}:res", current_residual, current_ts_epoch)
+        # Point 2: temporarily patch z_threshold with per-channel override
+        _orig_z = _stat_detector.z_threshold
+        _stat_detector.z_threshold = eff["z_threshold"]
+        try:
+            stat_result = _stat_detector.detect(feat_res, residuals)
+        finally:
+            _stat_detector.z_threshold = _orig_z
 
         # ── 6. PELT on residuals ─────────────────────────────────────────
         cp_result = (
@@ -587,11 +682,16 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
+        # Point 3: per-channel min_confidence gate
+        if is_anomaly and eff["min_confidence"] > 0.0 and confidence < eff["min_confidence"]:
+            is_anomaly = False
+
         # Cooldown guard: one alarm per channel per cooldown window.
+        # Point 4: use per-channel cooldown instead of global _alert_cooldown_s.
         live_key = f"{satellite_id}:{param}"
         if is_anomaly:
             now_epoch = datetime.now(timezone.utc).timestamp()
-            if now_epoch - _last_anomaly_ts.get(live_key, 0.0) < _alert_cooldown_s:
+            if now_epoch - _last_anomaly_ts.get(live_key, 0.0) < eff["alert_cooldown_s"]:
                 is_anomaly = False  # still in cooldown — suppress
 
         if is_anomaly:

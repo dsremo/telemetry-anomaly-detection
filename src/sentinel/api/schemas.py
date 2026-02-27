@@ -271,3 +271,70 @@ class ApiKeyOut(BaseModel):
     created_at: datetime
     last_used_at: datetime | None
     active: bool
+
+
+# ---------------------------------------------------------------------------
+# Channel registry + per-channel threshold config schemas
+# ---------------------------------------------------------------------------
+
+class ChannelOut(BaseModel):
+    """Channel metadata, calibration state, and current effective thresholds."""
+
+    satellite_id: str
+    parameter: str
+    subsystem: str
+    unit: str
+    total_points: int
+    first_seen: datetime | None
+    last_seen: datetime | None
+    # Calibration
+    calibration_state: str | None   # "warming_up" | "calibrated" | "recalibrating" | None
+    has_overrides: bool             # True if a channel_config row exists for this channel
+    # Effective thresholds (per-channel override merged with global defaults)
+    effective_z_threshold: float
+    effective_min_confidence: float
+    effective_alert_cooldown_s: int
+
+
+class ChannelConfigIn(BaseModel):
+    """Per-channel threshold overrides — all fields optional (partial update via PUT).
+
+    Omit any field to keep the existing DB value.  Set to null explicitly to
+    clear an override and revert that field to the global default.
+    """
+
+    z_threshold: float | None = Field(
+        default=None, gt=0, description="z-score alarm threshold (> 0)"
+    )
+    cusum_h: float | None = Field(
+        default=None, gt=0, description="CUSUM alarm level H (> 0)"
+    )
+    cusum_k: float | None = Field(
+        default=None, gt=0, description="CUSUM allowance k (> 0)"
+    )
+    ewma_lambda: float | None = Field(
+        default=None, gt=0, le=1.0,
+        description="EWMA smoothing factor λ (0 < λ ≤ 1)"
+    )
+    ewma_sigma_mult: float | None = Field(
+        default=None, gt=0,
+        description="EWMA UCL/LCL sigma multiplier (> 0)"
+    )
+    min_confidence: float | None = Field(
+        default=None, ge=0.0, le=1.0,
+        description="Minimum ensemble confidence to emit an anomaly (0.0–1.0)"
+    )
+    alert_cooldown_s: int | None = Field(
+        default=None, ge=0,
+        description="Per-channel alert cooldown in seconds (≥ 0)"
+    )
+
+
+class ChannelConfigOut(BaseModel):
+    """Current per-channel config: raw DB overrides + effective merged thresholds."""
+
+    satellite_id: str
+    parameter: str
+    overrides: dict[str, Any]   # non-None DB fields (empty dict if no row exists)
+    effective: dict[str, Any]   # full merged thresholds as used by detection pipeline
+    updated_at: datetime | None

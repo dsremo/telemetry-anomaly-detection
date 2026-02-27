@@ -33,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 # ---------------------------------------------------------------------------
@@ -662,6 +662,44 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE tenants
         ADD COLUMN IF NOT EXISTS plan     TEXT NOT NULL DEFAULT 'free',
         ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}';
+    """,
+
+    # v13: Per-channel threshold overrides.
+    #
+    # Design:
+    #   - channel_config: one row per (tenant_id, satellite_id, parameter).
+    #     All 7 threshold columns are nullable — NULL = "use global default".
+    #     This makes partial updates clean: COALESCE keeps existing value when
+    #     the caller does not provide a new one.
+    #   - Composite PK mirrors channel_registry (tenant_id, satellite_id, parameter).
+    #   - FORCE RLS: sentinel user is the table owner — FORCE required to prevent bypass.
+    #   - FK to tenants(id) ON DELETE CASCADE: removing a tenant drops all its configs.
+    #   - updated_at: maintained explicitly by upsert queries (no trigger needed —
+    #     consistent with how channel_calibration updated_at is handled).
+    """
+    CREATE TABLE IF NOT EXISTS channel_config (
+        tenant_id       TEXT             NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        satellite_id    TEXT             NOT NULL,
+        parameter       TEXT             NOT NULL,
+        -- Nullable override columns: NULL = "use global default from sentinel.yaml"
+        z_threshold     DOUBLE PRECISION,       -- StatisticalDetector z_threshold
+        cusum_h         DOUBLE PRECISION,       -- CalibrationState cusum_h (alarm threshold)
+        cusum_k         DOUBLE PRECISION,       -- CalibrationState cusum_k (allowance)
+        ewma_lambda     DOUBLE PRECISION,       -- EWMA smoothing factor (0 < λ ≤ 1)
+        ewma_sigma_mult DOUBLE PRECISION,       -- EWMA UCL/LCL sigma multiplier
+        min_confidence  DOUBLE PRECISION,       -- ignore ensemble confidence below this
+        alert_cooldown_s INTEGER,               -- per-channel cooldown (seconds)
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id, satellite_id, parameter)
+    );
+
+    ALTER TABLE channel_config ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE channel_config FORCE  ROW LEVEL SECURITY;
+
+    DROP POLICY IF EXISTS tenant_isolation ON channel_config;
+    CREATE POLICY tenant_isolation ON channel_config
+        USING     (tenant_id = current_setting('app.tenant_id', true))
+        WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
     """,
 ]
 

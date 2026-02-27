@@ -338,6 +338,146 @@ body {
     .topbar { flex-direction: column; gap: 8px; }
 }
 
+/* Tab Navigation */
+.tab-nav {
+    display: flex;
+    gap: 2px;
+    padding: 8px 24px 0;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    transition: all var(--transition);
+    margin-bottom: -1px;
+}
+.tab-btn:hover { color: var(--text-primary); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Channels Tab Layout */
+.channels-layout {
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 16px;
+    align-items: start;
+}
+@media (max-width: 1100px) { .channels-layout { grid-template-columns: 1fr; } }
+
+/* Channel Table */
+.channel-table-wrap { overflow-x: auto; }
+.channel-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.channel-table th {
+    padding: 8px 14px;
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.channel-table td {
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-secondary);
+    vertical-align: middle;
+}
+.channel-table tr:hover td { background: var(--bg-hover); cursor: pointer; }
+.channel-table tr.selected td { background: var(--accent-glow); }
+.chan-param { color: var(--text-primary); font-weight: 600; }
+.override-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    background: rgba(59,130,246,0.15);
+    color: var(--accent);
+    letter-spacing: 0.5px;
+}
+.cal-state { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.cal-state.calibrated { color: var(--nominal); }
+.cal-state.warming_up { color: var(--watch); }
+.cal-state.recalibrating { color: var(--warning); }
+
+/* Threshold Editor */
+.editor-body { padding: 16px; }
+.editor-field {
+    margin-bottom: 16px;
+}
+.editor-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+.editor-value { color: var(--accent); font-weight: 600; }
+.editor-input {
+    width: 100%;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 5px 9px;
+    font-size: 12px;
+    font-family: inherit;
+}
+.editor-input:focus { outline: none; border-color: var(--accent); }
+.editor-actions { display: flex; gap: 8px; margin-top: 20px; }
+.btn-primary {
+    flex: 1;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 7px 14px;
+    font-size: 12px;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity var(--transition);
+}
+.btn-primary:hover { opacity: 0.85; }
+.btn-danger {
+    background: rgba(239,68,68,0.15);
+    color: var(--critical);
+    border: 1px solid rgba(239,68,68,0.3);
+    border-radius: var(--radius-sm);
+    padding: 7px 14px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--transition);
+}
+.btn-danger:hover { background: rgba(239,68,68,0.25); }
+.editor-effective {
+    margin-top: 16px;
+    padding: 10px 12px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.editor-effective .eff-row { display: flex; justify-content: space-between; padding: 2px 0; }
+.editor-effective .eff-val { color: var(--text-secondary); }
+
 /* Pulse animation for critical items */
 @keyframes pulse-critical {
     0%, 100% { opacity: 1; }

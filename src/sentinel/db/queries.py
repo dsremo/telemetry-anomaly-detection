@@ -11,7 +11,9 @@ Query map:
   Telemetry       — insert_telemetry, get_telemetry, get_recent_telemetry_window,
                     get_latest_values
   Satellites      — get_known_satellites, upsert_satellite_seen
-  Channels        — upsert_channel_seen, get_channel_stats
+  Channels        — upsert_channel_seen, get_channel_stats,
+                    get_channel_config, upsert_channel_config,
+                    delete_channel_config, load_all_channel_configs
   Calibration     — get_channel_calibration, upsert_channel_calibration,
                     get_all_calibrations
   Detector state  — get_detector_state, upsert_detector_state,
@@ -312,31 +314,163 @@ async def upsert_channel_seen(
         )
 
 
-async def get_channel_stats(satellite_id: str) -> list[dict]:
-    """Summary stats for every channel of a satellite. Used by dashboard."""
+async def get_channel_stats(satellite_id: str | None = None) -> list[dict]:
+    """Summary stats for every channel. Used by dashboard and /channels API.
+
+    When satellite_id is None, returns channels for all satellites (RLS-scoped
+    to the current tenant). Includes per-channel config overrides via LEFT JOIN
+    so callers can compute effective thresholds without a second query.
+    """
+    _ORDER_SAT  = "cr.satellite_id, cr.subsystem, cr.parameter"
+    _ORDER_CHAN = "cr.subsystem, cr.parameter"
+    _SELECT = """
+        SELECT
+            cr.satellite_id,
+            cr.parameter,
+            cr.subsystem,
+            cr.unit,
+            cr.total_points,
+            cr.first_seen_at,
+            cr.last_seen_at,
+            cc.state           AS calibration_state,
+            cc.ref_mean,
+            cc.ref_std,
+            cc.ref_sample_count,
+            cfg.z_threshold,
+            cfg.cusum_h,
+            cfg.cusum_k,
+            cfg.ewma_lambda,
+            cfg.ewma_sigma_mult,
+            cfg.min_confidence,
+            cfg.alert_cooldown_s,
+            cfg.updated_at     AS config_updated_at
+        FROM channel_registry cr
+        LEFT JOIN channel_calibration cc
+               ON cc.satellite_id = cr.satellite_id
+              AND cc.parameter    = cr.parameter
+        LEFT JOIN channel_config cfg
+               ON cfg.satellite_id = cr.satellite_id
+              AND cfg.parameter    = cr.parameter
+    """
     async with acquire() as conn:
-        rows = await conn.fetch(
+        if satellite_id is not None:
+            rows = await conn.fetch(
+                _SELECT + f" WHERE cr.satellite_id = $1 ORDER BY {_ORDER_CHAN}",
+                satellite_id,
+            )
+        else:
+            rows = await conn.fetch(_SELECT + f" ORDER BY {_ORDER_SAT}")
+    return [dict(r) for r in rows]
+
+
+async def get_channel_config(satellite_id: str, parameter: str) -> dict | None:
+    """Return channel_config override row for one channel, or None if not set."""
+    async with acquire() as conn:
+        row = await conn.fetchrow(
             """
-            SELECT
-                cr.parameter,
-                cr.subsystem,
-                cr.unit,
-                cr.total_points,
-                cr.first_seen_at,
-                cr.last_seen_at,
-                cc.state           AS calibration_state,
-                cc.ref_mean,
-                cc.ref_std,
-                cc.ref_sample_count
-            FROM channel_registry cr
-            LEFT JOIN channel_calibration cc
-                   ON cc.satellite_id = cr.satellite_id
-                  AND cc.parameter    = cr.parameter
-            WHERE cr.satellite_id = $1
-            ORDER BY cr.subsystem, cr.parameter
+            SELECT z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult,
+                   min_confidence, alert_cooldown_s, updated_at
+            FROM channel_config
+            WHERE satellite_id = $1 AND parameter = $2
             """,
-            satellite_id,
+            satellite_id, parameter,
         )
+    return dict(row) if row else None
+
+
+async def upsert_channel_config(
+    satellite_id: str,
+    parameter: str,
+    *,
+    z_threshold: float | None = None,
+    cusum_h: float | None = None,
+    cusum_k: float | None = None,
+    ewma_lambda: float | None = None,
+    ewma_sigma_mult: float | None = None,
+    min_confidence: float | None = None,
+    alert_cooldown_s: int | None = None,
+) -> dict:
+    """Insert or partially update per-channel threshold overrides.
+
+    COALESCE on each column: passing None keeps the existing DB value, so
+    callers can update a single field without touching the others.
+    To remove all overrides use delete_channel_config().
+    Returns the full updated row.
+    """
+    async with acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO channel_config
+                (tenant_id, satellite_id, parameter,
+                 z_threshold, cusum_h, cusum_k,
+                 ewma_lambda, ewma_sigma_mult,
+                 min_confidence, alert_cooldown_s,
+                 updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+            ON CONFLICT (tenant_id, satellite_id, parameter) DO UPDATE
+                SET z_threshold     = COALESCE(EXCLUDED.z_threshold,     channel_config.z_threshold),
+                    cusum_h         = COALESCE(EXCLUDED.cusum_h,         channel_config.cusum_h),
+                    cusum_k         = COALESCE(EXCLUDED.cusum_k,         channel_config.cusum_k),
+                    ewma_lambda     = COALESCE(EXCLUDED.ewma_lambda,     channel_config.ewma_lambda),
+                    ewma_sigma_mult = COALESCE(EXCLUDED.ewma_sigma_mult, channel_config.ewma_sigma_mult),
+                    min_confidence  = COALESCE(EXCLUDED.min_confidence,  channel_config.min_confidence),
+                    alert_cooldown_s = COALESCE(EXCLUDED.alert_cooldown_s, channel_config.alert_cooldown_s),
+                    updated_at      = NOW()
+            RETURNING z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult,
+                      min_confidence, alert_cooldown_s, updated_at
+            """,
+            get_tenant(), satellite_id, parameter,
+            z_threshold, cusum_h, cusum_k,
+            ewma_lambda, ewma_sigma_mult,
+            min_confidence, alert_cooldown_s,
+        )
+    return dict(row)
+
+
+async def delete_channel_config(satellite_id: str, parameter: str) -> bool:
+    """Remove all per-channel overrides (revert to global defaults).
+
+    Returns True if a row existed and was deleted.
+    """
+    async with acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM channel_config WHERE satellite_id = $1 AND parameter = $2",
+            satellite_id, parameter,
+        )
+    return result == "DELETE 1"
+
+
+async def load_all_channel_configs(satellite_id: str | None = None) -> list[dict]:
+    """Load channel_config rows for the in-memory detector cache.
+
+    Uses the raw pool directly (not acquire()) to bypass RLS and see all
+    tenants' configs — same pattern as load_api_key_map().
+    Called at server startup and after any PUT/DELETE to refresh the cache.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        if satellite_id is not None:
+            rows = await conn.fetch(
+                """
+                SELECT tenant_id, satellite_id, parameter,
+                       z_threshold, cusum_h, cusum_k,
+                       ewma_lambda, ewma_sigma_mult,
+                       min_confidence, alert_cooldown_s
+                FROM channel_config
+                WHERE satellite_id = $1
+                """,
+                satellite_id,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT tenant_id, satellite_id, parameter,
+                       z_threshold, cusum_h, cusum_k,
+                       ewma_lambda, ewma_sigma_mult,
+                       min_confidence, alert_cooldown_s
+                FROM channel_config
+                """
+            )
     return [dict(r) for r in rows]
 
 
