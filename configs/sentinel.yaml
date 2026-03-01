@@ -73,6 +73,23 @@ detection:
   stl_recompute_every: 30   # recompute decomposition after N new points
                             # amortises O(n) STL cost across detection cycles
 
+  # ── Adaptive context window (Sprint 10) ──────────────────────────────
+  # Before historical analysis, FFT is run on up to stl_max_fft_samples rows
+  # to detect the dominant signal period.  If a period is found, the rolling
+  # context window is auto-scaled to stl_window_factor × period (capped at
+  # stl_max_window) so that STL can remove long-period seasonal signals such
+  # as 24h diurnal cycles in water quality data.
+  #
+  # Example: GECCO water quality (1-min sampling, 24h period = 1440 samples)
+  #   → context window auto-scales from 600 → 3 × 1440 = 4320 samples
+  #   → STL removes daily seasonal component → CUSUM fires only on anomalies
+  #
+  # Performance: stl_max_fft_samples=5000 adds one extra DB round-trip per
+  # channel at analysis start.  FFT of 5000 samples is O(n log n) ≈ 0.5 ms.
+  stl_max_fft_samples: 5000    # rows queried for period pre-scan (default 600 = Sprint 9)
+  stl_window_factor:   3       # context_window = factor × detected_period
+  stl_max_window:      10000   # absolute cap (memory guard; ~80 KB per channel)
+
   # ── Isolation Forest (multivariate cross-parameter) ──────────────────
   isolation_contamination: 0.01  # expected anomaly fraction (~1%)
   isolation_lookback: 3600       # samples for training window

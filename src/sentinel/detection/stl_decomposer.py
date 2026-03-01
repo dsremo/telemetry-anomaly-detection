@@ -75,9 +75,19 @@ class STLDecomposer:
         current_residual = residuals[-1]     # residual for the latest point
     """
 
-    def __init__(self, orbital_period_s: int = 5400, recompute_every: int = _RECOMPUTE_EVERY):
-        self._orbital_period_s = orbital_period_s
-        self._recompute_every = recompute_every
+    def __init__(
+        self,
+        orbital_period_s: int = 5400,
+        recompute_every: int = _RECOMPUTE_EVERY,
+        max_fft_samples: int = 600,
+    ):
+        self._orbital_period_s  = orbital_period_s
+        self._recompute_every   = recompute_every
+        # Maximum number of samples passed to _fft_period() for period detection.
+        # Default 600 (fast, handles periods up to 300 samples).
+        # Increase to 5000 to detect long-period signals such as 24h diurnal cycles
+        # in water quality or environmental data (1440 samples at 1-min resolution).
+        self._max_fft_samples   = max_fft_samples
         self._cache: dict[str, _ChannelCache] = {}
 
     # ------------------------------------------------------------------
@@ -152,7 +162,7 @@ class STLDecomposer:
         """
         # ── FFT-based period detection (primary) ──────────────────────
         if values is not None and len(values) >= 8:
-            fft_period = self._fft_period(values[-min(n, 600):])
+            fft_period = self._fft_period(values[-min(n, self._max_fft_samples):])
             if fft_period > 0:
                 return fft_period
 

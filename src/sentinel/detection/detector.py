@@ -109,6 +109,11 @@ _last_processed_ts: dict[str, float] = {}
 _alert_cooldown_s: float = 72.0 * 3600.0   # default 72 h; overridden by init
 _last_anomaly_ts:  dict[str, float] = {}    # key → epoch of last stored anomaly
 
+# Adaptive context window: auto-scaled per channel based on FFT-detected period.
+# window = min(max(600, stl_window_factor × period), stl_max_window)
+_stl_window_factor: int = 3      # context_window = factor × detected_period
+_stl_max_window:    int = 10000  # absolute upper bound on context window (memory guard)
+
 # Per-channel threshold overrides — keyed by (satellite_id, parameter).
 # NULL/missing fields fall through to global defaults.
 # Refreshed at startup and after any PUT/DELETE via load_channel_configs().
@@ -125,6 +130,7 @@ def init_detectors(settings: object) -> None:
     global WEIGHTS, _severity_thresholds
     global _last_processed_ts, _detection_cycle_count, _samples_since_fit
     global _alert_cooldown_s, _last_anomaly_ts
+    global _stl_window_factor, _stl_max_window
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
     feat = settings.get("features",  {})   # type: ignore[attr-defined]
@@ -148,11 +154,14 @@ def init_detectors(settings: object) -> None:
         min_segment_size=int(det.get("changepoint_min_size", 50)),
     )
 
-    # ── STL decomposer ────────────────────────────────────────────────────
-    orbital_period_s = int(feat.get("orbital_period", 5400))
-    _stl_decomposer  = STLDecomposer(
+    # ── STL decomposer + adaptive context window ──────────────────────────
+    orbital_period_s  = int(feat.get("orbital_period", 5400))
+    _stl_window_factor = int(det.get("stl_window_factor", 3))
+    _stl_max_window    = int(det.get("stl_max_window", 10000))
+    _stl_decomposer    = STLDecomposer(
         orbital_period_s=orbital_period_s,
         recompute_every=int(det.get("stl_recompute_every", 30)),
+        max_fft_samples=int(det.get("stl_max_fft_samples", 600)),
     )
 
     # ── Calibration (shared params read by CalibrationManager internals) ──
@@ -381,8 +390,36 @@ async def analyze_channel_history(
     # Load per-channel overrides once for the entire analysis run.
     eff = get_effective_thresholds(satellite_id, parameter)
 
-    # Rolling context window: stores the last ≤600 (ts_epoch, value) tuples
-    # so STL always has enough history.
+    # ── Adaptive context window: pre-scan to detect dominant period ───────
+    # Query up to max_fft_samples rows to run FFT period detection before the
+    # main analysis loop.  This allows auto-scaling the rolling context window
+    # for long-period signals (e.g. 24h diurnal cycles in GECCO water quality).
+    # For signals with no detectable period, ctx_limit defaults to 600.
+    ctx_limit = 600
+    pre_scan = await queries.get_telemetry_batch_ordered(
+        satellite_id, parameter,
+        after_ts=None,
+        limit=_stl_decomposer._max_fft_samples,
+    )
+    if pre_scan and len(pre_scan) >= 8:
+        pre_vals = np.array(
+            [float(r["value"]) for r in pre_scan], dtype=np.float64
+        )
+        detected_period = STLDecomposer._fft_period(pre_vals)
+        if detected_period > 0:
+            candidate  = _stl_window_factor * detected_period
+            ctx_limit  = min(max(600, candidate), _stl_max_window)
+            if ctx_limit > 600:
+                logger.info(
+                    "stl_window_auto_scaled",
+                    satellite=satellite_id,
+                    parameter=parameter,
+                    period_samples=detected_period,
+                    ctx_limit=ctx_limit,
+                )
+
+    # Rolling context window: stores the last ≤ctx_limit (ts_epoch, value) tuples
+    # so STL always has enough history.  ctx_limit ≥ 600 always.
     ctx_ts:  list[float] = []
     ctx_val: list[float] = []
 
@@ -403,10 +440,11 @@ async def analyze_channel_history(
             ctx_ts.append(t)
             ctx_val.append(float(r["value"]))
 
-        # Keep only the last 600 to bound memory.
-        if len(ctx_ts) > 600:
-            ctx_ts  = ctx_ts[-600:]
-            ctx_val = ctx_val[-600:]
+        # Keep only the last ctx_limit samples to bound memory.
+        # ctx_limit is ≥600 and auto-scaled based on detected signal period.
+        if len(ctx_ts) > ctx_limit:
+            ctx_ts  = ctx_ts[-ctx_limit:]
+            ctx_val = ctx_val[-ctx_limit:]
 
         wt = np.array(ctx_ts,  dtype=np.float64)
         wv = np.array(ctx_val, dtype=np.float64)
