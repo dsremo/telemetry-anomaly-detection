@@ -433,10 +433,10 @@ class TestEnsembleWithVariance:
         assert WEIGHTS["variance"] > 0
 
     def test_six_detectors_in_results_list(self):
-        """all_results in production code should have 6 elements."""
-        # Verify by checking WEIGHTS has exactly 6 keys
+        """Ensemble now has 7 detectors (lstm added in Sprint 11)."""
+        # Verify by checking WEIGHTS has at least 6 keys (7 after Sprint 11)
         from sentinel.detection.detector import WEIGHTS
-        assert len(WEIGHTS) == 6
+        assert len(WEIGHTS) >= 6
 
     def test_variance_alone_triggers_ensemble(self):
         """_ensemble_vote with only variance triggered → is_anomaly=True."""

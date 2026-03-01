@@ -48,6 +48,7 @@ from sentinel.detection.ewma import EWMADetector
 from sentinel.detection.isolation import IsolationForestDetector
 from sentinel.detection.statistical import StatisticalDetector
 from sentinel.detection.stl_decomposer import STLDecomposer
+from sentinel.detection.autoencoder_detector import AutoencoderDetector
 from sentinel.detection.variance_detector import VarianceDetector
 from sentinel.features.engine import FeatureEngine
 
@@ -64,15 +65,29 @@ _iso_detector:      IsolationForestDetector  = IsolationForestDetector()
 _cp_detector:       ChangePointDetector      = ChangePointDetector()
 _variance_detector: VarianceDetector         = VarianceDetector()
 
+# Per-channel GRU autoencoder models — keyed by "satellite_id:parameter".
+# Each AutoencoderDetector accumulates residuals, self-trains, and scores.
+_lstm_models: dict[str, AutoencoderDetector] = {}
+
+# LSTM config — overridable via init_detectors() from sentinel.yaml.
+_lstm_seq_length:      int   = 30
+_lstm_hidden_size:     int   = 32
+_lstm_bottleneck_size: int   = 8
+_lstm_epochs:          int   = 30
+_lstm_min_train:       int   = 60
+_lstm_retrain_interval: int  = 500
+_lstm_threshold_sigma: float = 3.0
+
 # Ensemble weights (must sum to 1.0, overridable via config)
-# 6 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance
+# 7 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm
 WEIGHTS: dict[str, float] = {
-    "cusum":            0.27,   # primary drift detector (NASA CUSUM standard)
-    "ewma":             0.22,   # level-shift detector
-    "statistical":      0.18,   # single-point spike detector (z-score)
-    "changepoint":      0.13,   # structural break detector (PELT)
-    "isolation_forest": 0.08,   # multivariate cross-parameter anomalies
-    "variance":         0.12,   # variance-spike detector (CATS-type oscillatory signals)
+    "cusum":            0.23,   # primary drift detector (NASA CUSUM standard)
+    "ewma":             0.19,   # level-shift detector
+    "statistical":      0.15,   # single-point spike detector (z-score)
+    "changepoint":      0.11,   # structural break detector (PELT)
+    "isolation_forest": 0.07,   # multivariate cross-parameter anomalies
+    "variance":         0.10,   # variance-spike detector (CATS-type oscillatory signals)
+    "lstm":             0.15,   # GRU autoencoder — temporal pattern anomalies (ML)
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -122,6 +137,22 @@ _channel_config_cache: dict[tuple[str, str], dict] = {}
 
 # ── Initialisation ───────────────────────────────────────────────────────────
 
+def _get_lstm_model(satellite_id: str, parameter: str) -> AutoencoderDetector:
+    """Return (creating if needed) the per-channel GRU autoencoder instance."""
+    key = f"{satellite_id}:{parameter}"
+    if key not in _lstm_models:
+        _lstm_models[key] = AutoencoderDetector(
+            seq_length=_lstm_seq_length,
+            hidden_size=_lstm_hidden_size,
+            bottleneck_size=_lstm_bottleneck_size,
+            epochs=_lstm_epochs,
+            min_train_samples=_lstm_min_train,
+            retrain_interval=_lstm_retrain_interval,
+            threshold_sigma=_lstm_threshold_sigma,
+        )
+    return _lstm_models[key]
+
+
 def init_detectors(settings: object) -> None:
     """Wire config values into all detector singletons.  Call once at startup."""
     global _feature_engine, _stl_decomposer, _calibration_mgr
@@ -131,6 +162,9 @@ def init_detectors(settings: object) -> None:
     global _last_processed_ts, _detection_cycle_count, _samples_since_fit
     global _alert_cooldown_s, _last_anomaly_ts
     global _stl_window_factor, _stl_max_window
+    global _lstm_seq_length, _lstm_hidden_size, _lstm_bottleneck_size
+    global _lstm_epochs, _lstm_min_train, _lstm_retrain_interval, _lstm_threshold_sigma
+    global _lstm_models
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
     feat = settings.get("features",  {})   # type: ignore[attr-defined]
@@ -191,6 +225,16 @@ def init_detectors(settings: object) -> None:
         variance_z_threshold=float(det.get("variance_z_threshold", 2.5)),
         window=int(det.get("variance_window", 30)),
     )
+
+    # ── GRU Autoencoder (ML detector, Sprint 10) ──────────────────────────
+    _lstm_seq_length       = int(det.get("lstm_seq_length",        30))
+    _lstm_hidden_size      = int(det.get("lstm_hidden_size",       32))
+    _lstm_bottleneck_size  = int(det.get("lstm_bottleneck_size",    8))
+    _lstm_epochs           = int(det.get("lstm_epochs",            30))
+    _lstm_min_train        = int(det.get("lstm_min_train_samples", 60))
+    _lstm_retrain_interval = int(det.get("lstm_retrain_interval",  500))
+    _lstm_threshold_sigma  = float(det.get("lstm_threshold_sigma", 3.0))
+    _lstm_models.clear()   # drop stale per-channel models on re-init
 
     # ── Ensemble weights ──────────────────────────────────────────────────
     cfg_weights = det.get("ensemble_weights", {})
@@ -545,7 +589,17 @@ async def analyze_channel_history(
             )
         )
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result]
+        # ── GRU Autoencoder (7th detector — temporal pattern ML) ─────────
+        lstm_det = _get_lstm_model(satellite_id, parameter)
+        for idx in new_indices:
+            lstm_det.add_sample(float(residuals[idx]))
+        if not lstm_det.is_fitted and lstm_det.sample_count >= lstm_det.min_train_samples:
+            lstm_det.fit()
+        elif lstm_det.needs_refit():
+            lstm_det.fit(list(residuals))
+        lstm_result = lstm_det.detect(list(residuals))
+
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -756,8 +810,18 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             )
         )
 
-        # ── 9. Ensemble vote ─────────────────────────────────────────────
-        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result]
+        # ── 9. GRU Autoencoder (7th detector — temporal pattern ML) ──────
+        lstm_det = _get_lstm_model(satellite_id, param)
+        for idx in new_indices:
+            lstm_det.add_sample(float(residuals[idx]))
+        if not lstm_det.is_fitted and lstm_det.sample_count >= lstm_det.min_train_samples:
+            lstm_det.fit()
+        elif lstm_det.needs_refit():
+            lstm_det.fit(list(residuals))
+        lstm_result = lstm_det.detect(list(residuals))
+
+        # ── 10. Ensemble vote ────────────────────────────────────────────
+        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -986,6 +1050,14 @@ def _build_explanation(
                 parts.append(
                     f"Variance spike: rolling_std/ref_std = {ratio:.2f}× "
                     f"(threshold: {threshold}, rolling={rolling_std:.4f}, ref={ref_std:.4f})"
+                )
+            case "lstm":
+                mse = r.details.get("mse", 0)
+                thr = r.details.get("threshold", 0)
+                z   = r.details.get("z_score", 0)
+                parts.append(
+                    f"Autoencoder: reconstruction MSE={mse:.4f} "
+                    f"(threshold={thr:.4f}, z={z:.2f})"
                 )
 
     parts.append(f"{len(triggered)}/{len(results)} detectors triggered")

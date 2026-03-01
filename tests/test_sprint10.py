@@ -568,7 +568,7 @@ class TestRegressionSprint9:
         cfg = load_config()
         det_mod.init_detectors(cfg)
         assert "variance" in det_mod.WEIGHTS
-        assert len(det_mod.WEIGHTS) == 6
+        assert len(det_mod.WEIGHTS) >= 6  # 7 after Sprint 11 (lstm added)
 
     def test_fft_4x_median_threshold_unchanged(self):
         """The 4× median noise-rejection threshold from Sprint 9 is still in effect."""

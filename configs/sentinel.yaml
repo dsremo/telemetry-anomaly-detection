@@ -90,6 +90,17 @@ detection:
   stl_window_factor:   3       # context_window = factor × detected_period
   stl_max_window:      10000   # absolute cap (memory guard; ~80 KB per channel)
 
+  # ── GRU Autoencoder (ML detector, Sprint 10) ─────────────────────────
+  # Trains per-channel on STL residuals; high reconstruction MSE = anomaly.
+  # threshold: mse > mean_train_mse + lstm_threshold_sigma × std_train_mse
+  lstm_seq_length:        30    # residual sequence window fed to encoder
+  lstm_hidden_size:       32    # GRU hidden units (encoder)
+  lstm_bottleneck_size:   8     # latent space dimension
+  lstm_epochs:            30    # training epochs (< 1 s per channel on CPU)
+  lstm_min_train_samples: 60    # min residuals before first training (2 × seq_length)
+  lstm_retrain_interval:  500   # retrain every N new residuals per channel
+  lstm_threshold_sigma:   3.0   # anomaly: mse > mean + K × std (from training)
+
   # ── Isolation Forest (multivariate cross-parameter) ──────────────────
   isolation_contamination: 0.01  # expected anomaly fraction (~1%)
   isolation_lookback: 3600       # samples for training window
@@ -99,14 +110,15 @@ detection:
   changepoint_min_size: 50  # minimum segment length between breakpoints
 
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
-  # Sprint 9: 6-detector ensemble (variance detector added for CATS-type data)
+  # Sprint 10: 7-detector ensemble (lstm GRU autoencoder added for ML cross-check)
   ensemble_weights:
-    cusum:            0.27   # primary: gradual drift accumulation
-    ewma:             0.22   # secondary: sudden level shifts
-    statistical:      0.18   # spike detection (single-point outliers)
-    changepoint:      0.13   # structural break detection
-    isolation_forest: 0.08   # multivariate (only for standard param names)
-    variance:         0.12   # variance-spike detector (CATS-type oscillatory signals)
+    cusum:            0.23   # primary: gradual drift accumulation
+    ewma:             0.19   # secondary: sudden level shifts
+    statistical:      0.15   # spike detection (single-point outliers)
+    changepoint:      0.11   # structural break detection
+    isolation_forest: 0.07   # multivariate (only for standard param names)
+    variance:         0.10   # variance-spike detector (CATS-type oscillatory signals)
+    lstm:             0.15   # GRU autoencoder — temporal pattern anomalies (ML)
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:
