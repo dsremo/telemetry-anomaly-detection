@@ -82,12 +82,14 @@ detection:
   changepoint_min_size: 50  # minimum segment length between breakpoints
 
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
+  # Sprint 9: 6-detector ensemble (variance detector added for CATS-type data)
   ensemble_weights:
-    cusum:            0.30   # primary: gradual drift accumulation
-    ewma:             0.25   # secondary: sudden level shifts
-    statistical:      0.20   # spike detection (single-point outliers)
-    changepoint:      0.15   # structural break detection
-    isolation_forest: 0.10   # multivariate (only for standard param names)
+    cusum:            0.27   # primary: gradual drift accumulation
+    ewma:             0.22   # secondary: sudden level shifts
+    statistical:      0.18   # spike detection (single-point outliers)
+    changepoint:      0.13   # structural break detection
+    isolation_forest: 0.08   # multivariate (only for standard param names)
+    variance:         0.12   # variance-spike detector (CATS-type oscillatory signals)
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:

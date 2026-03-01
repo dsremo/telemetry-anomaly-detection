@@ -378,7 +378,7 @@ async def get_channel_config(satellite_id: str, parameter: str) -> dict | None:
         row = await conn.fetchrow(
             """
             SELECT z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult,
-                   min_confidence, alert_cooldown_s, updated_at
+                   min_confidence, alert_cooldown_s, variance_z_threshold, updated_at
             FROM channel_config
             WHERE satellite_id = $1 AND parameter = $2
             """,
@@ -398,6 +398,7 @@ async def upsert_channel_config(
     ewma_sigma_mult: float | None = None,
     min_confidence: float | None = None,
     alert_cooldown_s: int | None = None,
+    variance_z_threshold: float | None = None,
 ) -> dict:
     """Insert or partially update per-channel threshold overrides.
 
@@ -413,25 +414,26 @@ async def upsert_channel_config(
                 (tenant_id, satellite_id, parameter,
                  z_threshold, cusum_h, cusum_k,
                  ewma_lambda, ewma_sigma_mult,
-                 min_confidence, alert_cooldown_s,
+                 min_confidence, alert_cooldown_s, variance_z_threshold,
                  updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
             ON CONFLICT (tenant_id, satellite_id, parameter) DO UPDATE
-                SET z_threshold     = COALESCE(EXCLUDED.z_threshold,     channel_config.z_threshold),
-                    cusum_h         = COALESCE(EXCLUDED.cusum_h,         channel_config.cusum_h),
-                    cusum_k         = COALESCE(EXCLUDED.cusum_k,         channel_config.cusum_k),
-                    ewma_lambda     = COALESCE(EXCLUDED.ewma_lambda,     channel_config.ewma_lambda),
-                    ewma_sigma_mult = COALESCE(EXCLUDED.ewma_sigma_mult, channel_config.ewma_sigma_mult),
-                    min_confidence  = COALESCE(EXCLUDED.min_confidence,  channel_config.min_confidence),
-                    alert_cooldown_s = COALESCE(EXCLUDED.alert_cooldown_s, channel_config.alert_cooldown_s),
-                    updated_at      = NOW()
+                SET z_threshold           = COALESCE(EXCLUDED.z_threshold,           channel_config.z_threshold),
+                    cusum_h               = COALESCE(EXCLUDED.cusum_h,               channel_config.cusum_h),
+                    cusum_k               = COALESCE(EXCLUDED.cusum_k,               channel_config.cusum_k),
+                    ewma_lambda           = COALESCE(EXCLUDED.ewma_lambda,           channel_config.ewma_lambda),
+                    ewma_sigma_mult       = COALESCE(EXCLUDED.ewma_sigma_mult,       channel_config.ewma_sigma_mult),
+                    min_confidence        = COALESCE(EXCLUDED.min_confidence,        channel_config.min_confidence),
+                    alert_cooldown_s      = COALESCE(EXCLUDED.alert_cooldown_s,      channel_config.alert_cooldown_s),
+                    variance_z_threshold  = COALESCE(EXCLUDED.variance_z_threshold,  channel_config.variance_z_threshold),
+                    updated_at            = NOW()
             RETURNING z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult,
-                      min_confidence, alert_cooldown_s, updated_at
+                      min_confidence, alert_cooldown_s, variance_z_threshold, updated_at
             """,
             get_tenant(), satellite_id, parameter,
             z_threshold, cusum_h, cusum_k,
             ewma_lambda, ewma_sigma_mult,
-            min_confidence, alert_cooldown_s,
+            min_confidence, alert_cooldown_s, variance_z_threshold,
         )
     return dict(row)
 
@@ -464,7 +466,7 @@ async def load_all_channel_configs(satellite_id: str | None = None) -> list[dict
                 SELECT tenant_id, satellite_id, parameter,
                        z_threshold, cusum_h, cusum_k,
                        ewma_lambda, ewma_sigma_mult,
-                       min_confidence, alert_cooldown_s
+                       min_confidence, alert_cooldown_s, variance_z_threshold
                 FROM channel_config
                 WHERE satellite_id = $1
                 """,
@@ -476,7 +478,7 @@ async def load_all_channel_configs(satellite_id: str | None = None) -> list[dict
                 SELECT tenant_id, satellite_id, parameter,
                        z_threshold, cusum_h, cusum_k,
                        ewma_lambda, ewma_sigma_mult,
-                       min_confidence, alert_cooldown_s
+                       min_confidence, alert_cooldown_s, variance_z_threshold
                 FROM channel_config
                 """
             )

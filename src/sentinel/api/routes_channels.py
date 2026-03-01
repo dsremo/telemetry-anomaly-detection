@@ -29,6 +29,7 @@ _OVERRIDE_FIELDS = (
     "z_threshold", "cusum_h", "cusum_k",
     "ewma_lambda", "ewma_sigma_mult",
     "min_confidence", "alert_cooldown_s",
+    "variance_z_threshold",
 )
 
 

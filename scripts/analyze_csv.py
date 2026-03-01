@@ -13,9 +13,14 @@ Run:
     python3 scripts/analyze_csv.py --file telemetry.csv --satellite-id MYSAT-1
     python3 scripts/analyze_csv.py --file eps.csv --satellite-id MYSAT-1 \\
         --subsystem eps --resample-minutes 5 --tenant my-tenant
-    # Auto-adaptive cooldown (recommended for non-satellite data):
+    # Override auto-detected cooldown explicitly:
     python3 scripts/analyze_csv.py --file sensors.csv --satellite-id SKAB-1 \\
-        --tenant skab-bench --auto-cooldown
+        --tenant skab-bench --cooldown-hours 2.0
+
+Alert cooldown is auto-detected by default (no flag needed):
+    Inspects the first 200 rows to determine median sampling interval, then
+    applies: cooldown = max(5 min, 500 × interval), capped at 72 h.
+    Use --cooldown-hours to override this behaviour.
 
 Requires:
     Sentinel DB running (postgres).  API server does NOT need to be up.
@@ -28,8 +33,6 @@ import asyncio
 import sys
 from pathlib import Path
 
-import pandas as pd
-
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
@@ -37,36 +40,7 @@ from sentinel.core.tenant import set_tenant
 from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
 from sentinel.ingest.csv_connector import CSVConnector
 from sentinel.ingest.pipeline import db_context, phase, print_run_header
-
-
-def _detect_data_frequency(file_path: Path, timestamp_col: str = "timestamp") -> float:
-    """Return median inter-sample interval in seconds by peeking at the first 200 rows.
-
-    Used to scale the alert cooldown to the data frequency:
-    - 1-second SCADA/industrial data → proportional to minutes
-    - 5-minute monitoring data       → proportional to hours
-    - 1-hour satellite telemetry     → proportional to days (original 72-360 h range)
-    """
-    sep = ";" if file_path.suffix == ".csv" and ";" in file_path.read_text()[:500] else ","
-    df = pd.read_csv(file_path, sep=sep, parse_dates=[timestamp_col], nrows=200)
-    ts = pd.to_datetime(df[timestamp_col], utc=True).sort_values()
-    if len(ts) < 2:
-        return 3600.0  # fallback: assume 1-hour data
-    diffs = ts.diff().dropna().dt.total_seconds()
-    return float(diffs.median())
-
-
-def _adaptive_cooldown(median_interval_s: float) -> float:
-    """Compute alert cooldown (hours) proportional to data frequency.
-
-    Formula: cooldown = max(5 minutes, 500 × median_interval).
-    - 1-second data  → 500 s  ≈ 8 min   (catches dense multi-window experiments)
-    - 5-minute data  → 2500 s ≈ 42 min
-    - 1-hour data    → 500 h  → capped at 72 h
-    """
-    cooldown_s = max(300.0, 500.0 * median_interval_s)
-    cooldown_s = min(cooldown_s, 72.0 * 3600.0)   # cap at 72 h
-    return cooldown_s / 3600.0
+from sentinel.ingest.utils import adaptive_cooldown_hours, detect_data_frequency
 
 
 async def main(
@@ -79,17 +53,17 @@ async def main(
     tenant_id: str,
     cooldown_hours: float | None,
     recal_factor: float | None,
-    auto_cooldown: bool,
     z_threshold: float | None,
     cusum_h_factor: float | None,
 ) -> None:
     set_tenant(tenant_id)
 
-    # Auto-detect data frequency and compute proportional cooldown.
+    # Auto-detect data frequency and compute proportional cooldown (default).
+    # Override with --cooldown-hours to bypass auto-detection.
     eff_cooldown = cooldown_hours
-    if auto_cooldown and cooldown_hours is None:
-        median_s = _detect_data_frequency(file_path, timestamp_col)
-        eff_cooldown = _adaptive_cooldown(median_s)
+    if eff_cooldown is None:
+        median_s = detect_data_frequency(file_path, timestamp_col)
+        eff_cooldown = adaptive_cooldown_hours(median_s)
         print(f"  [auto-cooldown] median interval={median_s:.1f}s → "
               f"cooldown={eff_cooldown*60:.0f} min ({eff_cooldown:.3f} h)")
 
@@ -160,9 +134,6 @@ if __name__ == "__main__":
     parser.add_argument("--recal-factor", type=float, default=None, metavar="F",
                         help="Override CUSUM recalibration sensitivity (default: config). "
                              "Higher = more stable baseline. Try 5.0–8.0 for short datasets.")
-    parser.add_argument("--auto-cooldown", action="store_true",
-                        help="Auto-detect data frequency and scale cooldown proportionally. "
-                             "Recommended for non-satellite CSV data. Ignored if --cooldown-hours set.")
     parser.add_argument("--z-threshold", type=float, default=None, metavar="Z",
                         help="Override z-score detection threshold (default: config, ~3.0). "
                              "Higher = less sensitive to spikes. Try 4.0–5.0 for seasonal/cyclical data.")
@@ -180,7 +151,6 @@ if __name__ == "__main__":
         tenant_id=args.tenant,
         cooldown_hours=args.cooldown_hours,
         recal_factor=args.recal_factor,
-        auto_cooldown=args.auto_cooldown,
         z_threshold=args.z_threshold,
         cusum_h_factor=args.cusum_h_factor,
     ))

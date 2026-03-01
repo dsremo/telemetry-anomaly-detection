@@ -42,11 +42,11 @@ class TestV14Migration:
         # v14 is at index 13 (0-based); v15 display_name/phone migration is at index 14
         self.v14_sql = _MIGRATIONS[13]
 
-    def test_schema_version_is_15(self):
-        assert self.schema_version == 15
+    def test_schema_version_is_16(self):
+        assert self.schema_version == 16
 
-    def test_total_migration_count_is_15(self):
-        assert len(self.all_migrations) == 15
+    def test_total_migration_count_is_16(self):
+        assert len(self.all_migrations) == 16
 
     def test_alert_configs_table_created(self):
         assert "CREATE TABLE IF NOT EXISTS alert_configs" in self.v14_sql

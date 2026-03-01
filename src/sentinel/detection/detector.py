@@ -48,6 +48,7 @@ from sentinel.detection.ewma import EWMADetector
 from sentinel.detection.isolation import IsolationForestDetector
 from sentinel.detection.statistical import StatisticalDetector
 from sentinel.detection.stl_decomposer import STLDecomposer
+from sentinel.detection.variance_detector import VarianceDetector
 from sentinel.features.engine import FeatureEngine
 
 logger = structlog.get_logger()
@@ -61,14 +62,17 @@ _ewma_detector:     EWMADetector             = EWMADetector()
 _stat_detector:     StatisticalDetector      = StatisticalDetector()
 _iso_detector:      IsolationForestDetector  = IsolationForestDetector()
 _cp_detector:       ChangePointDetector      = ChangePointDetector()
+_variance_detector: VarianceDetector         = VarianceDetector()
 
 # Ensemble weights (must sum to 1.0, overridable via config)
+# 6 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance
 WEIGHTS: dict[str, float] = {
-    "cusum":            0.30,
-    "ewma":             0.25,
-    "statistical":      0.20,
-    "changepoint":      0.15,
-    "isolation_forest": 0.10,
+    "cusum":            0.27,   # primary drift detector (NASA CUSUM standard)
+    "ewma":             0.22,   # level-shift detector
+    "statistical":      0.18,   # single-point spike detector (z-score)
+    "changepoint":      0.13,   # structural break detector (PELT)
+    "isolation_forest": 0.08,   # multivariate cross-parameter anomalies
+    "variance":         0.12,   # variance-spike detector (CATS-type oscillatory signals)
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -117,7 +121,7 @@ def init_detectors(settings: object) -> None:
     """Wire config values into all detector singletons.  Call once at startup."""
     global _feature_engine, _stl_decomposer, _calibration_mgr
     global _cusum_detector, _ewma_detector, _stat_detector
-    global _iso_detector, _cp_detector
+    global _iso_detector, _cp_detector, _variance_detector
     global WEIGHTS, _severity_thresholds
     global _last_processed_ts, _detection_cycle_count, _samples_since_fit
     global _alert_cooldown_s, _last_anomaly_ts
@@ -172,6 +176,12 @@ def init_detectors(settings: object) -> None:
 
     # ── CUSUM / EWMA ──────────────────────────────────────────────────────
     _cusum_detector = CUSUMDetector()
+
+    # ── Variance detector ─────────────────────────────────────────────────
+    _variance_detector = VarianceDetector(
+        variance_z_threshold=float(det.get("variance_z_threshold", 2.5)),
+        window=int(det.get("variance_window", 30)),
+    )
 
     # ── Ensemble weights ──────────────────────────────────────────────────
     cfg_weights = det.get("ensemble_weights", {})
@@ -238,13 +248,14 @@ def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
         return v if v is not None else default
 
     return {
-        "z_threshold":      _get("z_threshold",     _stat_detector.z_threshold),
-        "cusum_h":          _get("cusum_h",          None),   # None = calibration-computed
-        "cusum_k":          _get("cusum_k",          None),   # None = calibration-computed
-        "ewma_lambda":      _get("ewma_lambda",      None),   # None = calibration-computed
-        "ewma_sigma_mult":  _get("ewma_sigma_mult",  None),   # None = calibration-computed
-        "min_confidence":   _get("min_confidence",   0.0),
-        "alert_cooldown_s": _get("alert_cooldown_s", _alert_cooldown_s),
+        "z_threshold":         _get("z_threshold",         _stat_detector.z_threshold),
+        "cusum_h":             _get("cusum_h",             None),   # None = calibration-computed
+        "cusum_k":             _get("cusum_k",             None),   # None = calibration-computed
+        "ewma_lambda":         _get("ewma_lambda",         None),   # None = calibration-computed
+        "ewma_sigma_mult":     _get("ewma_sigma_mult",     None),   # None = calibration-computed
+        "min_confidence":      _get("min_confidence",      0.0),
+        "alert_cooldown_s":    _get("alert_cooldown_s",    _alert_cooldown_s),
+        "variance_z_threshold": _get("variance_z_threshold", _variance_detector.variance_z_threshold),
     }
 
 
@@ -481,7 +492,22 @@ async def analyze_channel_history(
             severity=Severity.NOMINAL, details={"reason": "non_standard_parameters"},
         )
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result]
+        # Variance detector: use calibration from the last new point.
+        last_cal = _calibration_mgr.get(key)
+        var_result = (
+            _variance_detector.detect(
+                residuals,
+                last_cal,
+                eff.get("variance_z_threshold"),
+            )
+            if last_cal is not None and last_cal.is_calibrated
+            else DetectorResult(
+                detector_name="variance", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "warming_up"},
+            )
+        )
+
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -678,8 +704,22 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             )
         )
 
-        # ── 8. Ensemble vote ─────────────────────────────────────────────
-        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result]
+        # ── 8. Variance detector on residuals (variance-spike anomalies) ─
+        var_result = (
+            _variance_detector.detect(
+                residuals,
+                calibration,
+                eff.get("variance_z_threshold"),
+            )
+            if calibration is not None and calibration.is_calibrated
+            else DetectorResult(
+                detector_name="variance", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "warming_up"},
+            )
+        )
+
+        # ── 9. Ensemble vote ─────────────────────────────────────────────
+        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -900,6 +940,15 @@ def _build_explanation(
                         "Cross-parameter anomaly — top contributors: "
                         + ", ".join(f"{k}:{v:+.3f}" for k, v in top)
                     )
+            case "variance":
+                ratio = r.details.get("ratio", 0)
+                threshold = r.details.get("threshold", 2.5)
+                rolling_std = r.details.get("rolling_std", 0)
+                ref_std = r.details.get("ref_std", 0)
+                parts.append(
+                    f"Variance spike: rolling_std/ref_std = {ratio:.2f}× "
+                    f"(threshold: {threshold}, rolling={rolling_std:.4f}, ref={ref_std:.4f})"
+                )
 
     parts.append(f"{len(triggered)}/{len(results)} detectors triggered")
     return " | ".join(parts)

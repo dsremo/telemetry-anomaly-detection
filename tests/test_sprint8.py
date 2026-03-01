@@ -48,19 +48,14 @@ def _ts(offset_s: float) -> datetime:
 # ---------------------------------------------------------------------------
 
 def cluster_events(timestamps: list[datetime], gap_s: float) -> list[datetime]:
-    """Group timestamps into events: a new event starts when gap > gap_s."""
-    if not timestamps:
-        return []
-    events: list[datetime] = []
-    cur_start = cur_last = timestamps[0]
-    for t in timestamps[1:]:
-        if (t - cur_last).total_seconds() <= gap_s:
-            cur_last = t
-        else:
-            events.append(cur_start)
-            cur_start = cur_last = t
-    events.append(cur_start)
-    return events
+    """Group timestamps into events; return the start time of each event.
+
+    Sprint 9: delegates to sentinel.eval.scoring.cluster_events and returns
+    the first timestamp of each cluster (for backwards-compat with these tests).
+    """
+    from sentinel.eval.scoring import cluster_events as _ce
+    clusters = _ce(timestamps, gap_s=gap_s)
+    return [c[0] for c in clusters]
 
 
 class TestClusterEvents:
@@ -390,7 +385,7 @@ class TestBenchmarkScoring:
 # ---------------------------------------------------------------------------
 
 def _parse_analyze_csv_args(args: list[str]) -> argparse.Namespace:
-    """Replicate the argument parser from analyze_csv.py."""
+    """Replicate the argument parser from analyze_csv.py (Sprint 9: no --auto-cooldown flag)."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", required=True)
     parser.add_argument("--satellite-id", required=True)
@@ -398,7 +393,7 @@ def _parse_analyze_csv_args(args: list[str]) -> argparse.Namespace:
     parser.add_argument("--resample-minutes", type=int, default=None)
     parser.add_argument("--cooldown-hours", type=float, default=None)
     parser.add_argument("--recal-factor", type=float, default=None)
-    parser.add_argument("--auto-cooldown", action="store_true")
+    # Sprint 9: --auto-cooldown removed; auto-detect is now the default behaviour.
     parser.add_argument("--z-threshold", type=float, default=None)
     parser.add_argument("--cusum-h-factor", type=float, default=None)
     parser.add_argument("--skip-if-rows-gte", type=int, default=None)
@@ -428,24 +423,19 @@ class TestCLIFlags:
         ns = _parse_analyze_csv_args(["--file", "x.csv", "--satellite-id", "S1"])
         assert ns.cusum_h_factor is None
 
-    def test_auto_cooldown_flag_is_boolean(self):
-        ns_on  = _parse_analyze_csv_args(
-            ["--file", "x.csv", "--satellite-id", "S1", "--auto-cooldown"]
-        )
-        ns_off = _parse_analyze_csv_args(["--file", "x.csv", "--satellite-id", "S1"])
-        assert ns_on.auto_cooldown is True
-        assert ns_off.auto_cooldown is False
+    def test_cooldown_hours_default_is_none_triggers_auto_detect(self):
+        # Sprint 9: cooldown_hours=None → auto-cooldown activated in main()
+        ns = _parse_analyze_csv_args(["--file", "x.csv", "--satellite-id", "S1"])
+        assert ns.cooldown_hours is None  # auto-detect will fire
 
     def test_all_tuning_flags_together(self):
         ns = _parse_analyze_csv_args([
             "--file", "x.csv", "--satellite-id", "S1",
-            "--auto-cooldown",
             "--z-threshold", "6.0",
             "--cusum-h-factor", "20.0",
             "--recal-factor", "8.0",
             "--resample-minutes", "60",
         ])
-        assert ns.auto_cooldown is True
         assert ns.z_threshold == pytest.approx(6.0)
         assert ns.cusum_h_factor == pytest.approx(20.0)
         assert ns.recal_factor == pytest.approx(8.0)

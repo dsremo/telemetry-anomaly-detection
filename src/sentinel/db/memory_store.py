@@ -329,6 +329,7 @@ async def upsert_channel_config(
     ewma_sigma_mult: float | None = None,
     min_confidence: float | None = None,
     alert_cooldown_s: int | None = None,
+    variance_z_threshold: float | None = None,
 ) -> dict:
     """Insert or partial-update in-memory channel config. Returns the full row."""
     from datetime import timezone
@@ -336,10 +337,12 @@ async def upsert_channel_config(
     with _lock:
         existing = _channel_configs.get(key, {})
         _FIELDS = ("z_threshold", "cusum_h", "cusum_k", "ewma_lambda",
-                   "ewma_sigma_mult", "min_confidence", "alert_cooldown_s")
+                   "ewma_sigma_mult", "min_confidence", "alert_cooldown_s",
+                   "variance_z_threshold")
         new_vals = dict(zip(
             _FIELDS,
-            (z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult, min_confidence, alert_cooldown_s),
+            (z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult,
+             min_confidence, alert_cooldown_s, variance_z_threshold),
         ))
         merged = {
             f: (new_vals[f] if new_vals[f] is not None else existing.get(f))

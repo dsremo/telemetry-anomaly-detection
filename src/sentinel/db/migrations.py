@@ -33,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +761,19 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE sentinel_users
         ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '',
         ADD COLUMN IF NOT EXISTS phone        TEXT NOT NULL DEFAULT '';
+    """,
+
+    # v16: Variance detector per-channel threshold override.
+    #
+    # Adds variance_z_threshold to channel_config so operators can tune
+    # the VarianceDetector sensitivity per-channel (e.g. lower for high-noise
+    # oscillatory channels like CATS ced1, higher for stable DC channels).
+    #
+    # NULL = use global default (2.5).  Same COALESCE pattern as all other
+    # channel_config columns.
+    """
+    ALTER TABLE channel_config
+        ADD COLUMN IF NOT EXISTS variance_z_threshold REAL;
     """,
 ]
 

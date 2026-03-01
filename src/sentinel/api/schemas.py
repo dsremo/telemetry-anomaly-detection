@@ -341,6 +341,11 @@ class ChannelConfigIn(BaseModel):
         default=None, ge=0,
         description="Per-channel alert cooldown in seconds (≥ 0)"
     )
+    variance_z_threshold: float | None = Field(
+        default=None, gt=0,
+        description="Variance detector ratio threshold (> 0). Default: 2.5. "
+                    "Lower for high-noise oscillatory channels; higher for stable DC channels."
+    )
 
 
 class ChannelConfigOut(BaseModel):

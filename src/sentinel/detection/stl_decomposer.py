@@ -113,7 +113,7 @@ class STLDecomposer:
         )
 
         if needs_recompute:
-            period_samples = self._estimate_period(timestamps, n)
+            period_samples = self._estimate_period(timestamps, n, values)
             ch.last_result = self._compute(values, period_samples)
             ch.last_n = n
             ch.calls_since_recompute = 0
@@ -132,13 +132,31 @@ class STLDecomposer:
     # ------------------------------------------------------------------
 
     def _estimate_period(
-        self, timestamps: np.ndarray | None, n: int
+        self,
+        timestamps: np.ndarray | None,
+        n: int,
+        values: np.ndarray | None = None,
     ) -> int:
-        """Estimate orbital period in samples from actual timestamp spacing.
+        """Estimate dominant period in samples, using FFT first.
 
-        Returns 0 when the data is too coarse to resolve orbital periodicity
-        (i.e. the sampling interval >> orbital period).
+        Strategy (in priority order):
+        1. FFT on the value window — finds any strong periodic component in
+           the actual data, regardless of the orbital hint.  This handles
+           non-orbital signals (CATS ced1 ~90s oscillation) and also finds
+           the correct period for real orbital data.
+        2. Orbital hint — orbital_period_s / median_interval_s.  Used only
+           when FFT finds nothing and the interval is resolvable.
+        3. Return 0 → caller uses savgol_trend fallback.
+
+        Returns 0 when the data is too coarse to resolve any periodicity.
         """
+        # ── FFT-based period detection (primary) ──────────────────────
+        if values is not None and len(values) >= 8:
+            fft_period = self._fft_period(values[-min(n, 600):])
+            if fft_period > 0:
+                return fft_period
+
+        # ── Orbital period hint (fallback) ────────────────────────────
         if timestamps is None or len(timestamps) < 2:
             return 0
 
@@ -154,8 +172,74 @@ class STLDecomposer:
 
         period_samples = self._orbital_period_s / median_interval_s
 
-        # Need at least 4 samples per cycle for meaningful decomposition.
-        return int(period_samples) if period_samples >= 4.0 else 0
+        # Need at least 4 samples per cycle AND at most n//2 (two complete
+        # cycles must fit in the window) for meaningful STL decomposition.
+        if period_samples >= 4.0 and int(period_samples) <= n // 2:
+            return int(period_samples)
+        return 0
+
+    @staticmethod
+    def _fft_period(values: np.ndarray, min_period: int = 4) -> int:
+        """Return dominant period in samples via FFT, or 0 if none found.
+
+        Uses np.fft.rfft (stdlib numpy — no new deps).
+
+        Algorithm:
+        1. Linearly detrend the window to remove DC offset and slow drift
+           before FFT (otherwise the DC component dominates the spectrum).
+        2. Compute the real-FFT amplitude spectrum.
+        3. Exclude DC (index 0) and the Nyquist bin (last index).
+        4. Find the peak amplitude bin.
+        5. Accept the peak only if its amplitude is > 2× the median of all
+           non-DC bins — this filters broadband noise that has no dominant
+           frequency (a flat spectrum has peak ≈ median).
+        6. Convert peak bin index to period: period = n / peak_bin.
+        7. Reject if period < min_period or period > n//2.
+
+        Args:
+            values:     1-D signal array (oldest → newest).
+            min_period: Minimum acceptable period in samples (default 4).
+
+        Returns:
+            Dominant period in samples (integer ≥ min_period), or 0.
+
+        Examples:
+            >>> x = np.sin(2 * np.pi * np.arange(300) / 30)  # period=30
+            >>> STLDecomposer._fft_period(x)
+            30
+        """
+        n = len(values)
+        if n < 2 * min_period:
+            return 0
+
+        # Linear detrend: subtract the best-fit line to remove DC + slow drift.
+        detrended = values - np.linspace(float(values[0]), float(values[-1]), n)
+
+        spectrum = np.abs(np.fft.rfft(detrended))
+        # Skip DC (index 0) and Nyquist (last) — only examine interior bins.
+        interior = spectrum[1:-1]
+        if len(interior) == 0:
+            return 0
+
+        peak_pos   = int(np.argmax(interior))   # index within interior
+        peak_amp   = float(interior[peak_pos])
+        median_amp = float(np.median(interior))
+
+        # Require the peak to stand clearly above the noise floor.
+        # For Gaussian noise (n=300), expected peak/median ≈ 2.7× due to
+        # chi-squared statistics; threshold of 4.0× filters noise reliably
+        # while still detecting real periodic signals (pure sine >> 10×).
+        if median_amp < 1e-12 or peak_amp < 4.0 * median_amp:
+            return 0   # No dominant frequency — broadband noise
+
+        # peak_pos in interior → actual FFT bin = peak_pos + 1 (skip DC)
+        peak_bin = peak_pos + 1
+        period   = n / peak_bin
+
+        if period < min_period or period > n // 2:
+            return 0
+
+        return int(round(period))
 
     # ------------------------------------------------------------------
     # Decomposition
