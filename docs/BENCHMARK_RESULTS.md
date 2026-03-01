@@ -326,25 +326,138 @@ anomalies. Added to the sprint roadmap with higher priority after this finding.
 
 ---
 
+## Dataset 8: OPS-SAT-AD — Real ESA OPS-SAT Spacecraft Housekeeping Telemetry
+
+**Source:** [Zenodo record 12588359](https://zenodo.org/records/12588359) — peer-reviewed in Nature Scientific Data
+**Setup:** Real ESA OPS-SAT satellite, 9 housekeeping channels (CADC0872–0894), 1 Hz, June 2022 test set
+**Volume:** 215,050 rows (5 channels used: CADC0872, CADC0873, CADC0874, CADC0892, CADC0894)
+**GT:** 37 labeled anomaly windows from the test split (train=0)
+
+### Results (OPSSAT-3: raw 1Hz, auto-cooldown 8.3 min, z=3.5)
+
+| Scoring | Detections | Events | Precision | Recall | F1 |
+|---|---|---|---|---|---|
+| ±5 min raw | 332 | — | 11% | **100%** | 20% |
+| ±5 min event (5-min cluster) | — | 55 | 47% | 70% | 57% |
+| ±15 min raw | 332 | — | 11% | **100%** | 20% |
+| ±15 min event | — | 55 | 62% | 92% | 74% |
+| **±30 min raw** | **332** | **—** | **11%** | **100%** | **20%** |
+| **±30 min event** | **—** | **55** | **67%** | **100%** | **80%** |
+
+### Key Findings
+
+**100% recall at ±30min event level.** The 5 housekeeping channels (EPS / ADCS housekeeping)
+all respond to the same spacecraft anomaly events, producing 5 detections per window.
+Event-level clustering (5-min gap) reduces 332 raw detections → 55 events, of which
+37 match GT windows → P=67%, R=100%, F1=80%.
+
+**Signal characteristics:** OPS-SAT housekeeping channels are near-stationary (σ=µA–mV range)
+with sudden step-changes during anomalies — ideal for our z-score + CUSUM + EWMA stack.
+This contrasts with CATS (continuously oscillating) and confirms the detector is well-suited
+for real spacecraft sensor data.
+
+**1Hz vs 1-min resample comparison:**
+
+| Config | Detections | Events | Precision | Recall | F1 |
+|---|---|---|---|---|---|
+| 1-min resample, cooldown=30min | 121 | 60 | 62% | 100% | 76% |
+| **Raw 1Hz, auto-cooldown** | **332** | **55** | **67%** | **100%** | **80%** |
+
+Raw 1Hz with auto-cooldown outperforms resampling: higher precision (67% vs 62%) at same recall.
+
+---
+
+## Dataset 9: CATS — Controlled Anomalies Time Series (ESA Contractor Simulation)
+
+**Source:** [Zenodo record 8338435](https://zenodo.org/records/8338435) — Solenix / ESA, peer-reviewed
+**Setup:** Simulated spacecraft-like dynamical system, 3 observable channels (ced1, cfo1, cso1),
+5,000,000 rows at 1 Hz (46 days), 200 labeled anomaly windows, average window duration 16 min
+**Volume:** 5M rows, 409 MB CSV
+
+### Signal Characteristics (key discovery)
+
+| Channel | Normal μ | Normal σ | Anomaly μ | Anomaly σ | Anomaly/Normal ratio |
+|---|---|---|---|---|---|
+| ced1 | 382.2 | **137.5** | 412.1 | 310.9 | **0.2σ** |
+| cfo1 | -10.6 | 14.5 | -11.1 | 21.9 | 0.0σ |
+| cso1 | 43.2 | 15.9 | 41.4 | 45.6 | 0.1σ |
+
+**Key finding:** CATS anomalies are **variance spikes**, not mean shifts.
+The mean difference (anomaly vs normal) is only 0.0–0.2σ — imperceptible to z-score / CUSUM.
+However, the anomaly variance is 2–3× larger, and extreme spikes reach ced1=6354
+vs normal max=1107. Anomaly detection requires **variance-change detection** or
+**STL decomposition** to separate the continuous sinusoidal normal behavior from injected faults.
+
+### Results
+
+| Config | Satellite | Detections | Recall ±5min | Precision | F1 |
+|---|---|---|---|---|---|
+| Baseline: z=3.0, auto-cooldown (8.3 min) | CATS-2 | 22,972 | **100%** | 1% | 2% |
+| Tuned: z=6.0, cooldown=6h, cusum-h=20 | CATS-3 | 686 | 10% | 3% | 5% |
+
+### Root Cause Analysis
+
+**Why CATS-2 (baseline) fires constantly:**
+- `ced1` has a sinusoidal oscillation with σ=137.5 and a 200-sample calibration window (3.3 min)
+- In 3.3 min the signal sweeps only a fraction of its full cycle, so the calibrated σ is small
+- Values at the top of the cycle score as 6–10σ above the short-window mean → fires every 8.3 min
+- Over 46 days × 3 channels: 22,972 detections (near-theoretical maximum for 8.3-min cooldown)
+- **100% recall** is achieved — every GT window is covered — but precision collapses to 1%
+
+**Why CATS-3 (z=6.0) loses recall:**
+- z=6 threshold for ced1: baseline μ±6σ ≈ 382±825 → fires only at values >1207 or <−443
+- ced1 normal max=1107 < 1207 → z=6 successfully suppresses most FPs
+- But CATS anomalies at the **mean level** are only 0.2σ from normal mean — they don't reach 6σ
+- Only the most extreme spike anomalies (ced1 peak=6354) fire → only 10% of the 200 windows caught
+
+### What This Means
+
+CATS is the **hardest dataset in the benchmark** because:
+1. The observable channels have **always-on oscillatory dynamics** (sinusoidal, drift, random)
+2. Injected anomalies change the **variance** rather than the mean
+3. Our detectors (z-score, CUSUM, EWMA) are designed for **stationary or slowly-drifting** signals
+
+**Operational guidance for CATS-type systems:**
+```bash
+# Option A — "smoke detector" mode: catch everything, triage manually
+--z-threshold 3.0 --auto-cooldown  # R=100%, P=1%
+
+# Option B — high-confidence alerts only (misses many)
+--z-threshold 6.0 --cooldown-hours 6  # R=10%, P=3%
+
+# Option C (roadmap) — STL decomposition + residual detection
+# Correct approach: decompose seasonal trend, detect in residuals
+# Estimated outcome: R=85%+, P=60%+
+```
+
+**Roadmap item:** STL decomposition is elevated to **highest priority** after CATS findings.
+CATS, NAB Traffic Speed, and GECCO Water all share the same root cause: our detectors work on
+the raw signal rather than the residual after seasonal/trend removal.
+
+---
+
 ## Summary Across All Validation Sets
 
-| Dataset | Domain | Data Freq | Events | Recall |
-|---|---|---|---|---|
-| ISS real telemetry (blind) | Satellite | varies | 4/4 | **100%** |
-| ESA Mission 1 archive | Satellite | varies | 8,795 detected | — |
-| NAB Machine Temperature | Industrial (OOD) | 5-min | 3/4 (early-warning) | **75%** |
-| NAB Ambient Temperature | HVAC (OOD) | 5-min | 2/2 | **100%** |
-| NAB NYC Taxi Demand | Urban IoT (OOD) | 30-min | 3/5 | **60%** |
-| SKAB valve1 (baseline) | Industrial (1-sec) | 1-sec | 2/6 | 28.6% |
-| **SKAB valve1 (improved)** | **Industrial (1-sec)** | **1-sec** | **6/6** | **100%** |
-| **SKAB valve2 (improved)** | **Industrial pump (1-sec)** | **1-sec** | **3/3** | **100%** |
-| **NAB AWS ELB** | **Cloud infra (5-min)** | **5-min** | **1/2 ±3h / 2/2 ±7d** | **50–100%** |
-| **NAB AWS RDS** | **Cloud infra (5-min)** | **5-min** | **2/2** | **100%** |
-| **GECCO Water Quality** | **Municipal IoT (1-min)** | **1-min** | **45/51** | **88% recall, 2% prec** |
-| **NAB Traffic TravelTime** | **Road traffic (10-min)** | **10-min** | **3/3 ±7d** | **100%** |
-| **NAB Traffic Speed** | **Road traffic (5-min)** | **5-min** | **2/4** | **50%** |
+| Dataset | Domain | Data Freq | Events | Recall | F1 |
+|---|---|---|---|---|---|
+| ISS real telemetry (blind) | Satellite | varies | 4/4 | **100%** | — |
+| ESA Mission 1 archive | Satellite | varies | 8,795 detected | — | — |
+| NAB Machine Temperature | Industrial (OOD) | 5-min | 3/4 early-warning | **75%** | 66.7% |
+| NAB Ambient Temperature | HVAC (OOD) | 5-min | 2/2 | **100%** | 26.7% |
+| NAB NYC Taxi Demand | Urban IoT (OOD) | 30-min | 3/5 | **60%** | 42.9% |
+| SKAB valve1 (baseline) | Industrial (1-sec) | 1-sec | 2/6 | 28.6% | 36.4% |
+| **SKAB valve1+2 (improved)** | **Industrial (1-sec)** | **1-sec** | **6/6** | **100%** | **80.8%** |
+| **NAB AWS ELB** | **Cloud infra (5-min)** | **5-min** | **1/2 ±3h / 2/2 ±7d** | **50–100%** | — |
+| **NAB AWS RDS** | **Cloud infra (5-min)** | **5-min** | **2/2** | **100%** | — |
+| **GECCO Water Quality** | **Municipal IoT (1-min)** | **1-min** | **45/51** | **88%** | 4% |
+| **NAB Traffic TravelTime** | **Road traffic (10-min)** | **10-min** | **3/3 ±7d** | **100%** | 75% |
+| **NAB Traffic Speed** | **Road traffic (5-min)** | **5-min** | **2/4** | **50%** | 67% |
+| **OPS-SAT-AD (ESA real)** | **Spacecraft HK (1-Hz)** | **1-Hz** | **37/37** | **100%** | **80%** |
+| **CATS (ESA sim, z=3)** | **Spacecraft sim (1-Hz)** | **1-Hz** | **200/200** | **100%** | **2%** |
+| **CATS (ESA sim, z=6)** | **Spacecraft sim (1-Hz)** | **1-Hz** | **20/200** | **10%** | **5%** |
 
 *OOD = out-of-domain (default config not tuned for these data types)*
+*CATS F1 low due to continuous sinusoidal normal dynamics — requires STL decomposition (roadmap)*
 
 ## New CLI Flags Added (from benchmark findings)
 
@@ -361,7 +474,9 @@ anomalies. Added to the sprint roadmap with higher priority after this finding.
 
 | Limitation | Observed In | Fix | Priority |
 |---|---|---|---|
+| Continuous oscillatory signal saturates baseline detectors | **CATS (1-Hz spacecraft sim)** | STL decomposition → detect on residuals | **Critical** |
 | Calibration window too short for diurnal cycles | GECCO water quality (1-min) | Auto-scale calibration window to ≥3× dominant period | High |
 | CUSUM adapts to recurring periodic anomalies | NAB Traffic speed (rush hours) | STL seasonal decomposition before detection | High |
 | Early-warning fires before window → cooldown blocks in-window | NAB ELB | Sliding-window dedup instead of fixed cooldown | Medium |
-| No multi-channel event aggregation | SKAB (all), GECCO | Event-level API endpoint: group by time + satellite | Medium |
+| No multi-channel event aggregation | SKAB (all), GECCO, OPS-SAT | Event-level API endpoint: group by time + satellite | Medium |
+| Variance-change anomalies not detected | CATS (injected fault type) | Variance/GARCH-based detector as 6th ensemble member | Medium |
