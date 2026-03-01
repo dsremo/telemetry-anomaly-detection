@@ -80,6 +80,8 @@ async def main(
     cooldown_hours: float | None,
     recal_factor: float | None,
     auto_cooldown: bool,
+    z_threshold: float | None,
+    cusum_h_factor: float | None,
 ) -> None:
     set_tenant(tenant_id)
 
@@ -126,6 +128,8 @@ async def main(
                 subsystem_map={p: subsystem for p in parameters},
                 cooldown_hours=eff_cooldown,
                 recal_factor=recal_factor,
+                z_threshold=z_threshold,
+                cusum_h_factor=cusum_h_factor,
             )
             print(f"  {sum(len(v) for v in results.values())} anomalies")
 
@@ -159,6 +163,12 @@ if __name__ == "__main__":
     parser.add_argument("--auto-cooldown", action="store_true",
                         help="Auto-detect data frequency and scale cooldown proportionally. "
                              "Recommended for non-satellite CSV data. Ignored if --cooldown-hours set.")
+    parser.add_argument("--z-threshold", type=float, default=None, metavar="Z",
+                        help="Override z-score detection threshold (default: config, ~3.0). "
+                             "Higher = less sensitive to spikes. Try 4.0–5.0 for seasonal/cyclical data.")
+    parser.add_argument("--cusum-h-factor", type=float, default=None, metavar="H",
+                        help="Override CUSUM decision threshold multiplier (default: config, ~8.0). "
+                             "Higher = requires larger drift before alarm. Try 12–20 for step-change data.")
     args = parser.parse_args()
     asyncio.run(main(
         file_path=args.file,
@@ -171,4 +181,6 @@ if __name__ == "__main__":
         cooldown_hours=args.cooldown_hours,
         recal_factor=args.recal_factor,
         auto_cooldown=args.auto_cooldown,
+        z_threshold=args.z_threshold,
+        cusum_h_factor=args.cusum_h_factor,
     ))

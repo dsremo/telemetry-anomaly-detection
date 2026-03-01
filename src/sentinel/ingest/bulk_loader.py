@@ -149,6 +149,8 @@ async def run_bulk_detection(
     batch_size: int = 600,
     cooldown_hours: float | None = None,
     recal_factor: float | None = None,
+    z_threshold: float | None = None,
+    cusum_h_factor: float | None = None,
 ) -> dict[str, list[Anomaly]]:
     """Run streaming anomaly detection over all stored channels.
 
@@ -166,6 +168,10 @@ async def run_bulk_detection(
                          Scale to data frequency: e.g. 0.05 (3 min) for 1-second data.
         recal_factor:    Override CUSUM recalibration sensitivity. None = use config.
                          Higher = more stable baseline (less chasing of anomalous data).
+        z_threshold:     Override z-score threshold. None = use config (default 3.0).
+                         Higher = less sensitive to spikes (try 4.0–5.0 for seasonal data).
+        cusum_h_factor:  Override CUSUM decision threshold multiplier. None = use config.
+                         Higher = requires larger drift accumulation before alarm (try 12–20).
 
     Returns:
         Dict mapping each parameter name to its list of detected Anomaly objects.
@@ -174,14 +180,20 @@ async def run_bulk_detection(
     import sentinel.detection.calibration as _cal_mod
 
     # Apply transient overrides — saved and restored after detection.
-    _orig_cooldown = _det_mod._alert_cooldown_s
-    _orig_recal    = _cal_mod.RECAL_FACTOR
+    _orig_cooldown  = _det_mod._alert_cooldown_s
+    _orig_recal     = _cal_mod.RECAL_FACTOR
+    _orig_z         = _det_mod._stat_detector.z_threshold
+    _orig_cusum_h   = _cal_mod.CUSUM_H_FACTOR
 
     if cooldown_hours is not None:
         _det_mod._alert_cooldown_s = cooldown_hours * 3600.0
         _det_mod._last_anomaly_ts.clear()   # reset per-channel timers on cooldown change
     if recal_factor is not None:
         _cal_mod.RECAL_FACTOR = recal_factor
+    if z_threshold is not None:
+        _det_mod._stat_detector.z_threshold = z_threshold
+    if cusum_h_factor is not None:
+        _cal_mod.CUSUM_H_FACTOR = cusum_h_factor
     results: dict[str, list[Anomaly]] = {}
 
     for param in tqdm(parameters, desc="Detecting", unit="ch"):
@@ -224,8 +236,10 @@ async def run_bulk_detection(
     await flush_all_states()
 
     # Restore original detector settings (overrides are run-scoped only).
-    _det_mod._alert_cooldown_s = _orig_cooldown
-    _cal_mod.RECAL_FACTOR      = _orig_recal
+    _det_mod._alert_cooldown_s          = _orig_cooldown
+    _cal_mod.RECAL_FACTOR               = _orig_recal
+    _det_mod._stat_detector.z_threshold = _orig_z
+    _cal_mod.CUSUM_H_FACTOR             = _orig_cusum_h
 
     return results
 
