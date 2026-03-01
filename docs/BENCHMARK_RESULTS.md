@@ -254,6 +254,21 @@ for systems where anomalies develop over multiple days.
 |---|---|---|---|---|---|
 | Baseline (8.3h cooldown, default z=3.0, 1-min data) | 727 | 330 | 88% | 2% | 4% |
 | Improved (48h cooldown, z=3.5, **hourly resample**) | 26 | 12 | 4% | 8% | 5% |
+| **Sprint 9 (STL FFT + VarianceDetector, GECCO-WATER-STL)** | 1,936 | 394 | 29.4% | 3.8% | **6.8%** |
+
+### Sprint 9 Analysis
+
+**What changed:** STL FFT auto-period detection + 6th ensemble member (VarianceDetector).
+Variance detector fires on 5 of 9 channels. STL FFT detects spurious 300-min / 120-min periods
+within the 600-sample sliding window rather than the true 24h (1440-sample) diurnal cycle.
+
+**Root cause of limited improvement:** The 600-sample sliding window spans only 10 hours at
+1-minute resolution. A 24h (1440-sample) period requires a 2880-point window for STL — 4.8×
+larger than the current architecture allows. FFT detects sub-harmonic artifacts (300 min, 120 min)
+instead of the true 24h period. The seasonal removal is therefore incomplete.
+
+**Architectural limitation identified:** `context_window=600` is the binding constraint.
+Fix requires Sprint 10: auto-scale context window to max(600, 3 × dominant_period).
 
 ### Root Cause: Calibration Window Too Short for Diurnal Cycles
 
@@ -267,10 +282,10 @@ anomalies for 51 actual events.
 of the 51 GT windows (only 4% recall). The hourly averages smooth out the short, sharp
 anomaly spikes (many GECCO events last only 30–120 minutes).
 
-**The fix requires STL seasonal decomposition** — remove the diurnal trend before applying
-the z-score/CUSUM detectors so the residuals represent only the unexplained variation.
-This is on the roadmap (PELT already in the stack handles step-changes;
-full STL decomposition needed for cyclical data).
+**The fix requires STL seasonal decomposition with adequate window size** — the STL context
+window must be at least 3× the dominant period (3 × 1440 = 4320 samples for GECCO).
+Current Sprint 9 STL is applied but on a 600-sample window → can't capture 24h period.
+Sprint 10 will auto-scale the context window based on FFT-detected period.
 
 **Tuning for production use with GECCO-type data:**
 ```bash
@@ -331,7 +346,7 @@ anomalies. Added to the sprint roadmap with higher priority after this finding.
 **Source:** [Zenodo record 12588359](https://zenodo.org/records/12588359) — peer-reviewed in Nature Scientific Data
 **Setup:** Real ESA OPS-SAT satellite, 9 housekeeping channels (CADC0872–0894), 1 Hz, June 2022 test set
 **Volume:** 215,050 rows (5 channels used: CADC0872, CADC0873, CADC0874, CADC0892, CADC0894)
-**GT:** 37 labeled anomaly windows from the test split (train=0)
+**GT:** 17 labeled anomaly windows (test split, June 2 2022); broader dataset has 37 total.
 
 ### Results (OPSSAT-3: raw 1Hz, auto-cooldown 8.3 min, z=3.5)
 
@@ -342,7 +357,8 @@ anomalies. Added to the sprint roadmap with higher priority after this finding.
 | ±15 min raw | 332 | — | 11% | **100%** | 20% |
 | ±15 min event | — | 55 | 62% | 92% | 74% |
 | **±30 min raw** | **332** | **—** | **11%** | **100%** | **20%** |
-| **±30 min event** | **—** | **55** | **67%** | **100%** | **80%** |
+| **±30 min event (17 GT)** | **—** | **55** | **60.7%** | **100%** | **75.6%** |
+| ±30 min event (37 GT, historical) | — | 55 | 67% | 100% | 80% |
 
 ### Key Findings
 
@@ -390,10 +406,16 @@ vs normal max=1107. Anomaly detection requires **variance-change detection** or
 
 ### Results
 
-| Config | Satellite | Detections | Recall ±5min | Precision | F1 |
-|---|---|---|---|---|---|
-| Baseline: z=3.0, auto-cooldown (8.3 min) | CATS-2 | 22,972 | **100%** | 1% | 2% |
-| Tuned: z=6.0, cooldown=6h, cusum-h=20 | CATS-3 | 686 | 10% | 3% | 5% |
+| Config | Satellite | Detections | Events | Precision | Recall | F1 |
+|---|---|---|---|---|---|---|
+| Baseline: z=3.0, auto-cooldown (8.3 min) | CATS-2 | 22,972 | — | 1% | **100%** | 2% |
+| Tuned: z=6.0, cooldown=6h, cusum-h=20 | CATS-3 (1-min) | 686 | 229 | 16.5% | 19.0% | **17.7%** |
+| **Sprint 9: STL FFT + VarianceDetector (1-min)** | CATS-1MIN-STL | 408 | 163 | 11.0% | 9.0% | **9.9%** |
+
+**Sprint 9 note (1-min dataset):** The variance detector fires on `cso1` (σ-inflation confirmed),
+but the critical `ced1` oscillation (90s period at 1Hz) is below the Nyquist limit at 1-min sampling
+and cannot be detected or removed by STL at this resolution. The intended improvement requires
+the **1-Hz dataset** (5M rows). CATS-1MIN represents a sampling-rate mismatch with the design intent.
 
 ### Root Cause Analysis
 
@@ -438,45 +460,71 @@ the raw signal rather than the residual after seasonal/trend removal.
 
 ## Summary Across All Validation Sets
 
-| Dataset | Domain | Data Freq | Events | Recall | F1 |
-|---|---|---|---|---|---|
-| ISS real telemetry (blind) | Satellite | varies | 4/4 | **100%** | — |
-| ESA Mission 1 archive | Satellite | varies | 8,795 detected | — | — |
-| NAB Machine Temperature | Industrial (OOD) | 5-min | 3/4 early-warning | **75%** | 66.7% |
-| NAB Ambient Temperature | HVAC (OOD) | 5-min | 2/2 | **100%** | 26.7% |
-| NAB NYC Taxi Demand | Urban IoT (OOD) | 30-min | 3/5 | **60%** | 42.9% |
-| SKAB valve1 (baseline) | Industrial (1-sec) | 1-sec | 2/6 | 28.6% | 36.4% |
-| **SKAB valve1+2 (improved)** | **Industrial (1-sec)** | **1-sec** | **6/6** | **100%** | **80.8%** |
-| **NAB AWS ELB** | **Cloud infra (5-min)** | **5-min** | **1/2 ±3h / 2/2 ±7d** | **50–100%** | — |
-| **NAB AWS RDS** | **Cloud infra (5-min)** | **5-min** | **2/2** | **100%** | — |
-| **GECCO Water Quality** | **Municipal IoT (1-min)** | **1-min** | **45/51** | **88%** | 4% |
-| **NAB Traffic TravelTime** | **Road traffic (10-min)** | **10-min** | **3/3 ±7d** | **100%** | 75% |
-| **NAB Traffic Speed** | **Road traffic (5-min)** | **5-min** | **2/4** | **50%** | 67% |
-| **OPS-SAT-AD (ESA real)** | **Spacecraft HK (1-Hz)** | **1-Hz** | **37/37** | **100%** | **80%** |
-| **CATS (ESA sim, z=3)** | **Spacecraft sim (1-Hz)** | **1-Hz** | **200/200** | **100%** | **2%** |
-| **CATS (ESA sim, z=6)** | **Spacecraft sim (1-Hz)** | **1-Hz** | **20/200** | **10%** | **5%** |
+| Dataset | Domain | Data Freq | Events | Recall | F1 | Sprint |
+|---|---|---|---|---|---|---|
+| ISS real telemetry (blind) | Satellite | varies | 4/4 | **100%** | — | S1–S4 |
+| ESA Mission 1 archive | Satellite | varies | 8,795 detected | — | — | S3 |
+| NAB Machine Temperature | Industrial (OOD) | 5-min | 3/4 early-warning | **75%** | 66.7% | S8 |
+| NAB Ambient Temperature | HVAC (OOD) | 5-min | 2/2 | **100%** | 26.7% | S8 |
+| NAB NYC Taxi Demand | Urban IoT (OOD) | 30-min | 3/5 | **60%** | 42.9% | S8 |
+| SKAB valve1 (baseline) | Industrial (1-sec) | 1-sec | 2/6 | 28.6% | 36.4% | S8 |
+| **SKAB valve1+2 (improved)** | **Industrial (1-sec)** | **1-sec** | **6/6** | **100%** | **80.8%** | S8 |
+| **SKAB Valve2 (Sprint 9)** | **Industrial (1-sec)** | **1-sec** | **3/3** | **100%** | **100%** | **S9** |
+| **NAB AWS ELB** | **Cloud infra (5-min)** | **5-min** | **1/2 ±3h / 2/2 ±7d** | **50–100%** | — | S8 |
+| **NAB AWS RDS** | **Cloud infra (5-min)** | **5-min** | **2/2** | **100%** | — | S8 |
+| **GECCO Water Quality (baseline)** | **Municipal IoT (1-min)** | **1-min** | **45/51** | **88%** | 4% | S8 |
+| **GECCO Water Quality (Sprint 9)** | **Municipal IoT (1-min)** | **1-min** | **15/51** | **29%** | **6.8%** | **S9** |
+| **NAB Traffic TravelTime** | **Road traffic (10-min)** | **10-min** | **3/3 ±7d** | **100%** | 75% | S8 |
+| **NAB Traffic Speed** | **Road traffic (5-min)** | **5-min** | **2/4** | **50%** | 67% | S8 |
+| **OPS-SAT-AD (ESA real, Sprint 9)** | **Spacecraft HK (1-Hz)** | **1-Hz** | **17/17** | **100%** | **75.6%** | **S9** |
+| **CATS 1-min (Sprint 9)** | **Spacecraft sim (1-min)** | **1-min** | **18/200** | **9%** | **9.9%** | **S9** |
+| **CATS (ESA sim, z=3)** | **Spacecraft sim (1-Hz)** | **1-Hz** | **200/200** | **100%** | **2%** | S8 |
+| **CATS (ESA sim, z=6)** | **Spacecraft sim (1-Hz)** | **1-Hz** | **20/200** | **10%** | **5%** | S8 |
 
 *OOD = out-of-domain (default config not tuned for these data types)*
-*CATS F1 low due to continuous sinusoidal normal dynamics — requires STL decomposition (roadmap)*
+*CATS 1-min: 90s oscillation aliased at 1-min → variance spike detection requires 1Hz data*
+*GECCO Sprint 9: STL window (600 samples = 10h) too small for 24h diurnal period → Sprint 10 fix: auto-scale window*
+*OPS-SAT Sprint 9: R=100% preserved; F1=75.6% (GT file has 17 windows; historical result 80% used 37)*
 
-## New CLI Flags Added (from benchmark findings)
+## CLI Reference
 
-| Flag | Purpose | When to Use |
+| Flag | Default | Purpose | When to Use |
+|---|---|---|---|
+| *(auto-cooldown)* | on | Scale cooldown to data frequency | Default — always active |
+| `--cooldown-hours H` | auto | Override cooldown explicitly | When you know the event spacing |
+| `--recal-factor F` | config | Stabilize CUSUM baseline | Short experiments (F=6–8) |
+| `--z-threshold Z` | config (~3.0) | Raise spike sensitivity threshold | Cyclical/seasonal data (Z=4–5) |
+| `--cusum-h-factor H` | config (~8.0) | Raise CUSUM alarm threshold | Step-function / regime-change data |
+| `--resample-minutes N` | 1 | Reduce data resolution | Sub-minute data with diurnal cycles |
+
+## New CLI Flags Added (Sprint 9)
+
+| Flag | Default | Purpose |
 |---|---|---|
-| `--auto-cooldown` | Scale cooldown to data frequency | Always for non-satellite data |
-| `--cooldown-hours H` | Override cooldown explicitly | When you know the event spacing |
-| `--recal-factor F` | Stabilize CUSUM baseline | Short experiments (F=6–8) |
-| `--z-threshold Z` | Raise spike sensitivity threshold | Cyclical/seasonal data (Z=4–5) |
-| `--cusum-h-factor H` | Raise CUSUM alarm threshold | Step-function / regime-change data |
-| `--resample-minutes N` | Reduce data resolution | Sub-minute data with diurnal cycles |
+| Auto-cooldown (default) | 500 × interval | Scale cooldown to data frequency — no flag needed |
+| `--cooldown-hours H` | override | Explicit cooldown override |
+
+## Sprint 9 Additions (2026-03-01)
+
+| Component | Status | Impact |
+|---|---|---|
+| `sentinel.eval.scoring` — cluster_events, score() | ✅ Added | DRY benchmark scoring, O(n log m) |
+| `STLDecomposer._fft_period()` | ✅ Added | FFT-based dominant period detection (threshold: 4× median) |
+| `_estimate_period()` FFT-first strategy | ✅ Updated | Orbital hint becomes fallback; FFT detects actual signal periods |
+| `VarianceDetector` (6th ensemble member) | ✅ Added | Fires on σ-ratio > 2.5× baseline; weight=0.12 |
+| `detect_data_frequency()` / `adaptive_cooldown_hours()` in `sentinel.ingest.utils` | ✅ Added | Shared across all CSV/YAMCS/InfluxDB scripts |
+| Auto-cooldown as default | ✅ Changed | Was opt-in flag; now default behavior (no `--auto-cooldown` needed) |
+| `variance_z_threshold` in channel_config | ✅ Added | Per-channel variance threshold override |
+| DB migration v16 | ✅ Applied | `ALTER TABLE channel_config ADD COLUMN variance_z_threshold REAL` |
 
 ## Known Limitations & Roadmap
 
 | Limitation | Observed In | Fix | Priority |
 |---|---|---|---|
-| Continuous oscillatory signal saturates baseline detectors | **CATS (1-Hz spacecraft sim)** | STL decomposition → detect on residuals | **Critical** |
-| Calibration window too short for diurnal cycles | GECCO water quality (1-min) | Auto-scale calibration window to ≥3× dominant period | High |
+| Context window (600 samples) too small for long-period signals | **GECCO** (24h diurnal) | Auto-scale window to max(600, 3×dominant_period) | **Critical** |
+| CATS 1Hz variance spikes: need 1Hz data (5M rows, slow) | **CATS** (1Hz) | Incremental streaming benchmark; batch pipeline optimization | High |
+| ced1 90s oscillation aliased at 1-min sampling | **CATS 1-min** | Run 1Hz pipeline with streaming ingestion | High |
 | CUSUM adapts to recurring periodic anomalies | NAB Traffic speed (rush hours) | STL seasonal decomposition before detection | High |
+| Continuous oscillatory signal saturates baseline detectors | **CATS (1-Hz spacecraft sim)** | STL window auto-scaling + variance detector (done); 1Hz run needed | High |
 | Early-warning fires before window → cooldown blocks in-window | NAB ELB | Sliding-window dedup instead of fixed cooldown | Medium |
 | No multi-channel event aggregation | SKAB (all), GECCO, OPS-SAT | Event-level API endpoint: group by time + satellite | Medium |
-| Variance-change anomalies not detected | CATS (injected fault type) | Variance/GARCH-based detector as 6th ensemble member | Medium |
