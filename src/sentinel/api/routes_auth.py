@@ -111,6 +111,7 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
         role=user["role"],
         secret=secret,
         ttl_seconds=access_ttl,
+        email=user.get("email", ""),
     )
     refresh_token = secrets.token_urlsafe(48)  # 384 bits of entropy
     token_hash = _hash_token(refresh_token)
@@ -180,6 +181,7 @@ async def refresh(body: RefreshRequest, request: Request) -> TokenResponse:
         role=row["role"],
         secret=secret,
         ttl_seconds=access_ttl,
+        email=row.get("email", ""),
     )
 
     # Issue a new refresh token (token rotation for security)
@@ -215,13 +217,18 @@ async def logout(
     """
     token_hash = _hash_token(body.refresh_token)
 
-    from sentinel.db.connection import get_pool
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1",
-            token_hash,
-        )
+    if _user.get("scope") == "sentinel":
+        # Sentinel internal user — tokens stored in sentinel_refresh_tokens (no RLS)
+        await queries.revoke_sentinel_refresh_token(token_hash)
+    else:
+        # Tenant user — tokens stored in refresh_tokens (RLS-scoped)
+        from sentinel.db.connection import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1",
+                token_hash,
+            )
 
     logger.info("logout", user_id=_user.get("user_id"), tenant=_user.get("tenant_id"))
     return {"message": "Logged out"}
@@ -235,14 +242,45 @@ async def logout(
 async def me(_user: dict = Depends(get_current_user)) -> UserOut:
     """Return the current authenticated user's profile.
 
-    For JWT users: returns the claims embedded in the token.
+    For JWT users: returns the claims embedded in the token plus DB profile fields.
     For API-key users: returns the tenant + role; user_id is null.
     """
+    user_id = _user.get("user_id") or ""
+    display_name = ""
+    phone = ""
+
+    # Enrich with display_name and phone from DB (non-critical — ignore DB errors)
+    if user_id and user_id != "api-key":
+        try:
+            if _user.get("scope") == "sentinel":
+                from sentinel.db.connection import get_pool
+                pool = get_pool()
+                async with pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT COALESCE(display_name,'') AS display_name, "
+                        "COALESCE(phone,'') AS phone "
+                        "FROM sentinel_users WHERE id = $1::uuid",
+                        user_id,
+                    )
+                    if row:
+                        display_name = row["display_name"]
+                        phone = row["phone"]
+            else:
+                row = await queries.get_user_by_id(user_id)
+                if row:
+                    display_name = row.get("display_name", "")
+                    phone = row.get("phone", "")
+        except Exception:
+            pass  # profile fields are optional — don't fail /me on DB error
+
     return UserOut(
-        user_id=_user.get("user_id") or "api-key",
-        email="",  # not stored in JWT — client can cache it from login response
+        user_id=user_id or "api-key",
+        email=_user.get("email", ""),
         role=_user["role"],
         tenant_id=_user.get("tenant_id") or "",
+        scope=_user.get("scope", ""),
+        display_name=display_name,
+        phone=phone,
     )
 
 
@@ -278,6 +316,7 @@ async def sentinel_login(body: LoginRequest, request: Request) -> TokenResponse:
         role=user["role"],
         secret=secret,
         ttl_seconds=access_ttl,
+        email=user.get("email", ""),
     )
     refresh_token = secrets.token_urlsafe(48)
     token_hash    = _hash_token(refresh_token)
@@ -322,6 +361,7 @@ async def sentinel_refresh(body: RefreshRequest, request: Request) -> TokenRespo
         role=row["role"],
         secret=secret,
         ttl_seconds=access_ttl,
+        email=row.get("email", ""),
     )
 
     # Rotate refresh token

@@ -225,19 +225,16 @@ async def get_latest_values(satellite_id: str) -> list[dict]:
 async def get_telemetry_stats() -> dict:
     """Aggregate telemetry statistics for the dashboard.
 
-    Uses pg_class for the total-row estimate (O(1) — no sequential scan)
-    and a bounded COUNT for the recent-activity metric.
+    All counts are tenant-scoped via RLS so each tenant sees only their data.
 
     Returns:
-        total_telemetry_points: Approximate total rows in the telemetry table.
+        total_telemetry_points: Total rows for the current tenant.
         points_last_hour:       Exact count of rows inserted in the past hour.
-        active_satellites:      Number of distinct satellites.
+        active_satellites:      Number of distinct satellites for this tenant.
     """
     async with acquire() as conn:
-        # Approximate total from PostgreSQL table statistics (fast).
-        approx_total = await conn.fetchval(
-            "SELECT reltuples::bigint FROM pg_class WHERE relname = 'telemetry'"
-        )
+        # Tenant-scoped total (RLS filters to current tenant).
+        total = await conn.fetchval("SELECT COUNT(*) FROM telemetry")
         # Exact count for the last hour (bounded, always fast).
         last_hour = await conn.fetchval(
             "SELECT COUNT(*) FROM telemetry"
@@ -247,9 +244,9 @@ async def get_telemetry_stats() -> dict:
             "SELECT COUNT(DISTINCT satellite_id) FROM satellites"
         )
     return {
-        "total_telemetry_points": int(approx_total or 0),
-        "points_last_hour":       int(last_hour    or 0),
-        "active_satellites":      int(active_sats  or 0),
+        "total_telemetry_points": int(total     or 0),
+        "points_last_hour":       int(last_hour or 0),
+        "active_satellites":      int(active_sats or 0),
     }
 
 
@@ -258,6 +255,15 @@ async def get_anomaly_count() -> int:
     async with acquire() as conn:
         cnt = await conn.fetchval("SELECT COUNT(*) FROM anomalies")
     return int(cnt or 0)
+
+
+async def get_anomaly_severity_counts() -> dict[str, int]:
+    """Count anomalies by severity across all satellites."""
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT severity, COUNT(*) AS cnt FROM anomalies GROUP BY severity"
+        )
+    return {r["severity"]: int(r["cnt"]) for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -681,10 +687,20 @@ async def get_anomalies(
     satellite_id: str | None = None,
     severity: str | None = None,
     since: datetime | None = None,
+    before: datetime | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     limit: int = 100,
     include_false_positives: bool = False,
 ) -> list[dict]:
-    """Query anomalies. Excludes false-positives by default."""
+    """Query anomalies with optional filters and cursor-based pagination.
+
+    Pagination model (newest-first):
+      - Initial load: no cursor → returns newest `limit` rows.
+      - Infinite scroll older: before=<oldest_loaded_timestamp> → next page.
+      - Poll for new: since=<newest_loaded_timestamp> → any rows added since.
+      - Date range filter: date_from / date_to (inclusive).
+    """
     conditions: list[str] = []
     params: list[Any] = []
 
@@ -699,11 +715,26 @@ async def get_anomalies(
         params.append(severity)
         conditions.append(f"severity = ${len(params)}")
 
+    # `since` = poll for NEW rows (timestamp >= boundary)
     if since is not None:
         params.append(since)
         conditions.append(f"timestamp >= ${len(params)}")
 
-    params.append(min(limit, 1000))
+    # `before` = infinite-scroll cursor for OLDER rows (timestamp < boundary)
+    if before is not None:
+        params.append(before)
+        conditions.append(f"timestamp < ${len(params)}")
+
+    # Explicit date-range filter (from dashboard date pickers)
+    if date_from is not None:
+        params.append(date_from)
+        conditions.append(f"timestamp >= ${len(params)}")
+
+    if date_to is not None:
+        params.append(date_to)
+        conditions.append(f"timestamp <= ${len(params)}")
+
+    params.append(min(limit, 500))
     limit_ph = f"${len(params)}"
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -1043,18 +1074,32 @@ async def upsert_alert_config(
         escalation_delay_s, enabled,
     )
 
-    # Build SET clause with COALESCE for partial update
+    # Build SET clause with COALESCE for partial update.
+    # Qualify the fallback with the table name to avoid
+    # "ambiguous column reference" inside ON CONFLICT DO UPDATE SET.
     set_parts = [
-        f"{f} = COALESCE(${i + 2}, {f})"
+        f"{f} = COALESCE(${i + 2}, alert_configs.{f})"
         for i, f in enumerate(_FIELDS)
     ]
     set_parts.append(f"updated_at = NOW()")
 
-    # INSERT defaults: use provided values or fallback literals
+    # INSERT defaults: COALESCE NOT NULL columns with their schema defaults so
+    # that an INSERT with all-NULL optional fields doesn't violate the constraint.
+    # (Explicitly listing a column with NULL bypasses the DB DEFAULT expression.)
+    _NOT_NULL_DEFAULTS: dict[str, str] = {
+        "min_severity":       "'warning'",
+        "dedup_window_s":     "300",
+        "escalation_delay_s": "600",
+        "enabled":            "TRUE",
+    }
+    insert_phs: list[str] = []
+    for i, f in enumerate(_FIELDS):
+        ph = f"${i + 2}"
+        if f in _NOT_NULL_DEFAULTS:
+            ph = f"COALESCE({ph}, {_NOT_NULL_DEFAULTS[f]})"
+        insert_phs.append(ph)
     insert_cols = ", ".join(["tenant_id"] + list(_FIELDS))
-    insert_placeholders = ", ".join(
-        ["$1"] + [f"${i + 2}" for i in range(len(_FIELDS))]
-    )
+    insert_placeholders = ", ".join(["$1"] + insert_phs)
 
     sql = (
         f"INSERT INTO alert_configs ({insert_cols}) "
@@ -1237,7 +1282,9 @@ async def get_user_by_email(email: str) -> dict | None:
         row = await conn.fetchrow(
             """
             SELECT id::text, tenant_id, email, password_hash, role::text, active,
-                   created_at, last_login
+                   created_at, last_login,
+                   COALESCE(display_name, '') AS display_name,
+                   COALESCE(phone, '') AS phone
             FROM users
             WHERE email = $1 AND active = TRUE
             """,
@@ -1251,7 +1298,9 @@ async def get_user_by_id(user_id: str) -> dict | None:
     async with acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id::text, tenant_id, email, role::text, active, created_at, last_login
+            SELECT id::text, tenant_id, email, role::text, active, created_at, last_login,
+                   COALESCE(display_name, '') AS display_name,
+                   COALESCE(phone, '') AS phone
             FROM users
             WHERE id = $1::uuid
             """,
@@ -1260,7 +1309,13 @@ async def get_user_by_id(user_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-async def create_user(email: str, password_hash: str, role: str) -> dict:
+async def create_user(
+    email: str,
+    password_hash: str,
+    role: str,
+    display_name: str = "",
+    phone: str = "",
+) -> dict:
     """Insert a new user. tenant_id comes from the current ContextVar.
 
     Returns the new user row (id, email, role, tenant_id, created_at).
@@ -1269,11 +1324,13 @@ async def create_user(email: str, password_hash: str, role: str) -> dict:
     async with acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO users (tenant_id, email, password_hash, role)
-            VALUES ($1, $2, $3, $4::user_role)
-            RETURNING id::text, tenant_id, email, role::text, active, created_at
+            INSERT INTO users (tenant_id, email, password_hash, role, display_name, phone)
+            VALUES ($1, $2, $3, $4::user_role, $5, $6)
+            RETURNING id::text, tenant_id, email, role::text, active, created_at,
+                      COALESCE(display_name, '') AS display_name,
+                      COALESCE(phone, '') AS phone
             """,
-            get_tenant(), email, password_hash, role,
+            get_tenant(), email, password_hash, role, display_name, phone,
         )
     return dict(row)
 
@@ -1288,11 +1345,13 @@ async def update_last_login(user_id: str) -> None:
 
 
 async def list_users(limit: int = 100) -> list[dict]:
-    """List all active users within the current tenant (RLS-scoped)."""
+    """List all users within the current tenant (RLS-scoped)."""
     async with acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id::text, email, role::text, active, created_at, last_login
+            SELECT id::text, email, role::text, active, created_at, last_login,
+                   COALESCE(display_name, '') AS display_name,
+                   COALESCE(phone, '') AS phone
             FROM users
             ORDER BY created_at DESC
             LIMIT $1
@@ -1399,13 +1458,14 @@ async def reactivate_user(user_id: str) -> bool:
     return result == "UPDATE 1"
 
 
-async def update_user_password(user_id: str, new_hash: str) -> None:
-    """Replace the password hash for a user (change-password flow)."""
+async def update_user_password(user_id: str, new_hash: str) -> bool:
+    """Replace the password hash for a user. Returns True if user was found."""
     async with acquire() as conn:
-        await conn.execute(
+        result = await conn.execute(
             "UPDATE users SET password_hash = $1 WHERE id = $2::uuid",
             new_hash, user_id,
         )
+    return result == "UPDATE 1"
 
 
 # ---------------------------------------------------------------------------

@@ -39,14 +39,14 @@ class TestV14Migration:
         from sentinel.db.migrations import _MIGRATIONS, SCHEMA_VERSION
         self.schema_version = SCHEMA_VERSION
         self.all_migrations = _MIGRATIONS
-        # v14 is the last migration (index 13, 0-based)
+        # v14 is at index 13 (0-based); v15 display_name/phone migration is at index 14
         self.v14_sql = _MIGRATIONS[13]
 
-    def test_schema_version_is_14(self):
-        assert self.schema_version == 14
+    def test_schema_version_is_15(self):
+        assert self.schema_version == 15
 
-    def test_total_migration_count_is_14(self):
-        assert len(self.all_migrations) == 14
+    def test_total_migration_count_is_15(self):
+        assert len(self.all_migrations) == 15
 
     def test_alert_configs_table_created(self):
         assert "CREATE TABLE IF NOT EXISTS alert_configs" in self.v14_sql

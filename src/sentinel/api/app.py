@@ -38,41 +38,34 @@ logger = structlog.get_logger()
 
 _DASHBOARD_DIR = Path(__file__).resolve().parent.parent.parent.parent / "dashboard"
 
-# Global flag checked by routes and detection pipeline
-demo_mode: bool = False
-
-
-def _activate_demo_mode() -> None:
-    """Swap DB queries module with in-memory store throughout the app."""
-    global demo_mode
-    demo_mode = True
-
-    from sentinel.db import memory_store
-
-    # Patch routes and detection pipeline to use memory_store instead of DB queries
-    import sentinel.api.routes as routes_mod
-    import sentinel.api.routes_channels as routes_channels_mod
-    import sentinel.detection.detector as detector_mod
-
-    import sentinel.api.routes_alerts as routes_alerts_mod
-    import sentinel.api.routes_parameters as routes_parameters_mod
-
-    routes_mod.queries = memory_store  # type: ignore[attr-defined]
-    routes_channels_mod.queries = memory_store  # type: ignore[attr-defined]
-    routes_alerts_mod.queries = memory_store  # type: ignore[attr-defined]
-    routes_parameters_mod.queries = memory_store  # type: ignore[attr-defined]
-    detector_mod.queries = memory_store  # type: ignore[attr-defined]
-
-    logger.info("demo_mode_activated", storage="in-memory")
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: connect DB (or use memory store in demo mode). Shutdown: cleanup."""
+    """Startup: connect DB (or use memory store in test mode). Shutdown: cleanup."""
     settings = app.state.settings
 
-    if app.state.demo_mode:
-        _activate_demo_mode()
+    if app.state.test_mode:
+        # Test mode: swap in the in-memory store so unit tests run without PostgreSQL.
+        from sentinel.db import memory_store
+
+        import sentinel.api.routes as routes_mod
+        import sentinel.api.routes_alerts as routes_alerts_mod
+        import sentinel.api.routes_channels as routes_channels_mod
+        import sentinel.api.routes_keys as routes_keys_mod
+        import sentinel.api.routes_parameters as routes_parameters_mod
+        import sentinel.api.routes_tenants as routes_tenants_mod
+        import sentinel.api.routes_users as routes_users_mod
+        import sentinel.detection.detector as detector_mod
+
+        routes_mod.queries = memory_store  # type: ignore[attr-defined]
+        routes_channels_mod.queries = memory_store  # type: ignore[attr-defined]
+        routes_alerts_mod.queries = memory_store  # type: ignore[attr-defined]
+        routes_parameters_mod.queries = memory_store  # type: ignore[attr-defined]
+        routes_users_mod.queries = memory_store  # type: ignore[attr-defined]
+        routes_tenants_mod.queries = memory_store  # type: ignore[attr-defined]
+        routes_keys_mod.queries = memory_store  # type: ignore[attr-defined]
+        detector_mod.queries = memory_store  # type: ignore[attr-defined]
+
     else:
         from sentinel.db.connection import close_pool, init_pool
         from sentinel.db.migrations import run_migrations
@@ -141,9 +134,9 @@ async def lifespan(app: FastAPI):
     init_detectors(settings)
 
     app.state.start_time = time.monotonic()
-    logger.info("sentinel_started", version=__version__, demo=app.state.demo_mode)
+    logger.info("sentinel_started", version=__version__)
     yield
-    if not app.state.demo_mode:
+    if not app.state.test_mode:
         from sentinel.db.connection import close_pool
         await close_pool()
     logger.info("sentinel_stopped")
@@ -154,7 +147,8 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
 
     Args:
         config_path: Path to sentinel.yaml. Uses default discovery if None.
-        demo: If True, runs entirely in-memory with no PostgreSQL needed.
+        demo:        Test-only flag. Runs entirely in-memory with a mock admin user
+                     so unit tests work without PostgreSQL. Never used in production.
     """
     settings = load_config(config_path)
 
@@ -169,11 +163,23 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
 
     app.state.settings = settings
     app.state.start_time = time.monotonic()
-    app.state.demo_mode = demo
+    app.state.test_mode = demo        # internal flag for lifespan + health check
+    app.state.demo_mode = demo        # backwards-compat alias used by some tests
     # Populated in lifespan after DB connects. Empty dict = no keys loaded yet.
     app.state.api_key_tenant_map: dict[str, str] = {}
     # JWT secret — populated in lifespan from SENTINEL_JWT_SECRET env var.
     app.state.jwt_secret: str = ""
+
+    # Test mode: inject a mock admin user so routes work without real auth.
+    if demo:
+        from sentinel.api.dependencies import get_current_user
+        app.dependency_overrides[get_current_user] = lambda: {
+            "user_id": "test-admin",
+            "tenant_id": "default",
+            "role": "admin",
+            "scope": "tenant",
+            "email": "admin@test.local",
+        }
 
     # --- Middleware stack (order matters: outermost runs first) ---
     sec = settings.get("security", {})

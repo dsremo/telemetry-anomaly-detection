@@ -24,7 +24,12 @@ from fastapi import APIRouter, Depends, HTTPException
 import sentinel.db.queries as queries
 from sentinel.api.dependencies import require_tenant_admin
 from sentinel.api.errors import handle_unique_constraint
-from sentinel.api.schemas import UpdateRoleRequest, UserCreateRequest, UserDetailOut
+from sentinel.api.schemas import (
+    AdminResetPasswordRequest,
+    UpdateRoleRequest,
+    UserCreateRequest,
+    UserDetailOut,
+)
 from sentinel.core.security import hash_password
 
 logger = structlog.get_logger()
@@ -88,7 +93,11 @@ async def create_user(
 
     password_hash = hash_password(body.password)
     row = await handle_unique_constraint(
-        queries.create_user(body.email, password_hash, body.role),
+        queries.create_user(
+            body.email, password_hash, body.role,
+            display_name=body.display_name,
+            phone=body.phone,
+        ),
         conflict_msg=f"User '{body.email}' already exists in this tenant",
         log_ctx={"email": body.email},
     )
@@ -175,3 +184,24 @@ async def reactivate_user(
 
     logger.info("user_reactivated", user_id=user_id, by=_user.get("user_id"))
     return {"message": f"User {user_id} reactivated"}
+
+
+@users_router.post("/{user_id}/reset-password")
+async def admin_reset_password(
+    user_id: str,
+    body: AdminResetPasswordRequest,
+    _user: dict = Depends(require_tenant_admin),
+) -> dict:
+    """Admin sets a new password for any user in scope.
+
+    Does not require the current password — intended for account recovery.
+    Revokes all existing refresh tokens, forcing re-login on all devices.
+    """
+    new_hash = hash_password(body.new_password)
+    ok = await queries.update_user_password(user_id, new_hash)
+    if not ok:
+        raise HTTPException(status_code=404, detail="User not found")
+    await queries.revoke_all_user_tokens(user_id)
+
+    logger.info("admin_password_reset", target_user=user_id, by=_user.get("user_id"))
+    return {"message": "Password reset. User must sign in again."}

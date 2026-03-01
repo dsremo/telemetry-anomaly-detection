@@ -30,6 +30,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
+from sentinel.core.tenant import set_tenant
 from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
 from sentinel.ingest.pipeline import db_context, phase, print_run_header
 from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
@@ -39,7 +40,9 @@ async def main(
     norad_ids: list[str],
     max_frames: int,
     resample_minutes: int | None,
+    tenant_id: str,
 ) -> None:
+    set_tenant(tenant_id)
     async with db_context():
         fetcher = SatNOGSFetcher()
         resample_label = (
@@ -96,5 +99,7 @@ if __name__ == "__main__":
                         help="Max frames per satellite (default: 500)")
     parser.add_argument("--resample-minutes", type=int, default=None,
                         help="Resample to N-min intervals (default: no resampling)")
+    parser.add_argument("--tenant", type=str, default="satnogs",
+                        help="Tenant ID for data isolation (default: satnogs)")
     args = parser.parse_args()
-    asyncio.run(main(args.norad, args.max_frames, args.resample_minutes))
+    asyncio.run(main(args.norad, args.max_frames, args.resample_minutes, args.tenant))

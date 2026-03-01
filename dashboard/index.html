@@ -4,9 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sentinel — Anomaly Detection</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- Topbar -->
     <header class="topbar">
         <div class="topbar-left">
             <div class="logo">
@@ -15,7 +17,18 @@
             </div>
             <span class="topbar-subtitle">Telemetry Anomaly Detection</span>
         </div>
+        <div class="topbar-center">
+            <!-- Sentinel-only tenant context switcher (hidden for tenant users) -->
+            <select id="sentinelTenantSwitch" class="topbar-filter" style="display:none" title="View as tenant">
+                <option value="">— Select Tenant —</option>
+            </select>
+            <select id="globalSatFilter" class="topbar-filter" title="Filter by satellite">
+                <option value="">All Satellites</option>
+            </select>
+        </div>
         <div class="topbar-right">
+            <button class="btn-secondary" id="exportCsvBtn" title="Export anomalies as CSV">↓ CSV</button>
+            <button class="btn-secondary" id="exportJsonBtn" title="Export anomalies as JSON">↓ JSON</button>
             <div class="connection-status" id="connStatus">
                 <span class="status-dot offline"></span>
                 <span class="status-text">Connecting...</span>
@@ -24,46 +37,119 @@
                 <span class="stat-label">Uptime</span>
                 <span class="stat-value" id="uptime">--</span>
             </div>
+            <!-- User chip + dropdown -->
+            <div class="user-chip" id="userChip">
+                <div class="user-avatar" id="userAvatar">?</div>
+                <span class="user-email" id="userEmail">Loading...</span>
+                <span class="user-role-badge" id="userRoleBadge"></span>
+                <div class="user-dropdown" id="userDropdown">
+                    <div class="user-dropdown-header">
+                        <div class="user-dropdown-name" id="ddName">--</div>
+                        <div class="user-dropdown-email" id="ddEmail">--</div>
+                    </div>
+                    <button class="user-dropdown-item" id="ddSettings">
+                        <span class="user-dropdown-icon">⚙</span> Settings &amp; Theme
+                    </button>
+                    <button class="user-dropdown-item" id="ddChangePassword" style="display:none">
+                        <span class="user-dropdown-icon">🔑</span> Change Password
+                    </button>
+                    <div class="user-dropdown-divider"></div>
+                    <button class="user-dropdown-item danger" id="ddLogout">
+                        <span class="user-dropdown-icon">↩</span> Logout
+                    </button>
+                </div>
+            </div>
         </div>
     </header>
 
+    <!-- Tab Navigation -->
     <nav class="tab-nav">
         <button class="tab-btn active" data-tab="monitor">Monitor</button>
+        <button class="tab-btn" data-tab="analysis">Analysis</button>
         <button class="tab-btn" data-tab="channels">Channels</button>
+        <button class="tab-btn" data-tab="alerts">Alerts</button>
+        <button class="tab-btn" data-tab="import">Import</button>
+        <button class="tab-btn" data-tab="admin" id="adminTabBtn" style="display:none">Admin</button>
     </nav>
 
+    <!-- ================================================================
+         MONITOR TAB
+         ================================================================ -->
     <main class="grid tab-content" id="tab-monitor">
-        <!-- Health Cards Row -->
-        <section class="card-row">
-            <div class="metric-card" id="card-total-points">
+        <!-- 5 Metric Cards -->
+        <section class="card-row five-col">
+            <div class="metric-card">
                 <div class="metric-label">Telemetry Points</div>
                 <div class="metric-value" id="totalPoints">--</div>
-                <div class="metric-trend" id="pointsTrend">--/min</div>
+                <div class="metric-trend" id="pointsTrend">--/hr</div>
             </div>
-            <div class="metric-card" id="card-anomalies">
+            <div class="metric-card">
                 <div class="metric-label">Active Anomalies</div>
                 <div class="metric-value anomaly-count" id="anomalyCount">0</div>
-                <div class="metric-trend" id="anomalyTrend">last 15 min</div>
+                <div class="metric-trend" id="anomalyTrend">loaded</div>
             </div>
-            <div class="metric-card" id="card-severity">
+            <div class="metric-card">
                 <div class="metric-label">Highest Severity</div>
                 <div class="metric-value severity-badge nominal" id="maxSeverity">NOMINAL</div>
                 <div class="metric-trend" id="severityParam">--</div>
             </div>
-            <div class="metric-card" id="card-satellites">
+            <div class="metric-card">
                 <div class="metric-label">Satellites</div>
                 <div class="metric-value" id="satCount">0</div>
                 <div class="metric-trend" id="satList">--</div>
             </div>
+            <div class="metric-card">
+                <div class="metric-label">Channels Monitored</div>
+                <div class="metric-value" id="channelCount">--</div>
+                <div class="metric-trend" id="channelTrend">parameters</div>
+            </div>
         </section>
 
-        <!-- Main Content -->
+        <!-- Severity Bar -->
+        <section class="panel severity-bar-panel">
+            <div class="panel-header">
+                <h2>Severity Distribution</h2>
+                <span class="severity-total" id="severityTotal">0 anomalies</span>
+            </div>
+            <div class="sev-bar-wrap">
+                <div class="sev-bar" id="sevBar">
+                    <div class="sev-segment sev-critical" id="sevCritical" style="width:0%"
+                         title="Critical: 0"></div>
+                    <div class="sev-segment sev-warning"  id="sevWarning"  style="width:0%"
+                         title="Warning: 0"></div>
+                    <div class="sev-segment sev-watch"    id="sevWatch"    style="width:0%"
+                         title="Watch: 0"></div>
+                    <div class="sev-segment sev-nominal"  id="sevNominal"  style="width:100%"
+                         title="Nominal"></div>
+                </div>
+                <!-- Legend row — always visible regardless of bar segment width -->
+                <div class="sev-legend">
+                    <div class="sev-legend-item">
+                        <div class="sev-legend-dot" style="background:var(--critical)"></div>
+                        Critical: <strong id="sevLegCritical">0</strong>
+                    </div>
+                    <div class="sev-legend-item">
+                        <div class="sev-legend-dot" style="background:var(--warning)"></div>
+                        Warning: <strong id="sevLegWarning">0</strong>
+                    </div>
+                    <div class="sev-legend-item">
+                        <div class="sev-legend-dot" style="background:var(--watch)"></div>
+                        Watch: <strong id="sevLegWatch">0</strong>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Content Grid -->
         <div class="content-grid">
             <!-- Anomaly Timeline -->
             <section class="panel timeline-panel">
                 <div class="panel-header">
                     <h2>Anomaly Timeline</h2>
-                    <div class="filter-group">
+                    <div class="filter-group" style="flex-wrap:wrap;gap:6px">
+                        <input id="anomalySearch" class="filter-input" type="text"
+                            placeholder="Search parameter / explanation…" style="width:190px"
+                            autocomplete="off" readonly>
                         <select id="severityFilter" class="filter-select">
                             <option value="">All Severities</option>
                             <option value="critical">Critical</option>
@@ -72,56 +158,46 @@
                         </select>
                         <select id="subsystemFilter" class="filter-select">
                             <option value="">All Subsystems</option>
-                            <option value="eps">EPS</option>
-                            <option value="adcs">ADCS</option>
-                            <option value="thermal">Thermal</option>
-                            <option value="comms">Comms</option>
                         </select>
+                        <input id="dateFrom" class="filter-input" type="date"
+                            title="From date" style="width:130px">
+                        <input id="dateTo" class="filter-input" type="date"
+                            title="To date" style="width:130px">
+                        <button id="clearDateBtn" class="btn-secondary" style="padding:4px 10px;font-size:12px"
+                            onclick="clearDateFilter()" title="Clear date filter">✕ Date</button>
                     </div>
                 </div>
+                <div id="timelineLoadedInfo" style="padding:4px 16px;font-size:11px;color:var(--text-muted)"></div>
                 <div class="timeline-list" id="timelineList">
-                    <div class="empty-state">No anomalies detected yet. Start the simulator to see live data.</div>
+                    <div class="empty-state">No anomalies detected yet. Ingest telemetry to start.</div>
+                </div>
+                <!-- Infinite scroll sentinel — IntersectionObserver watches this -->
+                <div id="timelineScrollSentinel" style="height:1px"></div>
+                <div id="timelineLoadingSpinner" style="display:none;text-align:center;padding:12px;color:var(--text-muted);font-size:13px">
+                    Loading older anomalies…
                 </div>
             </section>
 
-            <!-- Right Column: Explanation + Subsystems -->
+            <!-- Right Column -->
             <div class="right-col">
                 <!-- Explanation Panel -->
                 <section class="panel explanation-panel">
                     <div class="panel-header">
                         <h2>Explanation</h2>
+                        <button class="btn-secondary" id="exportAnomalyBtn" style="display:none" onclick="exportAnomaly()">↓ Export</button>
                     </div>
                     <div class="explanation-body" id="explanationBody">
                         <div class="empty-state">Select an anomaly to see its explanation</div>
                     </div>
                 </section>
 
-                <!-- Subsystem Health -->
+                <!-- Subsystem Health (dynamic) -->
                 <section class="panel subsystem-panel">
                     <div class="panel-header">
                         <h2>Subsystem Health</h2>
                     </div>
                     <div class="subsystem-grid" id="subsystemGrid">
-                        <div class="subsystem-card" data-subsystem="eps">
-                            <div class="subsystem-name">EPS</div>
-                            <div class="subsystem-status nominal">NOMINAL</div>
-                            <div class="subsystem-desc">Electrical Power</div>
-                        </div>
-                        <div class="subsystem-card" data-subsystem="adcs">
-                            <div class="subsystem-name">ADCS</div>
-                            <div class="subsystem-status nominal">NOMINAL</div>
-                            <div class="subsystem-desc">Attitude Control</div>
-                        </div>
-                        <div class="subsystem-card" data-subsystem="thermal">
-                            <div class="subsystem-name">THERMAL</div>
-                            <div class="subsystem-status nominal">NOMINAL</div>
-                            <div class="subsystem-desc">Thermal Control</div>
-                        </div>
-                        <div class="subsystem-card" data-subsystem="comms">
-                            <div class="subsystem-name">COMMS</div>
-                            <div class="subsystem-status nominal">NOMINAL</div>
-                            <div class="subsystem-desc">Communications</div>
-                        </div>
+                        <!-- populated by JS with dynamic subsystems -->
                     </div>
                 </section>
             </div>
@@ -139,10 +215,65 @@
         </section>
     </main>
 
-    <!-- Channels Tab -->
+    <!-- ================================================================
+         ANALYSIS TAB
+         ================================================================ -->
+    <div class="grid tab-content" id="tab-analysis" style="display:none">
+        <div class="analysis-charts">
+            <section class="panel chart-panel">
+                <div class="panel-header">
+                    <h2>Severity Breakdown</h2>
+                    <span class="panel-hint" id="donutTotal">0 total</span>
+                </div>
+                <div class="chart-body donut-wrap">
+                    <div class="donut-canvas-wrap">
+                        <canvas id="severityDonut"></canvas>
+                    </div>
+                    <div class="donut-legend" id="donutLegend"></div>
+                </div>
+            </section>
+
+            <section class="panel chart-panel">
+                <div class="panel-header">
+                    <h2>Anomaly Rate</h2>
+                    <select id="rateChartRange" class="filter-select">
+                        <option value="24h">Last 24 Hours</option>
+                        <option value="7d">Last 7 Days</option>
+                    </select>
+                </div>
+                <div class="chart-body rate-chart-body">
+                    <canvas id="rateBarChart"></canvas>
+                </div>
+            </section>
+        </div>
+
+        <div class="analysis-lists">
+            <section class="panel top-list-panel">
+                <div class="panel-header"><h2>Top Anomalous Channels</h2></div>
+                <div class="top-list" id="topChannels">
+                    <div class="empty-state">No anomaly data yet</div>
+                </div>
+            </section>
+            <section class="panel top-list-panel">
+                <div class="panel-header"><h2>Top Satellites</h2></div>
+                <div class="top-list" id="topSatellites">
+                    <div class="empty-state">No anomaly data yet</div>
+                </div>
+            </section>
+            <section class="panel top-list-panel">
+                <div class="panel-header"><h2>Detector Triggers</h2></div>
+                <div class="top-list" id="topDetectors">
+                    <div class="empty-state">No anomaly data yet</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         CHANNELS TAB
+         ================================================================ -->
     <div class="grid tab-content" id="tab-channels" style="display:none">
         <div class="channels-layout">
-            <!-- Channel Registry Table -->
             <section class="panel channels-panel">
                 <div class="panel-header">
                     <h2>Channel Registry</h2>
@@ -158,7 +289,6 @@
                 </div>
             </section>
 
-            <!-- Inline Threshold Editor (shown on row click) -->
             <section class="panel threshold-editor" id="thresholdEditor" style="display:none">
                 <div class="panel-header">
                     <h2 id="editorTitle">Threshold Config</h2>
@@ -166,6 +296,632 @@
                 </div>
                 <div class="editor-body" id="editorBody"></div>
             </section>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         ALERTS TAB
+         ================================================================ -->
+    <div class="grid tab-content" id="tab-alerts" style="display:none">
+        <div class="alerts-layout">
+            <!-- Alert History -->
+            <section class="panel">
+                <div class="panel-header">
+                    <h2>Alert History</h2>
+                    <div class="filter-group">
+                        <select id="alertSatFilter" class="filter-select">
+                            <option value="">All Satellites</option>
+                        </select>
+                        <select id="alertSevFilter" class="filter-select">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="watch">Watch</option>
+                        </select>
+                        <button class="btn-secondary" id="refreshAlertsBtn">Refresh</button>
+                    </div>
+                </div>
+                <div class="channel-table-wrap" id="alertHistoryWrap">
+                    <div class="empty-state">Click Refresh to load alert history.</div>
+                </div>
+            </section>
+
+            <!-- Alert Delivery Config -->
+            <section class="panel alert-config-panel">
+                <div class="panel-header">
+                    <h2>Alert Delivery Config</h2>
+                </div>
+                <div class="editor-body">
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Webhook URL</span></div>
+                        <input class="editor-input" id="ac-webhook-url" type="url"
+                            placeholder="https://hooks.slack.com/...">
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Webhook Secret (HMAC-SHA256)</span></div>
+                        <input class="editor-input" id="ac-webhook-secret" type="password"
+                            placeholder="Leave blank to keep existing">
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Email Recipients (comma-separated)</span></div>
+                        <input class="editor-input" id="ac-email-recipients" type="text"
+                            placeholder="ops@example.com, lead@example.com">
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>SMTP Host</span></div>
+                        <input class="editor-input" id="ac-smtp-host" type="text"
+                            placeholder="smtp.example.com">
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>SMTP Port</span></div>
+                        <input class="editor-input" id="ac-smtp-port" type="number"
+                            placeholder="587" min="1" max="65535">
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Min Severity to Alert</span></div>
+                        <select class="editor-input" id="ac-min-severity">
+                            <option value="watch">Watch</option>
+                            <option value="warning" selected>Warning</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Escalation Delay (minutes)</span></div>
+                        <input class="editor-input" id="ac-escalation-delay" type="number"
+                            placeholder="30" min="1">
+                    </div>
+                    <div class="editor-actions">
+                        <button class="btn-primary" id="saveAlertConfigBtn">Save Config</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         IMPORT TAB
+         ================================================================ -->
+    <div class="grid tab-content" id="tab-import" style="display:none">
+        <div class="import-layout">
+            <!-- XTCE Import -->
+            <section class="panel import-card">
+                <div class="panel-header">
+                    <h2>XTCE Parameter Import</h2>
+                    <span class="import-badge">CCSDS 660.1</span>
+                </div>
+                <div class="import-body">
+                    <p class="import-desc">Import parameter definitions from an XTCE XML file (ESA, NASA, YAMCS format). Populates the channel registry with subsystem, unit, and alarm range metadata.</p>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Satellite ID</span></div>
+                        <input class="editor-input" id="xtce-satellite-id" type="text"
+                            placeholder="e.g. ISS-25544">
+                    </div>
+                    <div class="drop-zone" id="xtceDropZone">
+                        <div class="drop-icon">📡</div>
+                        <div class="drop-text">Drop XTCE XML file here</div>
+                        <div class="drop-sub">or <button class="btn-link" onclick="document.getElementById('xtceFileInput').click()">browse files</button></div>
+                        <input type="file" id="xtceFileInput" accept=".xml" style="display:none">
+                    </div>
+                    <div class="file-info" id="xtceFileInfo" style="display:none"></div>
+                    <div class="import-actions">
+                        <button class="btn-primary" id="xtceUploadBtn" disabled>Import Parameters</button>
+                    </div>
+                    <div class="import-progress" id="xtceProgress" style="display:none">
+                        <div class="progress-bar"><div class="progress-fill" id="xtceProgressFill"></div></div>
+                        <span class="progress-text">Parsing XTCE...</span>
+                    </div>
+                    <div class="import-result" id="xtceResult" style="display:none"></div>
+                </div>
+            </section>
+
+            <!-- CSV Upload -->
+            <section class="panel import-card">
+                <div class="panel-header">
+                    <h2>Telemetry CSV Upload</h2>
+                    <span class="import-badge">Time-Series</span>
+                </div>
+                <div class="import-body">
+                    <p class="import-desc">Upload a wide-format CSV for batch anomaly detection. First column must be a timestamp; remaining columns are telemetry parameters. Results appear in the Monitor tab.</p>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Satellite ID</span></div>
+                        <input class="editor-input" id="csv-satellite-id" type="text"
+                            placeholder="e.g. NEXUS-43017">
+                    </div>
+                    <div class="editor-field">
+                        <div class="editor-label"><span>Resample Interval (minutes)</span></div>
+                        <input class="editor-input" id="csv-resample" type="number"
+                            placeholder="1" min="1" max="1440" value="1">
+                    </div>
+                    <div class="drop-zone" id="csvDropZone">
+                        <div class="drop-icon">📊</div>
+                        <div class="drop-text">Drop CSV file here</div>
+                        <div class="drop-sub">or <button class="btn-link" onclick="document.getElementById('csvFileInput').click()">browse files</button></div>
+                        <input type="file" id="csvFileInput" accept=".csv" style="display:none">
+                    </div>
+                    <div class="file-info" id="csvFileInfo" style="display:none"></div>
+                    <div class="import-actions">
+                        <button class="btn-primary" id="csvUploadBtn" disabled>Run Detection</button>
+                    </div>
+                    <div class="import-progress" id="csvProgress" style="display:none">
+                        <div class="progress-bar"><div class="progress-fill" id="csvProgressFill"></div></div>
+                        <span class="progress-text">Detecting anomalies...</span>
+                    </div>
+                    <div class="import-result" id="csvResult" style="display:none"></div>
+                </div>
+            </section>
+
+            <!-- Onboarding Guide -->
+            <section class="panel onboarding-panel">
+                <div class="panel-header"><h2>Quick Start Guide</h2></div>
+                <div class="onboarding-steps">
+                    <div class="ob-step done">
+                        <div class="ob-num">1</div>
+                        <div class="ob-content">
+                            <div class="ob-title">API Access</div>
+                            <div class="ob-desc">Your API key is active. Authenticate requests with <code>X-API-Key: &lt;your-key&gt;</code> or use JWT via <code>POST /auth/login</code>.</div>
+                        </div>
+                    </div>
+                    <div class="ob-step" id="obStep2">
+                        <div class="ob-num">2</div>
+                        <div class="ob-content">
+                            <div class="ob-title">Import Parameters</div>
+                            <div class="ob-desc">Upload an XTCE file or CSV above to populate the channel registry with your satellite parameters and alarm ranges.</div>
+                        </div>
+                    </div>
+                    <div class="ob-step" id="obStep3">
+                        <div class="ob-num">3</div>
+                        <div class="ob-content">
+                            <div class="ob-title">Tune Thresholds</div>
+                            <div class="ob-desc">Visit the Channels tab to override z-score thresholds, min confidence, and cooldown periods per parameter.</div>
+                        </div>
+                    </div>
+                    <div class="ob-step" id="obStep4">
+                        <div class="ob-num">4</div>
+                        <div class="ob-content">
+                            <div class="ob-title">Configure Alerts</div>
+                            <div class="ob-desc">Set a webhook URL or SMTP server in the Alerts tab to receive real-time notifications when anomalies are detected.</div>
+                        </div>
+                    </div>
+                    <div class="ob-step" id="obStep5">
+                        <div class="ob-num">5</div>
+                        <div class="ob-content">
+                            <div class="ob-title">Push Live Telemetry</div>
+                            <div class="ob-desc">Stream JSON via <code>POST /api/v1/telemetry/ingest</code> or connect YAMCS / InfluxDB via the connector scripts.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         ADMIN TAB
+         ================================================================ -->
+    <div class="tab-content" id="tab-admin" style="display:none">
+        <div class="admin-layout">
+
+            <!-- ── Section 1: Users ─────────────────────────────────── -->
+            <section class="admin-section" id="adminUsers">
+                <div class="admin-section-header">
+                    <h2>Team Members</h2>
+                    <button class="btn-primary" id="addUserBtn">+ Add User</button>
+                </div>
+                <div class="admin-search-row">
+                    <input class="settings-input" id="userSearch" type="search"
+                        placeholder="Filter by email or role…" autocomplete="off">
+                </div>
+                <div class="admin-table-wrap">
+                    <table class="admin-table" id="usersTable">
+                        <thead>
+                            <tr>
+                                <th style="width:40px"></th>
+                                <th>Name / Email</th>
+                                <th>Role</th>
+                                <th>Status</th>
+                                <th>Last Login</th>
+                                <th style="width:160px">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody">
+                            <tr><td colspan="6" class="empty-state">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ── Section 2: API Keys ──────────────────────────────── -->
+            <section class="admin-section" id="adminKeys">
+                <div class="admin-section-header">
+                    <h2>API Keys</h2>
+                    <button class="btn-primary" id="generateKeyBtn">+ Generate Key</button>
+                </div>
+                <div class="admin-table-wrap">
+                    <table class="admin-table" id="keysTable">
+                        <thead>
+                            <tr>
+                                <th>Label</th>
+                                <th>Prefix</th>
+                                <th>Created</th>
+                                <th>Last Used</th>
+                                <th style="width:80px">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keysTableBody">
+                            <tr><td colspan="5" class="empty-state">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ── Section 3: Tenants (sentinel_admin only) ─────────── -->
+            <section class="admin-section" id="adminTenants" style="display:none">
+                <div class="admin-section-header">
+                    <h2>Tenants</h2>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input id="tenantSearch" class="filter-input" type="search"
+                            placeholder="Search by ID or name…" style="width:200px"
+                            oninput="renderTenantsTable()" autocomplete="off">
+                        <button class="btn-primary" id="createTenantBtn">+ Create Tenant</button>
+                    </div>
+                </div>
+                <div class="admin-table-wrap">
+                    <table class="admin-table" id="tenantsTable">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Name</th>
+                                <th>Plan</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th style="width:80px">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tenantsTableBody">
+                            <tr><td colspan="6" class="empty-state">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- ── Section 4: Simulator (sentinel scope) ────────────── -->
+            <section class="admin-section" id="adminSimulator" style="display:none">
+                <div class="admin-section-header">
+                    <h2>Spacecraft Simulator</h2>
+                </div>
+                <div class="sim-grid">
+                    <div class="sim-field">
+                        <label class="settings-label">Satellite ID</label>
+                        <input class="settings-input" id="simSatId" type="text"
+                            placeholder="e.g. SIM-01" value="SIM-01">
+                    </div>
+                    <div class="sim-field">
+                        <label class="settings-label">Duration (s)</label>
+                        <input class="settings-input" id="simDuration" type="number"
+                            min="10" max="3600" value="300">
+                    </div>
+                    <div class="sim-field">
+                        <label class="settings-label">Rate (Hz)</label>
+                        <input class="settings-input" id="simRate" type="number"
+                            min="0.1" max="10" step="0.1" value="1.0">
+                    </div>
+                    <div class="sim-field">
+                        <label class="settings-label">Fault Scenario</label>
+                        <select class="settings-input" id="simScenario">
+                            <option value="">— none —</option>
+                            <option value="battery_drain">Battery Drain</option>
+                            <option value="thermal_spike">Thermal Spike</option>
+                            <option value="attitude_despin">Attitude De-spin</option>
+                            <option value="comms_dropout">Comms Dropout</option>
+                            <option value="memory_corruption">Memory Corruption</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="sim-actions">
+                    <button class="btn-primary" id="startSimBtn">▶ Start Simulation</button>
+                    <button class="btn-secondary" id="injectFaultBtn">⚡ Inject Fault</button>
+                </div>
+                <div id="simStatus" class="sim-status" style="display:none"></div>
+            </section>
+
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settingsOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>⚙ Settings</h3>
+                <button class="btn-secondary" id="settingsClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- Theme -->
+                <div class="modal-section">
+                    <div class="modal-section-title">Appearance</div>
+                    <div class="theme-picker">
+                        <button class="theme-option" data-theme="system" id="themeSystem">
+                            <span class="theme-icon">💻</span> System
+                        </button>
+                        <button class="theme-option" data-theme="dark" id="themeDark">
+                            <span class="theme-icon">🌙</span> Dark
+                        </button>
+                        <button class="theme-option" data-theme="light" id="themeLight">
+                            <span class="theme-icon">☀</span> Light
+                        </button>
+                    </div>
+                </div>
+                <!-- Refresh -->
+                <div class="modal-section">
+                    <div class="modal-section-title">Data Refresh</div>
+                    <div class="settings-field">
+                        <div class="settings-label">
+                            <span>Anomaly poll interval</span>
+                        </div>
+                        <select class="settings-input" id="pollInterval">
+                            <option value="5000">5 seconds</option>
+                            <option value="10000" selected>10 seconds</option>
+                            <option value="30000">30 seconds</option>
+                            <option value="60000">1 minute</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- API / Auth -->
+                <div class="modal-section">
+                    <div class="modal-section-title">Authentication</div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>API Base URL</span></div>
+                        <input class="settings-input" id="settingsApiBase" type="text"
+                            placeholder="http://localhost:8400/api/v1" readonly>
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Auth Mode</span></div>
+                        <input class="settings-input" id="settingsAuthMode" type="text" readonly>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="settingsCancel">Cancel</button>
+                <button class="btn-primary" id="settingsSave" style="flex:0;padding:7px 20px">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Change Password Modal -->
+    <div class="modal-overlay" id="changePwOverlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Change Password</h3>
+                <button class="btn-secondary" id="changePwClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="login-error" id="cpError"></div>
+                <div class="modal-section">
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Current Password</span></div>
+                        <input class="settings-input" id="cpCurrentPw" type="password"
+                            placeholder="••••••••" autocomplete="current-password">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>New Password</span></div>
+                        <input class="settings-input" id="cpNewPw" type="password"
+                            placeholder="••••••••" autocomplete="new-password">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Confirm New Password</span></div>
+                        <input class="settings-input" id="cpConfirmPw" type="password"
+                            placeholder="••••••••" autocomplete="new-password">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cpCancelBtn">Cancel</button>
+                <button class="btn-primary" id="cpSaveBtn" style="flex:0;padding:7px 20px">Change Password</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div class="login-modal" id="loginModal" style="display:none">
+        <div class="login-box">
+            <div class="login-logo">
+                <span class="logo-icon">◈</span>
+                <span class="logo-text">SENTINEL</span>
+            </div>
+            <p class="login-subtitle">Telemetry Anomaly Detection Engine</p>
+            <div class="login-error" id="loginError"></div>
+            <!-- form element enables browser password manager autofill & save -->
+            <form id="loginForm" onsubmit="handleLogin();return false;" autocomplete="on">
+                <div class="login-field">
+                    <label class="login-label" for="loginEmail">Email</label>
+                    <input class="login-input" id="loginEmail" type="email"
+                        name="email" placeholder="you@example.com"
+                        autocomplete="username email" required>
+                </div>
+                <div class="login-field">
+                    <label class="login-label" for="loginPassword">Password</label>
+                    <div class="pw-wrap">
+                        <input class="login-input" id="loginPassword" type="password"
+                            name="password" placeholder="••••••••"
+                            autocomplete="current-password" required>
+                        <button type="button" class="pw-toggle" id="loginPwToggle"
+                            onclick="toggleLoginPw()" title="Show / hide password"
+                            tabindex="-1">
+                            <!-- eye-open: shown when password is hidden -->
+                            <svg id="iconEyeOpen" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            <!-- eye-off: shown when password is visible -->
+                            <svg id="iconEyeOff" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="display:none">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M17.94 17.94A10.07 10.07 0 0112 20c-4.477 0-8.268-2.943-9.542-7a9.956 9.956 0 012.228-3.716M6.53 6.53A9.956 9.956 0 0112 4c4.477 0 8.268 2.943 9.542 7a10.025 10.025 0 01-4.132 5.411M3 3l18 18"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="login-field">
+                    <label class="login-label" for="loginTenantId">
+                        Tenant ID <span style="color:var(--text-muted);font-weight:400">(leave blank for Sentinel staff)</span>
+                    </label>
+                    <input class="login-input" id="loginTenantId" type="text"
+                        name="tenant_id" placeholder="e.g. esa-mission1"
+                        autocomplete="organization" style="font-family:monospace">
+                </div>
+                <button class="login-btn" id="loginBtn" type="submit">Sign In</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Create User Modal -->
+    <div class="modal-overlay" id="createUserModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Add Team Member</h3>
+                <button class="btn-secondary" id="createUserClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="login-error" id="createUserError"></div>
+                <div class="modal-section">
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Full Name</span></div>
+                        <input class="settings-input" id="newUserDisplayName" type="text"
+                            placeholder="Alice Smith" autocomplete="off">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Email</span></div>
+                        <input class="settings-input" id="newUserEmail" type="email"
+                            placeholder="alice@example.com" autocomplete="off">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Phone <span style="color:var(--text-muted);font-weight:400">(optional)</span></span></div>
+                        <input class="settings-input" id="newUserPhone" type="tel"
+                            placeholder="+1 555 0100" autocomplete="off">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Password</span></div>
+                        <input class="settings-input" id="newUserPassword" type="password"
+                            placeholder="Min 8 characters" autocomplete="new-password">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Role</span></div>
+                        <select class="settings-input" id="newUserRole">
+                            <option value="viewer">Viewer — read-only</option>
+                            <option value="operator">Operator — ingest + configure</option>
+                            <option value="tenant_manager">Manager — ops + limited user mgmt</option>
+                            <option value="admin">Admin — full tenant control</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="createUserCancel">Cancel</button>
+                <button class="btn-primary" id="createUserSubmit" style="flex:0;padding:7px 20px">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generate API Key Modal -->
+    <div class="modal-overlay" id="generateKeyModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Generate API Key</h3>
+                <button class="btn-secondary" id="genKeyClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="login-error" id="genKeyError"></div>
+                <div class="modal-section" id="genKeyForm">
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Label</span></div>
+                        <input class="settings-input" id="newKeyLabel" type="text"
+                            placeholder="e.g. CI Pipeline, Ground Station">
+                    </div>
+                </div>
+                <div class="key-reveal-section" id="keyRevealSection" style="display:none">
+                    <p class="key-reveal-note">Copy this key now — it will never be shown again.</p>
+                    <div class="key-reveal" id="keyRevealBox"></div>
+                    <button class="btn-secondary" id="copyKeyBtn" style="margin-top:8px">Copy</button>
+                </div>
+            </div>
+            <div class="modal-footer" id="genKeyFooter">
+                <button class="btn-secondary" id="genKeyCancel">Cancel</button>
+                <button class="btn-primary" id="genKeySubmit" style="flex:0;padding:7px 20px">Generate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create Tenant Modal -->
+    <div class="modal-overlay" id="createTenantModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Create Tenant</h3>
+                <button class="btn-secondary" id="createTenantClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="login-error" id="createTenantError"></div>
+                <div class="modal-section">
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Display Name</span></div>
+                        <input class="settings-input" id="newTenantName" type="text"
+                            placeholder="ACME Corp" oninput="autoSlugTenantId(this.value)">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label">
+                            <span>Tenant ID</span>
+                            <span id="tenantIdAutoLabel" style="color:var(--accent);font-size:10px;margin-left:6px">auto</span>
+                            <span style="color:var(--text-muted);font-size:10px;margin-left:4px">lowercase, hyphens ok</span>
+                        </div>
+                        <input class="settings-input" id="newTenantId" type="text"
+                            placeholder="e.g. acme-corp" autocomplete="off"
+                            oninput="document.getElementById('tenantIdAutoLabel').style.display='none'">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Plan</span></div>
+                        <select class="settings-input" id="newTenantPlan">
+                            <option value="free">Free</option>
+                            <option value="pro">Pro</option>
+                            <option value="enterprise">Enterprise</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="createTenantCancel">Cancel</button>
+                <button class="btn-primary" id="createTenantSubmit" style="flex:0;padding:7px 20px">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reset Password Modal -->
+    <div class="modal-overlay" id="resetPwModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Reset Password</h3>
+                <button class="btn-secondary" id="resetPwClose">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="login-error" id="resetPwError"></div>
+                <div class="modal-section">
+                    <div class="settings-field">
+                        <div class="settings-label"><span>User</span></div>
+                        <input class="settings-input" id="resetPwEmail" type="text" readonly>
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>New Password</span></div>
+                        <input class="settings-input" id="resetPwNew" type="password"
+                            placeholder="Min 8 characters" autocomplete="new-password">
+                    </div>
+                    <div class="settings-field">
+                        <div class="settings-label"><span>Confirm</span></div>
+                        <input class="settings-input" id="resetPwConfirm" type="password"
+                            placeholder="Repeat new password" autocomplete="new-password">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="resetPwCancel">Cancel</button>
+                <button class="btn-primary" id="resetPwSubmit" style="flex:0;padding:7px 20px">Reset Password</button>
+            </div>
         </div>
     </div>
 

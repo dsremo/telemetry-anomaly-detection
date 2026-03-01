@@ -1,8 +1,8 @@
-"""In-memory store — drop-in replacement for DB queries when running without PostgreSQL.
+"""In-memory store — drop-in replacement for DB queries in unit tests.
 
-Used in demo mode (`sentinel serve --demo`). All data lives in memory and is
-lost when the server stops. This lets investors see the full pipeline working
-on any laptop without Docker or PostgreSQL.
+Used exclusively by the test suite via `create_app(demo=True)`.
+All data lives in module-level dicts and is reset between test runs.
+Never used in production — the server always connects to PostgreSQL.
 
 Implements the same async interface as sentinel.db.queries so the rest of the
 codebase doesn't need to know the difference.
@@ -11,8 +11,9 @@ codebase doesn't need to know the difference.
 from __future__ import annotations
 
 import json
+import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Lock
 
 import structlog
@@ -32,6 +33,50 @@ _alert_configs: dict[str, dict] = {}               # tenant_id → config
 _channels_seen: dict[tuple[str, str], dict] = {}   # (satellite_id, parameter) → metadata
 _satellites_seen: dict[str, dict] = {}             # satellite_id → metadata
 _MAX_TELEMETRY = 100_000  # cap to prevent OOM in long demos
+
+# --- Admin stores (seeded with demo defaults) ---
+_users: dict[str, dict] = {}          # user_id → user record
+_tenants: dict[str, dict] = {}        # tenant_id → tenant record
+_admin_api_keys: list[dict] = []      # key records (separate from RLS-scoped _api_keys)
+
+# Seed demo tenants and admin user so the Admin tab works out-of-box
+_demo_admin_id = str(uuid.uuid4())
+_tenants["default"] = {
+    "id": "default",
+    "name": "Default Tenant",
+    "plan": "free",
+    "active": True,
+    "settings": {},
+    "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+}
+_tenants["esa-mission1"] = {
+    "id": "esa-mission1",
+    "name": "ESA Mission 1",
+    "plan": "enterprise",
+    "active": True,
+    "settings": {},
+    "created_at": datetime(2024, 1, 2, tzinfo=timezone.utc),
+}
+_tenants["satnogs"] = {
+    "id": "satnogs",
+    "name": "SatNOGS Network",
+    "plan": "pro",
+    "active": True,
+    "settings": {},
+    "created_at": datetime(2024, 1, 3, tzinfo=timezone.utc),
+}
+_users[_demo_admin_id] = {
+    "id": _demo_admin_id,
+    "tenant_id": "default",
+    "email": "admin@demo.local",
+    "display_name": "Demo Admin",
+    "phone": "",
+    "role": "admin",
+    "active": True,
+    "created_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+    "last_login": None,
+    "password_hash": "",  # login not supported in demo mode
+}
 
 
 def _point_to_dict(p: TelemetryPoint) -> dict:
@@ -161,13 +206,46 @@ async def get_anomaly_by_id(anomaly_id: str) -> dict | None:
     return None
 
 
+async def get_telemetry_stats() -> dict:
+    with _lock:
+        return {
+            "total_telemetry_points": len(_telemetry),
+            "points_last_hour": 0,
+            "active_satellites": len({t.get("satellite_id") for t in _telemetry}),
+        }
+
+
+async def get_anomaly_count() -> int:
+    with _lock:
+        return len(_anomalies)
+
+
+async def get_anomaly_severity_counts() -> dict:
+    counts: dict[str, int] = {}
+    with _lock:
+        for r in _anomalies:
+            sev = r.get("severity", "watch")
+            counts[sev] = counts.get(sev, 0) + 1
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # API Keys
 # ---------------------------------------------------------------------------
 
 async def store_api_key(key_hash: str, label: str) -> None:
+    record = {
+        "key_hash": key_hash,
+        "hash_prefix": key_hash[:8],
+        "label": label,
+        "active": True,
+        "tenant_id": "default",
+        "created_at": datetime.now(timezone.utc),
+        "last_used_at": None,
+    }
     with _lock:
-        _api_keys.append({"key_hash": key_hash, "label": label, "active": True})
+        _api_keys.append(record)
+        _admin_api_keys.append(record)
 
 
 async def verify_api_key_exists(key_hash: str) -> bool:
@@ -433,3 +511,179 @@ async def load_all_alert_configs() -> list[dict]:
     """Demo stub: return all alert configs."""
     with _lock:
         return [dict(v) for v in _alert_configs.values() if v.get("enabled", True)]
+
+
+# ---------------------------------------------------------------------------
+# User management stubs (Sprint 7)
+# ---------------------------------------------------------------------------
+
+async def get_user_by_email(email: str) -> dict | None:
+    """Demo stub: look up user by email (tenant-scoped via email match)."""
+    with _lock:
+        for u in _users.values():
+            if u["email"] == email:
+                return dict(u)
+    return None
+
+
+async def get_user_by_id(user_id: str) -> dict | None:
+    """Demo stub: look up user by UUID."""
+    with _lock:
+        u = _users.get(user_id)
+    return dict(u) if u else None
+
+
+async def create_user(
+    email: str,
+    password_hash: str,
+    role: str,
+    display_name: str = "",
+    phone: str = "",
+) -> dict:
+    """Demo stub: create a new tenant user."""
+    user_id = str(uuid.uuid4())
+    row = {
+        "id": user_id,
+        "tenant_id": "default",
+        "email": email,
+        "display_name": display_name,
+        "phone": phone,
+        "role": role,
+        "active": True,
+        "created_at": datetime.now(timezone.utc),
+        "last_login": None,
+        "password_hash": password_hash,
+    }
+    with _lock:
+        _users[user_id] = row
+    return dict(row)
+
+
+async def list_users(limit: int = 100) -> list[dict]:
+    """Demo stub: list all users in the demo tenant."""
+    with _lock:
+        rows = []
+        for u in list(_users.values())[:limit]:
+            row = dict(u)
+            row.setdefault("display_name", "")
+            row.setdefault("phone", "")
+            rows.append(row)
+        return rows
+
+
+async def update_user_role(user_id: str, new_role: str) -> bool:
+    """Demo stub: change user role."""
+    with _lock:
+        if user_id not in _users:
+            return False
+        _users[user_id]["role"] = new_role
+    return True
+
+
+async def deactivate_user_by_id(user_id: str) -> bool:
+    """Demo stub: deactivate user."""
+    with _lock:
+        if user_id not in _users or not _users[user_id].get("active"):
+            return False
+        _users[user_id]["active"] = False
+    return True
+
+
+async def reactivate_user(user_id: str) -> bool:
+    """Demo stub: reactivate user."""
+    with _lock:
+        if user_id not in _users or _users[user_id].get("active"):
+            return False
+        _users[user_id]["active"] = True
+    return True
+
+
+async def update_user_password(user_id: str, new_hash: str) -> bool:
+    """Demo stub: update password hash."""
+    with _lock:
+        if user_id not in _users:
+            return False
+        _users[user_id]["password_hash"] = new_hash
+    return True
+
+
+async def revoke_all_user_tokens(user_id: str) -> None:
+    """Demo stub: no-op (no persistent tokens in memory store)."""
+
+
+async def update_last_login(user_id: str) -> None:
+    """Demo stub: update last_login timestamp."""
+    with _lock:
+        if user_id in _users:
+            _users[user_id]["last_login"] = datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Tenant management stubs (Sprint 7)
+# ---------------------------------------------------------------------------
+
+async def list_tenants() -> list[dict]:
+    """Demo stub: list all tenants."""
+    with _lock:
+        return [dict(t) for t in _tenants.values()]
+
+
+async def get_tenant_by_id(tenant_id: str) -> dict | None:
+    """Demo stub: fetch tenant by ID."""
+    with _lock:
+        t = _tenants.get(tenant_id)
+    return dict(t) if t else None
+
+
+async def create_tenant(tenant_id: str, name: str, plan: str = "free") -> dict:
+    """Demo stub: create a new tenant."""
+    row = {
+        "id": tenant_id,
+        "name": name,
+        "plan": plan,
+        "active": True,
+        "settings": {},
+        "created_at": datetime.now(timezone.utc),
+    }
+    with _lock:
+        if tenant_id in _tenants:
+            raise ValueError(f"unique constraint: tenant '{tenant_id}' already exists")
+        _tenants[tenant_id] = row
+    return dict(row)
+
+
+async def update_tenant(
+    tenant_id: str,
+    name: str | None = None,
+    active: bool | None = None,
+) -> bool:
+    """Demo stub: update tenant fields."""
+    with _lock:
+        if tenant_id not in _tenants:
+            return False
+        if name is not None:
+            _tenants[tenant_id]["name"] = name
+        if active is not None:
+            _tenants[tenant_id]["active"] = active
+    return True
+
+
+# ---------------------------------------------------------------------------
+# API key management stubs (Sprint 7)
+# ---------------------------------------------------------------------------
+
+async def list_api_keys_for_tenant() -> list[dict]:
+    """Demo stub: list all API keys for the demo tenant."""
+    with _lock:
+        return [dict(k) for k in _admin_api_keys if k.get("active", True)]
+
+
+async def revoke_api_key_by_prefix(prefix: str) -> bool:
+    """Demo stub: deactivate API keys matching the given prefix."""
+    found = False
+    with _lock:
+        for k in _admin_api_keys:
+            if k.get("hash_prefix", "").startswith(prefix):
+                k["active"] = False
+                found = True
+    return found

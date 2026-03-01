@@ -33,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 # ---------------------------------------------------------------------------
@@ -743,6 +743,24 @@ _MIGRATIONS: list[str] = [
     -- Index for efficient alert history lookups per tenant
     CREATE INDEX IF NOT EXISTS idx_alerts_tenant_dispatched
         ON alerts (tenant_id, dispatched_at DESC);
+    """,
+
+    # v15: User profile fields — display_name and phone for both tenant and sentinel users.
+    #
+    # Design:
+    #   - display_name: free-text preferred name shown in the dashboard UI.
+    #     Defaults to empty string (UI falls back to email prefix).
+    #   - phone: optional contact number for escalation purposes.
+    #   - Added to both `users` (tenant users) and `sentinel_users` (internal staff).
+    #   - ALTER TABLE … ADD COLUMN IF NOT EXISTS is idempotent — safe on re-run.
+    """
+    ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '',
+        ADD COLUMN IF NOT EXISTS phone        TEXT NOT NULL DEFAULT '';
+
+    ALTER TABLE sentinel_users
+        ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT '',
+        ADD COLUMN IF NOT EXISTS phone        TEXT NOT NULL DEFAULT '';
     """,
 ]
 

@@ -156,6 +156,9 @@ class UserOut(BaseModel):
     email: str
     role: str
     tenant_id: str
+    scope: str = ""   # "sentinel" for Sentinel staff users, "" for tenant users
+    display_name: str = ""
+    phone: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +203,8 @@ class UserCreateRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     role: str = Field(default="viewer")
+    display_name: str = Field(default="", max_length=128)
+    phone: str = Field(default="", max_length=32)
 
     @field_validator("role")
     @classmethod
@@ -231,6 +236,8 @@ class UserDetailOut(BaseModel):
     active: bool
     created_at: datetime
     last_login: datetime | None = None
+    display_name: str = ""
+    phone: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +248,12 @@ class ChangePasswordRequest(BaseModel):
     """Authenticated user changes their own password."""
 
     current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class AdminResetPasswordRequest(BaseModel):
+    """Admin sets a new password for any user in their scope (no current password needed)."""
+
     new_password: str = Field(..., min_length=8, max_length=128)
 
 

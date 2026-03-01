@@ -3,9 +3,6 @@
 Every protected route declares one of these as a Depends parameter.
 The dependency checks Bearer JWT first, then falls back to X-API-Key,
 so both human users (JWT) and machine clients (API key) work transparently.
-
-Demo mode: returns a synthetic admin user without any credential check,
-so existing tests and the demo UI work with zero auth plumbing.
 """
 
 from __future__ import annotations
@@ -32,14 +29,8 @@ async def get_current_user(
       1. Bearer JWT — for human users / dashboard login
       2. X-API-Key  — for machine clients (CLI scripts, external integrations)
 
-    In demo_mode, skips all credential checks and returns a synthetic admin
-    so the demo UI and existing integration tests work without any auth setup.
-
     On success, sets the tenant ContextVar so RLS filters DB queries correctly.
     """
-    if getattr(request.app.state, "demo_mode", False):
-        return {"user_id": "demo", "tenant_id": "default", "role": "admin"}
-
     # 1. Try JWT Bearer token
     if credentials:
         secret = getattr(request.app.state, "jwt_secret", "")
@@ -66,6 +57,7 @@ async def get_current_user(
                 "tenant_id": x_tenant or None,
                 "role": payload["role"],
                 "scope": "sentinel",
+                "email": payload.get("email", ""),
             }
 
         # Normal tenant JWT
@@ -74,6 +66,7 @@ async def get_current_user(
             "user_id": payload["sub"],
             "tenant_id": payload["tid"],
             "role": payload["role"],
+            "email": payload.get("email", ""),
         }
 
     # 2. Fall back to X-API-Key (machine clients / service accounts)

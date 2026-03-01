@@ -23,6 +23,7 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
+from sentinel.core.tenant import set_tenant
 from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
 from sentinel.ingest.esa_loader import ESADataLoader
 from sentinel.ingest.pipeline import db_context, phase, print_run_header
@@ -31,7 +32,14 @@ _SATELLITE_ID = "ESA-MISSION1"
 _DEFAULT_RESAMPLE_MINUTES = 60
 
 
-async def main(resample_minutes: int, max_channels: int | None, cooldown_hours: int) -> None:
+async def main(
+    resample_minutes: int,
+    max_channels: int | None,
+    cooldown_hours: int,
+    tenant_id: str,
+) -> None:
+    # Set tenant context so all DB writes go to the correct tenant.
+    set_tenant(tenant_id)
     # ESA historical data spans 13 years — override cooldown so the detector
     # suppresses repeated alarms during long-term aging drift.
     async with db_context(cooldown_hours=cooldown_hours):
@@ -91,5 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("--cooldown-hours", type=int, default=1440,
                         help="Min hours between anomaly reports per channel "
                              "(default: 1440 = 60d for historical data)")
+    parser.add_argument("--tenant", type=str, default="esa-mission1",
+                        help="Tenant ID for data isolation (default: esa-mission1)")
     args = parser.parse_args()
-    asyncio.run(main(args.resample_minutes, args.channels, args.cooldown_hours))
+    asyncio.run(main(args.resample_minutes, args.channels, args.cooldown_hours, args.tenant))

@@ -23,6 +23,9 @@ from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
 
 API_BASE = "http://localhost:8400"
 BATCH_SIZE = 50
+LOGIN_EMAIL = "admin@satnogs-net.com"
+LOGIN_PASSWORD = "AdminPass123"
+TENANT_ID = "satnogs"
 
 # Active satellites with high frame counts on SatNOGS DB
 # Source: https://db.satnogs.org/ — "Latest Data" section
@@ -38,6 +41,19 @@ SATELLITES_TO_TRY = [
 FRAMES_PER_SAT = 100
 
 
+async def get_auth_token() -> str:
+    """Login and return a fresh JWT access token."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{API_BASE}/api/v1/auth/login",
+            json={"email": LOGIN_EMAIL, "password": LOGIN_PASSWORD, "tenant_id": TENANT_ID},
+        )
+        if resp.status_code != 200:
+            print(f"WARN: Login failed ({resp.status_code}) — requests may be rejected with 401")
+            return ""
+        return resp.json()["access_token"]
+
+
 async def main() -> None:
     # --- 1. Init fetcher ---
     fetcher = SatNOGSFetcher()
@@ -46,8 +62,14 @@ async def main() -> None:
         sys.exit(1)
     print(f"SatNOGS token: {fetcher.api_token[:8]}...")
 
+    # --- 1b. Auth ---
+    token = await get_auth_token()
+    auth_headers = {"Authorization": f"Bearer {token}"} if token else {}
+    if token:
+        print(f"Auth:     JWT Bearer ({LOGIN_EMAIL})")
+
     # --- 2. Check server ---
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, headers=auth_headers) as client:
         try:
             resp = await client.get(f"{API_BASE}/api/v1/health")
             health = resp.json()
@@ -106,7 +128,7 @@ async def main() -> None:
 
     # --- 4. Push to API ---
     print(f"\nPushing {len(all_points)} points to Sentinel API...")
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=30.0, headers=auth_headers) as client:
         accepted_total = 0
         rejected_total = 0
 

@@ -30,13 +30,31 @@ API_BASE = "http://localhost:8400"
 BATCH_SIZE = 500            # API hard limit is 500 per batch
 POINTS_PER_CHANNEL = 2000
 MIN_POINTS_DONE = 1800
+DB_DSN = "postgresql://sentinel:sentinel_dev_only@localhost/sentinel"
+TENANT_ID = "esa-mission1"
+LOGIN_EMAIL = "admin@esa-mission1.com"
+LOGIN_PASSWORD = "AdminPass123"
 
 _DATA_DIR = Path(__file__).resolve().parents[1] / "Resources" / "ESA-Mission1"
 
 
+async def get_auth_token() -> str:
+    """Login and return a fresh JWT access token."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{API_BASE}/api/v1/auth/login",
+            json={"email": LOGIN_EMAIL, "password": LOGIN_PASSWORD, "tenant_id": TENANT_ID},
+        )
+        if resp.status_code != 200:
+            print(f"WARN: Login failed ({resp.status_code}) — requests may be rejected with 401")
+            return ""
+        return resp.json()["access_token"]
+
+
 async def get_loaded_channels() -> set[str]:
     import asyncpg  # type: ignore
-    conn = await asyncpg.connect("postgresql://sentinel:sentinel_dev_only@localhost/sentinel")
+    conn = await asyncpg.connect(DB_DSN)
+    await conn.execute(f"SET app.tenant_id = '{TENANT_ID}'")
     rows = await conn.fetch(
         "SELECT parameter FROM telemetry WHERE satellite_id='ESA-MISSION1' "
         "GROUP BY parameter HAVING COUNT(*) >= $1",
@@ -90,7 +108,10 @@ async def push_points(
         batch = payload[i : i + BATCH_SIZE]
         resp = await client.post(f"{API_BASE}/api/v1/telemetry", json={"points": batch})
         result = resp.json()
-        if resp.status_code != 200:
+        if resp.status_code == 401:
+            tqdm.write("  ERROR 401 — re-login required; run script with valid credentials")
+            return accepted, rejected
+        elif resp.status_code != 200:
             tqdm.write(f"  ERROR {resp.status_code} on batch: {result}")
         else:
             accepted += result.get("accepted", 0)
@@ -119,12 +140,20 @@ async def main() -> None:
     print(f"Mode:     {POINTS_PER_CHANNEL} pts/channel, batch={BATCH_SIZE}")
     print()
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    # Authenticate first
+    token = await get_auth_token()
+    auth_headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+    async with httpx.AsyncClient(timeout=120.0, headers=auth_headers) as client:
         # Check server
         try:
             resp = await client.get(f"{API_BASE}/api/v1/health")
             health = resp.json()
             print(f"Server:   {health['status']} (v{health.get('version','?')}, DB={health.get('db_connected',False)})")
+            if token:
+                print(f"Auth:     JWT Bearer (admin@sentinel-demo.com)")
+            else:
+                print(f"Auth:     NONE — pushes will be rejected with 401")
         except httpx.ConnectError:
             print("FAIL: Cannot connect. Run 'sentinel serve' first.")
             sys.exit(1)
@@ -191,7 +220,8 @@ async def main() -> None:
         print("=" * 60)
 
         import asyncpg  # type: ignore
-        conn = await asyncpg.connect("postgresql://sentinel:sentinel_dev_only@localhost/sentinel")
+        conn = await asyncpg.connect(DB_DSN)
+        await conn.execute(f"SET app.tenant_id = '{TENANT_ID}'")
         rows = await conn.fetch(
             "SELECT parameter, subsystem, severity, confidence, timestamp, value "
             "FROM anomalies WHERE satellite_id='ESA-MISSION1' ORDER BY confidence DESC"

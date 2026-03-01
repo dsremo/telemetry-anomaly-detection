@@ -38,12 +38,11 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 @router.get("/stats", tags=["system"])
-async def get_stats(request: Request, _user: dict = Depends(get_current_user)) -> dict:
+async def get_stats(_user: dict = Depends(get_current_user)) -> dict:
     """Aggregate telemetry and anomaly counts for the dashboard."""
-    if getattr(request.app.state, "demo_mode", False):
-        return {"total_telemetry_points": 0, "points_last_hour": 0, "active_satellites": 0, "total_anomalies": 0}
     stats = await queries.get_telemetry_stats()
-    stats["total_anomalies"] = await queries.get_anomaly_count()
+    stats["total_anomalies"]         = await queries.get_anomaly_count()
+    stats["anomaly_severity_counts"] = await queries.get_anomaly_severity_counts()
     return stats
 
 
@@ -54,19 +53,14 @@ async def get_stats(request: Request, _user: dict = Depends(get_current_user)) -
 @router.get("/health", response_model=HealthResponse, tags=["system"])
 async def health_check(request: Request) -> HealthResponse:
     """System health check — always accessible without auth."""
-    is_demo = getattr(request.app.state, "demo_mode", False)
-
-    if is_demo:
-        db_ok = True  # memory store is always "connected"
-    else:
-        db_ok = True
-        try:
-            from sentinel.db.connection import get_pool
-            pool = get_pool()
-            async with pool.acquire() as conn:
-                await conn.fetchval("SELECT 1")
-        except Exception:
-            db_ok = False
+    db_ok = True
+    try:
+        from sentinel.db.connection import get_pool
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception:
+        db_ok = False
 
     uptime = time.monotonic() - getattr(request.app.state, "start_time", time.monotonic())
     return HealthResponse(
@@ -213,14 +207,28 @@ async def list_anomalies(
     satellite_id: str | None = Query(default=None),
     severity: str | None = Query(default=None),
     since: datetime | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=1000),
+    before: datetime | None = Query(default=None),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=500),
     _user: dict = Depends(require_viewer),
 ) -> list[AnomalyOut]:
-    """List detected anomalies with optional filters."""
+    """List anomalies. Supports cursor pagination and date-range filtering.
+
+    Pagination:
+      GET /anomalies                       → newest 200
+      GET /anomalies?before=<iso-ts>       → 200 older than cursor (infinite scroll)
+      GET /anomalies?since=<iso-ts>        → new rows since ts (polling)
+    Date filter:
+      GET /anomalies?date_from=...&date_to=... → within range
+    """
     rows = await queries.get_anomalies(
         satellite_id=satellite_id,
         severity=severity,
         since=since,
+        before=before,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
     )
     return [_row_to_anomaly(r) for r in rows]

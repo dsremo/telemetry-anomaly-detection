@@ -158,21 +158,24 @@ def create_access_token(
     role: str,
     secret: str,
     ttl_seconds: int = 900,
+    email: str = "",
 ) -> str:
     """Create a signed HS256 JWT access token.
 
     Claims:
-        sub  — user UUID
-        tid  — tenant ID (used by get_current_user to set RLS context)
-        role — RBAC role string
-        iat  — issued at
-        exp  — expiry (default 15 min)
+        sub   — user UUID
+        tid   — tenant ID (used by get_current_user to set RLS context)
+        role  — RBAC role string
+        email — user email (for /auth/me without a DB lookup)
+        iat   — issued at
+        exp   — expiry (default 15 min)
     """
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "tid": tenant_id,
         "role": role,
+        "email": email,
         "iat": now,
         "exp": now + timedelta(seconds=ttl_seconds),
     }
@@ -192,6 +195,7 @@ def create_sentinel_token(
     role: str,
     secret: str,
     ttl_seconds: int = 900,
+    email: str = "",
 ) -> str:
     """Create a signed HS256 JWT for a Sentinel internal user.
 
@@ -204,6 +208,7 @@ def create_sentinel_token(
     payload = {
         "sub": user_id,
         "role": role,
+        "email": email,
         "scope": "sentinel",
         "iat": now,
         "exp": now + timedelta(seconds=ttl_seconds),
