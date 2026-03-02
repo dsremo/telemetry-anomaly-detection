@@ -114,7 +114,18 @@ detection:
   tcn_retrain_interval:  500   # retrain every N new residuals per channel
   tcn_threshold_sigma:   3.0   # anomaly: mse > mean + K × std (from training)
 
+  # ── TrendVelocityDetector (onset detector, Sprint 14) ────────────────
+  # Differentiates the STL trend component to measure drift velocity.
+  # Fires when trend accelerates > tvel_threshold_sigma × (ref_std / window).
+  # This catches brief onset events that CUSUM misses (needs too many samples).
+  # Complements CUSUM: CUSUM catches sustained drift; this catches acceleration.
+  tvel_window:           20    # trend samples for velocity estimation (np.gradient)
+  tvel_recent_points:    5     # how many of the latest velocity values to evaluate
+  tvel_threshold_sigma:  3.0   # alarm: velocity > σ × (ref_std / window)
+
   # ── Isolation Forest (multivariate cross-parameter) ──────────────────
+  # Sprint 14: now activates for ANY satellite with ≥2 parameters (not just
+  # standard simulator parameter names).  OPS-SAT, CATS, GECCO all benefit.
   isolation_contamination: 0.01  # expected anomaly fraction (~1%)
   isolation_lookback: 3600       # samples for training window
 
@@ -123,16 +134,17 @@ detection:
   changepoint_min_size: 50  # minimum segment length between breakpoints
 
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
-  # Sprint 13: 8-detector ensemble (tcn added — dilated causal convolution, deeper ML)
+  # Sprint 14: 9-detector ensemble (trend_velocity added — onset detection)
   ensemble_weights:
-    cusum:            0.20   # primary: gradual drift accumulation
-    ewma:             0.17   # secondary: sudden level shifts
-    statistical:      0.13   # spike detection (single-point outliers)
-    changepoint:      0.10   # structural break detection
-    isolation_forest: 0.06   # multivariate (only for standard param names)
-    variance:         0.09   # variance-spike detector (CATS-type oscillatory signals)
-    lstm:             0.13   # GRU autoencoder — temporal pattern anomalies (ML)
-    tcn:              0.12   # TCN — dilated causal convolutions, deeper ML patterns
+    cusum:            0.19   # primary: gradual drift accumulation
+    ewma:             0.16   # secondary: sudden level shifts
+    statistical:      0.12   # spike detection (single-point outliers)
+    changepoint:      0.09   # structural break detection
+    isolation_forest: 0.05   # multivariate (≥2 parameters required)
+    variance:         0.08   # variance-spike detector (CATS-type oscillatory signals)
+    lstm:             0.12   # GRU autoencoder — temporal pattern anomalies (ML)
+    tcn:              0.11   # TCN — dilated causal convolutions, deeper ML patterns
+    trend_velocity:   0.08   # STL trend acceleration — onset detection (Sprint 14)
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:

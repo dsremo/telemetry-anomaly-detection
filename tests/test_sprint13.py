@@ -243,9 +243,11 @@ class TestEnsembleWith8Detectors:
 
     def test_eight_detector_names_in_weights(self) -> None:
         from sentinel.detection.detector import WEIGHTS
+        # Sprint 13 added tcn — subsequent sprints may add more detectors, so
+        # check all Sprint-13 keys are present (subset), not exact equality.
         expected = {"cusum", "ewma", "statistical", "changepoint",
                     "isolation_forest", "variance", "lstm", "tcn"}
-        assert set(WEIGHTS.keys()) == expected
+        assert expected.issubset(set(WEIGHTS.keys()))
 
     def test_build_explanation_handles_tcn(self) -> None:
         from sentinel.core.models import DetectorResult, Severity

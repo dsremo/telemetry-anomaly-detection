@@ -2,22 +2,30 @@
 
 Detection order per parameter (post-STL architecture):
     1. Fetch recent window from DB (600 pts, oldest → newest)
-    2. STL decompose → residuals  (seasonal removed; trend kept for CUSUM)
+    2. STL decompose → residuals + trend
     3. Update per-channel calibration (ref_mean, ref_std, k, H, UCL, LCL)
-    4. CUSUM  on residuals  — gradual drift accumulation (NASA standard)
-    5. EWMA   on residuals  — sudden level shifts
-    6. Z-score on residuals — single-point spikes
-    7. PELT   on residuals  — abrupt structural breaks
-    8. Isolation Forest on raw values — multivariate cross-parameter
-    9. Ensemble vote → confidence + severity
-   10. Store anomaly, broadcast via WebSocket
+    4. CUSUM           on residuals  — gradual drift accumulation (NASA standard)
+    5. EWMA            on residuals  — sudden level shifts
+    6. Z-score         on residuals  — single-point spikes
+    7. PELT            on residuals  — abrupt structural breaks
+    8. Isolation Forest on raw values — multivariate cross-parameter (≥2 params)
+    9. Variance         on residuals  — variance-spike anomalies (CATS-type)
+   10. GRU Autoencoder  on residuals  — temporal pattern ML
+   11. TCN              on residuals  — dilated causal convolution ML
+   12. Trend Velocity   on STL trend  — onset detection (drift acceleration)
+   13. Ensemble vote → confidence + severity
+   14. Store anomaly, broadcast via WebSocket
 
-Ensemble weights:
-    cusum:            0.30   (primary drift detector)
-    ewma:             0.25   (level shift detector)
-    statistical:      0.20   (spike detector)
-    changepoint:      0.15   (structural break detector)
-    isolation_forest: 0.10   (multivariate, only for standard parameters)
+Ensemble weights (9 detectors, sum=1.0):
+    cusum:            0.19   (primary drift detector)
+    ewma:             0.16   (level shift detector)
+    statistical:      0.12   (spike detector)
+    changepoint:      0.09   (structural break detector)
+    isolation_forest: 0.05   (multivariate, ≥2 parameters required)
+    variance:         0.08   (variance-spike anomalies)
+    lstm:             0.12   (GRU autoencoder — temporal pattern ML)
+    tcn:              0.11   (TCN — dilated causal convolutions)
+    trend_velocity:   0.08   (STL trend acceleration — onset detection)
 
 Severity gate:   derived from ensemble confidence only.
     watch   >= 0.50
@@ -50,6 +58,7 @@ from sentinel.detection.statistical import StatisticalDetector
 from sentinel.detection.stl_decomposer import STLDecomposer
 from sentinel.detection.autoencoder_detector import AutoencoderDetector
 from sentinel.detection.tcn_detector import TCNDetector
+from sentinel.detection.trend_velocity_detector import TrendVelocityDetector
 from sentinel.detection.variance_detector import VarianceDetector
 from sentinel.features.engine import FeatureEngine
 
@@ -64,7 +73,8 @@ _ewma_detector:     EWMADetector             = EWMADetector()
 _stat_detector:     StatisticalDetector      = StatisticalDetector()
 _iso_detector:      IsolationForestDetector  = IsolationForestDetector()
 _cp_detector:       ChangePointDetector      = ChangePointDetector()
-_variance_detector: VarianceDetector         = VarianceDetector()
+_variance_detector:        VarianceDetector         = VarianceDetector()
+_trend_velocity_detector:  TrendVelocityDetector    = TrendVelocityDetector()
 
 # Per-channel GRU autoencoder models — keyed by "satellite_id:parameter".
 # Each AutoencoderDetector accumulates residuals, self-trains, and scores.
@@ -92,17 +102,23 @@ _tcn_min_train:        int   = 64
 _tcn_retrain_interval: int   = 500
 _tcn_threshold_sigma:  float = 3.0
 
+# TrendVelocityDetector config — overridable via init_detectors() from sentinel.yaml.
+_tvel_window:          int   = 20
+_tvel_recent_points:   int   = 5
+_tvel_threshold_sigma: float = 3.0
+
 # Ensemble weights (must sum to 1.0, overridable via config)
-# 8 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm, tcn
+# 9 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm, tcn, trend_velocity
 WEIGHTS: dict[str, float] = {
-    "cusum":            0.20,   # primary drift detector (NASA CUSUM standard)
-    "ewma":             0.17,   # level-shift detector
-    "statistical":      0.13,   # single-point spike detector (z-score)
-    "changepoint":      0.10,   # structural break detector (PELT)
-    "isolation_forest": 0.06,   # multivariate cross-parameter anomalies
-    "variance":         0.09,   # variance-spike detector (CATS-type oscillatory signals)
-    "lstm":             0.13,   # GRU autoencoder — temporal pattern anomalies (ML)
-    "tcn":              0.12,   # TCN — dilated causal convolutions, deeper ML patterns
+    "cusum":            0.19,   # primary drift detector (NASA CUSUM standard)
+    "ewma":             0.16,   # level-shift detector
+    "statistical":      0.12,   # single-point spike detector (z-score)
+    "changepoint":      0.09,   # structural break detector (PELT)
+    "isolation_forest": 0.05,   # multivariate cross-parameter anomalies
+    "variance":         0.08,   # variance-spike detector (CATS-type oscillatory signals)
+    "lstm":             0.12,   # GRU autoencoder — temporal pattern anomalies (ML)
+    "tcn":              0.11,   # TCN — dilated causal convolutions, deeper ML patterns
+    "trend_velocity":   0.08,   # STL trend acceleration — onset detection (Sprint 14)
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -200,6 +216,8 @@ def init_detectors(settings: object) -> None:
     global _tcn_seq_length, _tcn_n_channels, _tcn_n_blocks, _tcn_kernel_size
     global _tcn_epochs, _tcn_min_train, _tcn_retrain_interval, _tcn_threshold_sigma
     global _tcn_models
+    global _tvel_window, _tvel_recent_points, _tvel_threshold_sigma
+    global _trend_velocity_detector
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
     feat = settings.get("features",  {})   # type: ignore[attr-defined]
@@ -282,6 +300,16 @@ def init_detectors(settings: object) -> None:
     _tcn_threshold_sigma  = float(det.get("tcn_threshold_sigma", 3.0))
     _tcn_models.clear()   # drop stale per-channel models on re-init
 
+    # ── TrendVelocityDetector (Sprint 14) ─────────────────────────────────
+    _tvel_window           = int(det.get("tvel_window",           20))
+    _tvel_recent_points    = int(det.get("tvel_recent_points",     5))
+    _tvel_threshold_sigma  = float(det.get("tvel_threshold_sigma", 3.0))
+    _trend_velocity_detector = TrendVelocityDetector(
+        window=_tvel_window,
+        recent_points=_tvel_recent_points,
+        threshold_sigma=_tvel_threshold_sigma,
+    )
+
     # ── Ensemble weights ──────────────────────────────────────────────────
     cfg_weights = det.get("ensemble_weights", {})
     if cfg_weights:
@@ -354,7 +382,8 @@ def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
         "ewma_sigma_mult":     _get("ewma_sigma_mult",     None),   # None = calibration-computed
         "min_confidence":      _get("min_confidence",      0.0),
         "alert_cooldown_s":    _get("alert_cooldown_s",    _alert_cooldown_s),
-        "variance_z_threshold": _get("variance_z_threshold", _variance_detector.variance_z_threshold),
+        "variance_z_threshold":  _get("variance_z_threshold",  _variance_detector.variance_z_threshold),
+        "velocity_threshold":    _get("velocity_threshold",    None),   # None = calibrated dynamically
     }
 
 
@@ -615,9 +644,14 @@ async def analyze_channel_history(
             )
         )
         _feature_engine.compute(parameter, float(wv[final_idx]), final_ts_epoch)
-        iso_result = DetectorResult(
-            detector_name="isolation_forest", is_anomaly=False, score=0.0,
-            severity=Severity.NOMINAL, details={"reason": "non_standard_parameters"},
+        _hist_known_params = _feature_engine.get_known_parameters()
+        iso_result = (
+            _detect_isolation_forest(satellite_id, _hist_known_params)
+            if len(_hist_known_params) >= 2
+            else DetectorResult(
+                detector_name="isolation_forest", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "single_parameter"},
+            )
         )
 
         # Variance detector: use calibration from the last new point.
@@ -655,7 +689,22 @@ async def analyze_channel_history(
             tcn_det.fit(list(residuals))
         tcn_result = tcn_det.detect(list(residuals))
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result]
+        # ── Trend Velocity (9th detector — STL trend acceleration onset) ─
+        _hist_cal = _calibration_mgr.get(key)
+        hist_tvel_result = (
+            _trend_velocity_detector.detect(
+                decomp.trend,
+                _hist_cal,
+                eff.get("velocity_threshold"),
+            )
+            if _hist_cal is not None and _hist_cal.is_calibrated
+            else DetectorResult(
+                detector_name="trend_velocity", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "warming_up"},
+            )
+        )
+
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -841,14 +890,14 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         # ── 7. Isolation Forest on raw values (multivariate) ────────────
         _feature_engine.compute(param, value, current_ts_epoch)
 
-        known_params    = _feature_engine.get_known_parameters()
-        has_std_params  = any(p in known_params for p in _ALL_PARAMETERS)
+        known_params        = _feature_engine.get_known_parameters()
+        has_multiple_params = len(known_params) >= 2
         iso_result = (
-            _detect_isolation_forest(satellite_id)
-            if has_std_params
+            _detect_isolation_forest(satellite_id, known_params)
+            if has_multiple_params
             else DetectorResult(
                 detector_name="isolation_forest", is_anomaly=False, score=0.0,
-                severity=Severity.NOMINAL, details={"reason": "non_standard_parameters"},
+                severity=Severity.NOMINAL, details={"reason": "single_parameter"},
             )
         )
 
@@ -886,8 +935,22 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             tcn_det.fit(list(residuals))
         tcn_result = tcn_det.detect(list(residuals))
 
-        # ── 11. Ensemble vote ────────────────────────────────────────────
-        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result]
+        # ── 11. Trend Velocity (9th detector — STL trend acceleration onset)
+        tvel_result = (
+            _trend_velocity_detector.detect(
+                decomp.trend,
+                calibration,
+                eff.get("velocity_threshold"),
+            )
+            if calibration is not None and calibration.is_calibrated
+            else DetectorResult(
+                detector_name="trend_velocity", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "warming_up"},
+            )
+        )
+
+        # ── 12. Ensemble vote ────────────────────────────────────────────
+        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, tvel_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -1029,13 +1092,14 @@ def _ensemble_vote(
 
 # ── Isolation Forest helpers ─────────────────────────────────────────────────
 
-def _detect_isolation_forest(satellite_id: str) -> DetectorResult:
+def _detect_isolation_forest(satellite_id: str, known_params: "set[str] | None" = None) -> DetectorResult:
     if not _iso_detector.is_ready:
         return DetectorResult(
             detector_name="isolation_forest", is_anomaly=False, score=0.0,
             severity=Severity.NOMINAL, details={"reason": "model_not_fitted"},
         )
-    snapshot = _feature_engine.get_multivariate_snapshot(_ALL_PARAMETERS)
+    params = sorted(known_params) if known_params is not None else _ALL_PARAMETERS
+    snapshot = _feature_engine.get_multivariate_snapshot(params)
     if snapshot is None:
         return DetectorResult(
             detector_name="isolation_forest", is_anomaly=False, score=0.0,
@@ -1045,9 +1109,11 @@ def _detect_isolation_forest(satellite_id: str) -> DetectorResult:
 
 
 async def _refit_isolation_forest(satellite_id: str) -> None:
-    matrix = _feature_engine.get_window_matrix(_ALL_PARAMETERS, length=200)
+    known_params = _feature_engine.get_known_parameters()
+    params = sorted(known_params) if known_params else _ALL_PARAMETERS
+    matrix = _feature_engine.get_window_matrix(params, length=200)
     if matrix is not None:
-        _iso_detector.fit(matrix, _ALL_PARAMETERS)
+        _iso_detector.fit(matrix, params)
 
 
 # ── Explanation + contribution ────────────────────────────────────────────────
@@ -1132,6 +1198,14 @@ def _build_explanation(
                 parts.append(
                     f"TCN: reconstruction MSE={mse:.4f} "
                     f"(threshold={thr:.4f}, z={z:.2f})"
+                )
+            case "trend_velocity":
+                vel = r.details.get("max_velocity", 0)
+                thr = r.details.get("threshold", 0)
+                rat = r.details.get("ratio", 0)
+                parts.append(
+                    f"Trend acceleration: velocity={vel:.4f} "
+                    f"(threshold={thr:.4f}, ratio={rat:.2f}×)"
                 )
 
     parts.append(f"{len(triggered)}/{len(results)} detectors triggered")
