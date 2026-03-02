@@ -209,10 +209,15 @@ async def get_anomalies(
         results = [r for r in results if r["timestamp"] >= date_from]
     if date_to:
         results = [r for r in results if r["timestamp"] <= date_to]
+    _ML_DETS = {"lstm", "tcn"}
     if ml_only is True:
-        results = [r for r in results if r.get("detectors_triggered") == ["lstm"]]
+        results = [r for r in results
+                   if r.get("detectors_triggered")
+                   and set(r["detectors_triggered"]).issubset(_ML_DETS)]
     elif ml_only is False:
-        results = [r for r in results if r.get("detectors_triggered") != ["lstm"]]
+        results = [r for r in results
+                   if not (r.get("detectors_triggered")
+                           and set(r["detectors_triggered"]).issubset(_ML_DETS))]
     results.sort(key=lambda r: r["timestamp"], reverse=True)
     return results[:min(limit, 1000)]
 

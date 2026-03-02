@@ -407,8 +407,9 @@ def _row_to_anomaly(row: dict) -> AnomalyOut:
     if isinstance(detectors, str):
         detectors = json.loads(detectors)
     detectors = list(detectors)
-    # ml_only: lstm was the sole detector that flagged this anomaly
-    ml_only = detectors == ["lstm"]
+    # ml_only: only ML detectors (lstm/tcn) fired — statistics missed it
+    _ML_DETECTORS = {"lstm", "tcn"}
+    ml_only = bool(detectors) and set(detectors).issubset(_ML_DETECTORS)
     return AnomalyOut(
         id=row["id"],
         satellite_id=row["satellite_id"],

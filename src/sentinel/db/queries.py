@@ -737,11 +737,17 @@ async def get_anomalies(
         params.append(date_to)
         conditions.append(f"timestamp <= ${len(params)}")
 
-    # ml_only: True → only lstm-sole detections; False → exclude them
+    # ml_only: True → only ML-detector-only detections (lstm/tcn, no stats)
     if ml_only is True:
-        conditions.append("detectors_triggered = ARRAY['lstm']::TEXT[]")
+        conditions.append(
+            "(detectors_triggered <@ ARRAY['lstm','tcn']::TEXT[] "
+            "AND array_length(detectors_triggered, 1) > 0)"
+        )
     elif ml_only is False:
-        conditions.append("NOT (detectors_triggered = ARRAY['lstm']::TEXT[])")
+        conditions.append(
+            "NOT (detectors_triggered <@ ARRAY['lstm','tcn']::TEXT[] "
+            "AND array_length(detectors_triggered, 1) > 0)"
+        )
 
     params.append(min(limit, 500))
     limit_ph = f"${len(params)}"

@@ -844,7 +844,8 @@ const DET_META = {
     changepoint:      ['CPLT',  'cp'],
     isolation_forest: ['ISO',   'iso'],
     variance:         ['VAR',   'var'],
-    lstm:             ['ML',    'ml'],
+    lstm:             ['GRU',   'ml'],
+    tcn:              ['TCN',   'ml'],
 };
 
 function _detBadges(detectors) {
