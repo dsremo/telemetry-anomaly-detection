@@ -49,6 +49,7 @@ from sentinel.detection.isolation import IsolationForestDetector
 from sentinel.detection.statistical import StatisticalDetector
 from sentinel.detection.stl_decomposer import STLDecomposer
 from sentinel.detection.autoencoder_detector import AutoencoderDetector
+from sentinel.detection.tcn_detector import TCNDetector
 from sentinel.detection.variance_detector import VarianceDetector
 from sentinel.features.engine import FeatureEngine
 
@@ -78,16 +79,30 @@ _lstm_min_train:       int   = 60
 _lstm_retrain_interval: int  = 500
 _lstm_threshold_sigma: float = 3.0
 
+# Each TCNDetector accumulates residuals, self-trains, and scores.
+_tcn_models: dict[str, TCNDetector] = {}
+
+# TCN config — overridable via init_detectors() from sentinel.yaml.
+_tcn_seq_length:       int   = 32
+_tcn_n_channels:       int   = 16
+_tcn_n_blocks:         int   = 4
+_tcn_kernel_size:      int   = 3
+_tcn_epochs:           int   = 40
+_tcn_min_train:        int   = 64
+_tcn_retrain_interval: int   = 500
+_tcn_threshold_sigma:  float = 3.0
+
 # Ensemble weights (must sum to 1.0, overridable via config)
-# 7 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm
+# 8 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm, tcn
 WEIGHTS: dict[str, float] = {
-    "cusum":            0.23,   # primary drift detector (NASA CUSUM standard)
-    "ewma":             0.19,   # level-shift detector
-    "statistical":      0.15,   # single-point spike detector (z-score)
-    "changepoint":      0.11,   # structural break detector (PELT)
-    "isolation_forest": 0.07,   # multivariate cross-parameter anomalies
-    "variance":         0.10,   # variance-spike detector (CATS-type oscillatory signals)
-    "lstm":             0.15,   # GRU autoencoder — temporal pattern anomalies (ML)
+    "cusum":            0.20,   # primary drift detector (NASA CUSUM standard)
+    "ewma":             0.17,   # level-shift detector
+    "statistical":      0.13,   # single-point spike detector (z-score)
+    "changepoint":      0.10,   # structural break detector (PELT)
+    "isolation_forest": 0.06,   # multivariate cross-parameter anomalies
+    "variance":         0.09,   # variance-spike detector (CATS-type oscillatory signals)
+    "lstm":             0.13,   # GRU autoencoder — temporal pattern anomalies (ML)
+    "tcn":              0.12,   # TCN — dilated causal convolutions, deeper ML patterns
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -153,6 +168,23 @@ def _get_lstm_model(satellite_id: str, parameter: str) -> AutoencoderDetector:
     return _lstm_models[key]
 
 
+def _get_tcn_model(satellite_id: str, parameter: str) -> TCNDetector:
+    """Return (creating if needed) the per-channel TCN detector instance."""
+    key = f"{satellite_id}:{parameter}"
+    if key not in _tcn_models:
+        _tcn_models[key] = TCNDetector(
+            seq_length=_tcn_seq_length,
+            n_channels=_tcn_n_channels,
+            n_blocks=_tcn_n_blocks,
+            kernel_size=_tcn_kernel_size,
+            epochs=_tcn_epochs,
+            min_train_samples=_tcn_min_train,
+            retrain_interval=_tcn_retrain_interval,
+            threshold_sigma=_tcn_threshold_sigma,
+        )
+    return _tcn_models[key]
+
+
 def init_detectors(settings: object) -> None:
     """Wire config values into all detector singletons.  Call once at startup."""
     global _feature_engine, _stl_decomposer, _calibration_mgr
@@ -165,6 +197,9 @@ def init_detectors(settings: object) -> None:
     global _lstm_seq_length, _lstm_hidden_size, _lstm_bottleneck_size
     global _lstm_epochs, _lstm_min_train, _lstm_retrain_interval, _lstm_threshold_sigma
     global _lstm_models
+    global _tcn_seq_length, _tcn_n_channels, _tcn_n_blocks, _tcn_kernel_size
+    global _tcn_epochs, _tcn_min_train, _tcn_retrain_interval, _tcn_threshold_sigma
+    global _tcn_models
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
     feat = settings.get("features",  {})   # type: ignore[attr-defined]
@@ -235,6 +270,17 @@ def init_detectors(settings: object) -> None:
     _lstm_retrain_interval = int(det.get("lstm_retrain_interval",  500))
     _lstm_threshold_sigma  = float(det.get("lstm_threshold_sigma", 3.0))
     _lstm_models.clear()   # drop stale per-channel models on re-init
+
+    # ── TCN Detector (ML detector, Sprint 13) ────────────────────────────────
+    _tcn_seq_length       = int(det.get("tcn_seq_length",        32))
+    _tcn_n_channels       = int(det.get("tcn_n_channels",        16))
+    _tcn_n_blocks         = int(det.get("tcn_n_blocks",           4))
+    _tcn_kernel_size      = int(det.get("tcn_kernel_size",        3))
+    _tcn_epochs           = int(det.get("tcn_epochs",            40))
+    _tcn_min_train        = int(det.get("tcn_min_train_samples", 64))
+    _tcn_retrain_interval = int(det.get("tcn_retrain_interval",  500))
+    _tcn_threshold_sigma  = float(det.get("tcn_threshold_sigma", 3.0))
+    _tcn_models.clear()   # drop stale per-channel models on re-init
 
     # ── Ensemble weights ──────────────────────────────────────────────────
     cfg_weights = det.get("ensemble_weights", {})
@@ -599,7 +645,17 @@ async def analyze_channel_history(
             lstm_det.fit(list(residuals))
         lstm_result = lstm_det.detect(list(residuals))
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result]
+        # ── TCN Detector (8th detector — dilated causal convolution ML) ───
+        tcn_det = _get_tcn_model(satellite_id, parameter)
+        for idx in new_indices:
+            tcn_det.add_sample(float(residuals[idx]))
+        if not tcn_det.is_fitted and tcn_det.sample_count >= tcn_det.min_train_samples:
+            tcn_det.fit()
+        elif tcn_det.needs_refit():
+            tcn_det.fit(list(residuals))
+        tcn_result = tcn_det.detect(list(residuals))
+
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -820,8 +876,18 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             lstm_det.fit(list(residuals))
         lstm_result = lstm_det.detect(list(residuals))
 
-        # ── 10. Ensemble vote ────────────────────────────────────────────
-        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result]
+        # ── 10. TCN Detector (8th detector — dilated causal convolution ML)
+        tcn_det = _get_tcn_model(satellite_id, param)
+        for idx in new_indices:
+            tcn_det.add_sample(float(residuals[idx]))
+        if not tcn_det.is_fitted and tcn_det.sample_count >= tcn_det.min_train_samples:
+            tcn_det.fit()
+        elif tcn_det.needs_refit():
+            tcn_det.fit(list(residuals))
+        tcn_result = tcn_det.detect(list(residuals))
+
+        # ── 11. Ensemble vote ────────────────────────────────────────────
+        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -1057,6 +1123,14 @@ def _build_explanation(
                 z   = r.details.get("z_score", 0)
                 parts.append(
                     f"Autoencoder: reconstruction MSE={mse:.4f} "
+                    f"(threshold={thr:.4f}, z={z:.2f})"
+                )
+            case "tcn":
+                mse = r.details.get("mse", 0)
+                thr = r.details.get("threshold", 0)
+                z   = r.details.get("z_score", 0)
+                parts.append(
+                    f"TCN: reconstruction MSE={mse:.4f} "
                     f"(threshold={thr:.4f}, z={z:.2f})"
                 )
 

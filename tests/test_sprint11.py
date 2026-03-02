@@ -207,9 +207,10 @@ class TestEnsembleWith7Detectors:
     # 3 — 7 detector names present (not 6)
     def test_seven_detector_names(self):
         from sentinel.detection.detector import WEIGHTS
-        expected = {"cusum", "ewma", "statistical", "changepoint",
+        # Sprint 13 added "tcn" as 8th detector — assert all Sprint 11 detectors still present
+        required = {"cusum", "ewma", "statistical", "changepoint",
                     "isolation_forest", "variance", "lstm"}
-        assert set(WEIGHTS.keys()) == expected, f"Got: {set(WEIGHTS.keys())}"
+        assert required.issubset(set(WEIGHTS.keys())), f"Got: {set(WEIGHTS.keys())}"
 
     # 4 — ensemble vote: 1 of 7 detectors firing → agreement=0.60, confidence=0.60×1.0
     def test_ensemble_vote_lstm_alone_confidence(self):

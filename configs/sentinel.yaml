@@ -101,6 +101,19 @@ detection:
   lstm_retrain_interval:  500   # retrain every N new residuals per channel
   lstm_threshold_sigma:   3.0   # anomaly: mse > mean + K × std (from training)
 
+  # ── TCN Detector (ML detector, Sprint 13) ────────────────────────────
+  # 4-block dilated causal TCN autoencoder.  Receptive field = 61 steps (seq_len=32).
+  # Deeper than GRU: no vanishing gradient, fully parallelisable on CPU.
+  # threshold: mse > mean_train_mse + tcn_threshold_sigma × std_train_mse
+  tcn_seq_length:        32    # residual sequence window (receptive field covers all 32)
+  tcn_n_channels:        16    # conv feature channels per block
+  tcn_n_blocks:          4     # dilation pattern 1,2,4,8 (4 blocks = 61-step field)
+  tcn_kernel_size:       3     # conv kernel width
+  tcn_epochs:            40    # training epochs (< 1 s per channel on CPU)
+  tcn_min_train_samples: 64    # min residuals before first training (2 × seq_length)
+  tcn_retrain_interval:  500   # retrain every N new residuals per channel
+  tcn_threshold_sigma:   3.0   # anomaly: mse > mean + K × std (from training)
+
   # ── Isolation Forest (multivariate cross-parameter) ──────────────────
   isolation_contamination: 0.01  # expected anomaly fraction (~1%)
   isolation_lookback: 3600       # samples for training window
@@ -110,15 +123,16 @@ detection:
   changepoint_min_size: 50  # minimum segment length between breakpoints
 
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
-  # Sprint 10: 7-detector ensemble (lstm GRU autoencoder added for ML cross-check)
+  # Sprint 13: 8-detector ensemble (tcn added — dilated causal convolution, deeper ML)
   ensemble_weights:
-    cusum:            0.23   # primary: gradual drift accumulation
-    ewma:             0.19   # secondary: sudden level shifts
-    statistical:      0.15   # spike detection (single-point outliers)
-    changepoint:      0.11   # structural break detection
-    isolation_forest: 0.07   # multivariate (only for standard param names)
-    variance:         0.10   # variance-spike detector (CATS-type oscillatory signals)
-    lstm:             0.15   # GRU autoencoder — temporal pattern anomalies (ML)
+    cusum:            0.20   # primary: gradual drift accumulation
+    ewma:             0.17   # secondary: sudden level shifts
+    statistical:      0.13   # spike detection (single-point outliers)
+    changepoint:      0.10   # structural break detection
+    isolation_forest: 0.06   # multivariate (only for standard param names)
+    variance:         0.09   # variance-spike detector (CATS-type oscillatory signals)
+    lstm:             0.13   # GRU autoencoder — temporal pattern anomalies (ML)
+    tcn:              0.12   # TCN — dilated causal convolutions, deeper ML patterns
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:
