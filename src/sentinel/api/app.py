@@ -27,6 +27,7 @@ from sentinel.api.routes import router
 from sentinel.api.routes_alerts import alerts_router
 from sentinel.api.routes_auth import auth_router
 from sentinel.api.routes_channels import channels_router
+from sentinel.api.routes_connectors import connectors_router
 from sentinel.api.routes_keys import keys_router
 from sentinel.api.routes_parameters import parameters_router
 from sentinel.api.routes_tenants import tenants_router
@@ -213,6 +214,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(alerts_router, prefix="/api/v1")
     app.include_router(channels_router, prefix="/api/v1")
+    app.include_router(connectors_router, prefix="/api/v1")
     app.include_router(tenants_router, prefix="/api/v1")
     app.include_router(users_router, prefix="/api/v1")
     app.include_router(keys_router, prefix="/api/v1")

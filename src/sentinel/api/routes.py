@@ -16,8 +16,10 @@ from sentinel.api.dependencies import get_current_user, require_admin, require_o
 
 from sentinel import __version__
 from sentinel.api.schemas import (
+    AnalyzeResult,
     AnomalyOut,
     CsvUploadResult,
+    FeedbackIn,
     HealthResponse,
     IngestResponse,
     InjectRequest,
@@ -116,6 +118,11 @@ async def ingest_single(body: TelemetryIn, _user: dict = Depends(require_operato
         return IngestResponse(accepted=0, rejected=1, errors=[{"error": str(e)}])
 
     await queries.insert_telemetry([point])
+    try:
+        from sentinel.detection.detector import run_detection_cycle
+        await run_detection_cycle(point.satellite_id)
+    except Exception as e:
+        logger.warning("detection_cycle_error", satellite=point.satellite_id, error=str(e))
     return IngestResponse(accepted=1, rejected=0)
 
 
@@ -199,6 +206,59 @@ async def get_telemetry(
 
 
 # ---------------------------------------------------------------------------
+# Analyze stored telemetry (on-demand detection)
+# ---------------------------------------------------------------------------
+
+@router.post("/telemetry/{satellite_id}/analyze", response_model=AnalyzeResult, tags=["telemetry"])
+async def analyze_satellite(
+    satellite_id: str,
+    _user: dict = Depends(require_operator),
+) -> AnalyzeResult:
+    """Run anomaly detection over all stored telemetry for a satellite.
+
+    Fetches every registered channel for the satellite, runs the full
+    5-detector pipeline via run_bulk_detection(), and returns a summary.
+    Idempotent — safe to call repeatedly; detection state is updated in DB.
+    """
+    import time as _time
+    from sentinel.ingest.bulk_loader import run_bulk_detection
+
+    # Discover channels registered for this satellite.
+    channel_rows = await queries.get_channel_stats(satellite_id)
+    if not channel_rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No channels found for satellite '{satellite_id}'. Upload telemetry first.",
+        )
+
+    parameters = [r["parameter"] for r in channel_rows]
+    subsystem_map = {r["parameter"]: r["subsystem"] for r in channel_rows}
+
+    t0 = _time.monotonic()
+    try:
+        results = await run_bulk_detection(
+            satellite_id=satellite_id,
+            parameters=parameters,
+            subsystem_map=subsystem_map,
+        )
+    except Exception as e:
+        logger.error("analyze_satellite_failed", satellite=satellite_id, error=str(e))
+        raise HTTPException(status_code=500, detail="Detection failed — check server logs")
+
+    elapsed = round(_time.monotonic() - t0, 2)
+    anomalies_per_channel = {p: len(anoms) for p, anoms in results.items()}
+    total_anomalies = sum(anomalies_per_channel.values())
+
+    return AnalyzeResult(
+        satellite_id=satellite_id,
+        channels_analyzed=len(results),
+        total_anomalies=total_anomalies,
+        anomalies_per_channel=anomalies_per_channel,
+        elapsed_s=elapsed,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Anomalies
 # ---------------------------------------------------------------------------
 
@@ -211,6 +271,7 @@ async def list_anomalies(
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
+    ml_only: bool | None = Query(default=None, description="Filter to ML-pattern-only (lstm sole detector) or stats-detected anomalies"),
     _user: dict = Depends(require_viewer),
 ) -> list[AnomalyOut]:
     """List anomalies. Supports cursor pagination and date-range filtering.
@@ -221,6 +282,9 @@ async def list_anomalies(
       GET /anomalies?since=<iso-ts>        → new rows since ts (polling)
     Date filter:
       GET /anomalies?date_from=...&date_to=... → within range
+    ML filter:
+      GET /anomalies?ml_only=true          → only lstm-sole detections (subtle patterns)
+      GET /anomalies?ml_only=false         → only stats-detected anomalies
     """
     rows = await queries.get_anomalies(
         satellite_id=satellite_id,
@@ -230,6 +294,7 @@ async def list_anomalies(
         date_from=date_from,
         date_to=date_to,
         limit=limit,
+        ml_only=ml_only,
     )
     return [_row_to_anomaly(r) for r in rows]
 
@@ -241,6 +306,25 @@ async def get_anomaly(anomaly_id: str, _user: dict = Depends(require_viewer)) ->
     if not row:
         raise HTTPException(status_code=404, detail="Anomaly not found")
     return _row_to_anomaly(row)
+
+
+@router.patch("/anomalies/{anomaly_id}/feedback", tags=["anomalies"])
+async def submit_anomaly_feedback(
+    anomaly_id: str,
+    body: FeedbackIn,
+    _user: dict = Depends(require_viewer),
+) -> AnomalyOut:
+    """Submit operator feedback (true positive / false positive) on an anomaly.
+
+    Marks the anomaly as reviewed.  False positive anomalies are excluded from
+    future GET /anomalies listings (unless include_false_positives=true).
+    """
+    is_fp = body.verdict == "false_positive"
+    updated = await queries.update_anomaly_review(anomaly_id, false_positive=is_fp)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Anomaly not found")
+    row = await queries.get_anomaly_by_id(anomaly_id)
+    return _row_to_anomaly(row)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +406,9 @@ def _row_to_anomaly(row: dict) -> AnomalyOut:
     detectors = row.get("detectors_triggered", [])
     if isinstance(detectors, str):
         detectors = json.loads(detectors)
+    detectors = list(detectors)
+    # ml_only: lstm was the sole detector that flagged this anomaly
+    ml_only = detectors == ["lstm"]
     return AnomalyOut(
         id=row["id"],
         satellite_id=row["satellite_id"],
@@ -331,8 +418,11 @@ def _row_to_anomaly(row: dict) -> AnomalyOut:
         value=row["value"],
         severity=row["severity"],
         confidence=row["confidence"],
-        detectors_triggered=list(detectors),
+        detectors_triggered=detectors,
         explanation=row.get("explanation", ""),
         root_cause_group=row.get("root_cause_group"),
         contributing_params=contributing,
+        reviewed=bool(row.get("reviewed", False)),
+        false_positive=bool(row.get("false_positive", False)),
+        ml_only=ml_only,
     )

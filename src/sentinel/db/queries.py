@@ -694,6 +694,7 @@ async def get_anomalies(
     date_to: datetime | None = None,
     limit: int = 100,
     include_false_positives: bool = False,
+    ml_only: bool | None = None,
 ) -> list[dict]:
     """Query anomalies with optional filters and cursor-based pagination.
 
@@ -735,6 +736,12 @@ async def get_anomalies(
     if date_to is not None:
         params.append(date_to)
         conditions.append(f"timestamp <= ${len(params)}")
+
+    # ml_only: True → only lstm-sole detections; False → exclude them
+    if ml_only is True:
+        conditions.append("detectors_triggered = ARRAY['lstm']::TEXT[]")
+    elif ml_only is False:
+        conditions.append("NOT (detectors_triggered = ARRAY['lstm']::TEXT[])")
 
     params.append(min(limit, 500))
     limit_ph = f"${len(params)}"
@@ -815,14 +822,23 @@ async def get_anomaly_stats(satellite_id: str) -> dict:
 
 async def mark_false_positive(anomaly_id: str) -> bool:
     """Flag an anomaly as a false positive. Returns True if found."""
+    return await update_anomaly_review(anomaly_id, false_positive=True)
+
+
+async def update_anomaly_review(anomaly_id: str, *, false_positive: bool) -> bool:
+    """Set reviewed=True and false_positive verdict on an anomaly.
+
+    Returns True if the anomaly was found and updated, False otherwise.
+    """
     async with acquire() as conn:
         result = await conn.execute(
             """
             UPDATE anomalies
-               SET false_positive = TRUE, reviewed = TRUE
+               SET reviewed = TRUE, false_positive = $2
              WHERE id = $1
             """,
             anomaly_id,
+            false_positive,
         )
     return result == "UPDATE 1"
 

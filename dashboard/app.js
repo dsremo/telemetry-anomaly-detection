@@ -833,6 +833,129 @@ window.resetChannelConfig = async function() {
 };
 
 // ============================================================
+// Anomaly Explorer (Sprint 12: ML Visibility + Operator Feedback)
+// ============================================================
+
+// Detector label + CSS class map
+const DET_META = {
+    cusum:            ['CUSUM', 'cusum'],
+    ewma:             ['EWMA',  'ewma'],
+    statistical:      ['STAT',  'stat'],
+    changepoint:      ['CPLT',  'cp'],
+    isolation_forest: ['ISO',   'iso'],
+    variance:         ['VAR',   'var'],
+    lstm:             ['ML',    'ml'],
+};
+
+function _detBadges(detectors) {
+    if (!detectors || detectors.length === 0)
+        return '<span style="color:var(--text-muted);font-size:11px">none</span>';
+    return detectors.map(d => {
+        const [label, cls] = DET_META[d] || [d.toUpperCase().slice(0, 5), ''];
+        return `<span class="det-badge ${cls}" title="${d}">${label}</span>`;
+    }).join('');
+}
+
+async function loadAnomalies() {
+    const satId  = document.getElementById('anomSatFilter').value;
+    const sev    = document.getElementById('anomSevFilter').value;
+    const mlOnly = document.getElementById('anomMLFilter').value;
+    let url = `${API_BASE}/anomalies?limit=100`;
+    if (satId)        url += `&satellite_id=${encodeURIComponent(satId)}`;
+    if (sev)          url += `&severity=${encodeURIComponent(sev)}`;
+    if (mlOnly !== '') url += `&ml_only=${mlOnly}`;
+    try {
+        const resp = await fetch(url, { headers: authHeaders() });
+        if (!resp.ok) {
+            document.getElementById('anomalyExplorerWrap').innerHTML =
+                `<div class="empty-state">Could not load anomalies (${resp.status}).</div>`;
+            return;
+        }
+        state.anomalies = await resp.json();
+        renderAnomalies();
+    } catch (e) {
+        document.getElementById('anomalyExplorerWrap').innerHTML =
+            '<div class="empty-state">Could not load anomalies.</div>';
+    }
+}
+
+function renderAnomalies() {
+    const wrap     = document.getElementById('anomalyExplorerWrap');
+    const chip     = document.getElementById('anomalyMLChip');
+    const anomalies = state.anomalies || [];
+    const mlCount   = anomalies.filter(a => a.ml_only).length;
+
+    // Update ML count chip
+    if (chip) {
+        if (mlCount > 0) {
+            chip.textContent = `${mlCount} ML Pattern${mlCount !== 1 ? 's' : ''}`;
+            chip.style.display = '';
+        } else {
+            chip.style.display = 'none';
+        }
+    }
+
+    if (anomalies.length === 0) {
+        wrap.innerHTML = '<div class="empty-state">No anomalies found.</div>';
+        return;
+    }
+
+    wrap.innerHTML = `
+        <table class="channel-table">
+            <thead>
+                <tr>
+                    <th>Time</th><th>Satellite</th><th>Parameter</th>
+                    <th>Severity</th><th>Conf</th><th>Detectors</th><th>Feedback</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${anomalies.map(a => {
+                    const ts  = formatDateTime(a.timestamp);
+                    const sev = a.severity || 'nominal';
+                    const fp  = a.false_positive;
+                    const rev = a.reviewed;
+                    const mlBadge = a.ml_only
+                        ? '<span class="det-badge ml-only" title="Subtle temporal pattern — statistics did not flag this">ML PATTERN</span>'
+                        : '';
+                    const tpCls = rev && !fp ? 'tp active-tp' : 'tp';
+                    const fpCls = rev && fp  ? 'fp active-fp' : 'fp';
+                    const explainTitle = (a.explanation || '').replace(/"/g, '&quot;');
+                    return `<tr title="${explainTitle}">
+                        <td>${ts}</td>
+                        <td>${a.satellite_id}</td>
+                        <td class="chan-param">${a.parameter} ${mlBadge}</td>
+                        <td><span class="timeline-severity ${sev}">${sev.toUpperCase()}</span></td>
+                        <td style="color:var(--accent)">${(a.confidence * 100).toFixed(0)}%</td>
+                        <td>${_detBadges(a.detectors_triggered)}</td>
+                        <td>
+                            <button class="fb-btn ${tpCls}" title="Mark True Positive (confirmed anomaly)"
+                                onclick="submitFeedback('${a.id}', true)">&#10003;</button>
+                            <button class="fb-btn ${fpCls}" title="Mark False Positive (not a real anomaly)"
+                                onclick="submitFeedback('${a.id}', false)">&#10007;</button>
+                        </td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>`;
+}
+
+window.submitFeedback = async function(anomalyId, isTP) {
+    const verdict = isTP ? 'true_positive' : 'false_positive';
+    try {
+        const resp = await fetch(`${API_BASE}/anomalies/${anomalyId}/feedback`, {
+            method: 'PATCH',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ verdict }),
+        });
+        if (!resp.ok) { toast(`Feedback failed (${resp.status})`, 'error'); return; }
+        toast(isTP ? '✓ Marked as true positive' : '✗ Marked as false positive', 'success');
+        await loadAnomalies();   // re-render with updated reviewed state
+    } catch (e) {
+        toast('Feedback error: ' + e.message, 'error');
+    }
+};
+
+// ============================================================
 // Alerts Tab
 // ============================================================
 async function loadAlertHistory() {
@@ -1078,7 +1201,9 @@ async function handleCsvUpload() {
     if (!file) { toast('Select a CSV file first.', 'warning'); return; }
 
     btn.disabled = true;
+    document.getElementById('csvAnalyzeBtn').style.display = 'none';
     resultEl.style.display = 'none';
+    document.getElementById('csvProgressText').textContent = 'Uploading data...';
     startProgress('csvProgress', 'csvProgressFill');
 
     try {
@@ -1103,9 +1228,12 @@ async function handleCsvUpload() {
         }
 
         const data = await resp.json();
+        // Store satellite id for the subsequent analyze step
+        state.lastUploadedSatelliteId = satelliteId;
         showCsvResult(data);
-        toast(`Detection complete: ${data.anomalies_found || 0} anomalies found.`, 'success');
-        fetchAnomalies(); // refresh monitor tab
+        toast(`Upload complete: ${(data.total_rows_inserted || 0).toLocaleString()} rows written across ${data.channels_loaded || 0} channels. Click "Run Analysis" to detect anomalies.`, 'success');
+        // Show the analyze button
+        document.getElementById('csvAnalyzeBtn').style.display = '';
     } catch (e) {
         stopProgress('csvProgress', 'csvProgressFill');
         showImportResult('csvResult', null, 'error', 'Network error: ' + e.message);
@@ -1115,12 +1243,50 @@ async function handleCsvUpload() {
     }
 }
 
+async function handleRunAnalysis() {
+    const satelliteId = state.lastUploadedSatelliteId
+        || document.getElementById('csv-satellite-id').value.trim();
+    if (!satelliteId) { toast('Enter a Satellite ID first.', 'warning'); return; }
+
+    const analyzeBtn = document.getElementById('csvAnalyzeBtn');
+    analyzeBtn.disabled = true;
+    document.getElementById('csvProgressText').textContent = 'Running anomaly detection...';
+    startProgress('csvProgress', 'csvProgressFill');
+
+    try {
+        const resp = await fetch(`${API_BASE}/telemetry/${encodeURIComponent(satelliteId)}/analyze`, {
+            method: 'POST',
+            headers: authHeaders(),
+        });
+
+        stopProgress('csvProgress', 'csvProgressFill');
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+            showImportResult('csvResult', null, 'error', err.detail || `Error ${resp.status}`);
+            toast('Analysis failed.', 'error');
+            return;
+        }
+
+        const data = await resp.json();
+        showAnalyzeResult(data);
+        toast(`Analysis complete: ${data.total_anomalies} anomalies found across ${data.channels_analyzed} channels in ${data.elapsed_s}s.`, 'success');
+        fetchAnomalies(); // refresh monitor tab
+    } catch (e) {
+        stopProgress('csvProgress', 'csvProgressFill');
+        showImportResult('csvResult', null, 'error', 'Network error: ' + e.message);
+        toast('Analysis failed.', 'error');
+    } finally {
+        analyzeBtn.disabled = false;
+    }
+}
+
 function showCsvResult(data) {
     const el = document.getElementById('csvResult');
     el.style.display = '';
     el.className = 'import-result result-success';
     el.innerHTML = `
-        <div class="result-title">✓ Detection Complete</div>
+        <div class="result-title">✓ Upload Complete</div>
         <div class="result-stats">
             <div class="result-stat">
                 <span class="result-stat-value">${(data.total_rows_inserted || 0).toLocaleString()}</span>
@@ -1136,7 +1302,39 @@ function showCsvResult(data) {
             </div>
         </div>
         <div style="margin-top:10px;font-size:11px;color:var(--text-secondary)">
-            Detection complete — refresh Monitor tab to see anomalies.
+            Data loaded — click <strong>Run Analysis</strong> to detect anomalies.
+        </div>`;
+}
+
+function showAnalyzeResult(data) {
+    const el = document.getElementById('csvResult');
+    el.style.display = '';
+    el.className = 'import-result result-success';
+    const topChannels = Object.entries(data.anomalies_per_channel || {})
+        .filter(([, n]) => n > 0)
+        .sort(([, a], [, b]) => b - a)
+        .slice(0, 5)
+        .map(([ch, n]) => `<span style="opacity:0.8">${ch}</span>: <strong>${n}</strong>`)
+        .join(' &nbsp;·&nbsp; ');
+    el.innerHTML = `
+        <div class="result-title">✓ Analysis Complete</div>
+        <div class="result-stats">
+            <div class="result-stat">
+                <span class="result-stat-value">${data.total_anomalies}</span>
+                <span class="result-stat-label">Anomalies</span>
+            </div>
+            <div class="result-stat">
+                <span class="result-stat-value">${data.channels_analyzed}</span>
+                <span class="result-stat-label">Channels</span>
+            </div>
+            <div class="result-stat">
+                <span class="result-stat-value">${data.elapsed_s}s</span>
+                <span class="result-stat-label">Time</span>
+            </div>
+        </div>
+        ${topChannels ? `<div style="margin-top:10px;font-size:11px;color:var(--text-secondary)">${topChannels}</div>` : ''}
+        <div style="margin-top:8px;font-size:11px;color:var(--text-secondary)">
+            Refresh the Monitor tab to view all anomalies.
         </div>`;
 }
 
@@ -1145,6 +1343,187 @@ function showImportResult(elId, _data, type, message) {
     el.style.display = '';
     el.className = `import-result result-${type}`;
     el.innerHTML = `<div class="result-title">${type === 'error' ? '✗ ' : '✓ '}${message}</div>`;
+}
+
+// ============================================================
+// Import Tab — Live Integrations (YAMCS / InfluxDB / REST API)
+// ============================================================
+
+function switchConnectorTab(tab) {
+    ['api', 'yamcs', 'influx'].forEach(t => {
+        document.getElementById(`connectorPanel${t.charAt(0).toUpperCase() + t.slice(1)}`)
+            .style.display = t === tab ? '' : 'none';
+        document.getElementById(`ctab${t.charAt(0).toUpperCase() + t.slice(1)}`)
+            .classList.toggle('active', t === tab);
+    });
+    if (tab === 'api') _populateApiPushInfo();
+}
+
+function _populateApiPushInfo() {
+    const endpoint = `${API_BASE}/telemetry`;
+    const el = document.getElementById('apiPushEndpoint');
+    if (el) el.value = endpoint;
+    const curlEl = document.getElementById('apiPushCurl');
+    if (curlEl) {
+        curlEl.textContent =
+`curl -X POST ${endpoint} \\
+  -H "Authorization: Bearer <your-api-key>" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "points": [{
+      "satellite_id": "DOVE-001",
+      "timestamp": "${new Date().toISOString()}",
+      "subsystem": "eps",
+      "parameter": "battery_voltage",
+      "value": 12.4,
+      "unit": "V"
+    }]
+  }'`;
+    }
+}
+
+function copyToClipboard(inputId) {
+    const el = document.getElementById(inputId);
+    if (!el) return;
+    navigator.clipboard?.writeText(el.value || el.textContent)
+        .then(() => toast('Copied to clipboard.', 'success'))
+        .catch(() => toast('Copy failed — select and copy manually.', 'warning'));
+}
+
+async function handleYamcsConnect() {
+    const url    = document.getElementById('yamcs-url').value.trim();
+    const inst   = document.getElementById('yamcs-instance').value.trim();
+    const satId  = document.getElementById('yamcs-satellite-id').value.trim();
+    const sub    = document.getElementById('yamcs-subsystem').value.trim() || 'yamcs';
+    const start  = document.getElementById('yamcs-start').value.trim() || null;
+    const stop   = document.getElementById('yamcs-stop').value.trim() || null;
+    const apiKey = document.getElementById('yamcs-apikey').value.trim();
+    const params = document.getElementById('yamcs-parameters').value
+        .split('\n').map(s => s.trim()).filter(Boolean);
+
+    if (!url)    { toast('Enter the YAMCS server URL.', 'warning'); return; }
+    if (!inst)   { toast('Enter the YAMCS instance name.', 'warning'); return; }
+    if (!satId)  { toast('Enter a Satellite ID.', 'warning'); return; }
+    if (!params.length) { toast('Enter at least one parameter path.', 'warning'); return; }
+
+    const btn = document.getElementById('yamcsConnectBtn');
+    btn.disabled = true;
+    startProgress('yamcsProgress', 'yamcsProgressFill');
+    document.getElementById('yamcsResult').style.display = 'none';
+
+    try {
+        const body = { satellite_id: satId, yamcs_url: url, instance: inst,
+                       parameters: params, subsystem: sub, api_key: apiKey };
+        if (start) body.start = start;
+        if (stop)  body.stop  = stop;
+
+        const resp = await fetch(`${API_BASE}/connectors/yamcs`, {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        stopProgress('yamcsProgress', 'yamcsProgressFill');
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+            showImportResult('yamcsResult', null, 'error', err.detail || `Error ${resp.status}`);
+            toast('YAMCS fetch failed.', 'error');
+            return;
+        }
+        const data = await resp.json();
+        showConnectorResult('yamcsResult', data);
+        toast(`YAMCS: ${data.total_rows_inserted.toLocaleString()} rows, ${data.total_anomalies} anomalies in ${data.elapsed_s}s.`, 'success');
+        fetchAnomalies();
+    } catch (e) {
+        stopProgress('yamcsProgress', 'yamcsProgressFill');
+        showImportResult('yamcsResult', null, 'error', 'Network error: ' + e.message);
+        toast('YAMCS fetch failed.', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function handleInfluxConnect() {
+    const url    = document.getElementById('influx-url').value.trim();
+    const org    = document.getElementById('influx-org').value.trim();
+    const bucket = document.getElementById('influx-bucket').value.trim();
+    const token  = document.getElementById('influx-token').value.trim();
+    const meas   = document.getElementById('influx-measurement').value.trim();
+    const satId  = document.getElementById('influx-satellite-id').value.trim();
+    const sub    = document.getElementById('influx-subsystem').value.trim() || 'influxdb';
+    const start  = document.getElementById('influx-start').value.trim() || '-30d';
+    const stop   = document.getElementById('influx-stop').value.trim() || 'now()';
+    const fields = document.getElementById('influx-fields').value
+        .split('\n').map(s => s.trim()).filter(Boolean);
+
+    if (!url)    { toast('Enter the InfluxDB URL.', 'warning'); return; }
+    if (!org)    { toast('Enter the organization.', 'warning'); return; }
+    if (!bucket) { toast('Enter the bucket name.', 'warning'); return; }
+    if (!token)  { toast('Enter the API token.', 'warning'); return; }
+    if (!meas)   { toast('Enter the measurement name.', 'warning'); return; }
+    if (!satId)  { toast('Enter a Satellite ID.', 'warning'); return; }
+    if (!fields.length) { toast('Enter at least one field name.', 'warning'); return; }
+
+    const btn = document.getElementById('influxConnectBtn');
+    btn.disabled = true;
+    startProgress('influxProgress', 'influxProgressFill');
+    document.getElementById('influxResult').style.display = 'none';
+
+    try {
+        const resp = await fetch(`${API_BASE}/connectors/influxdb`, {
+            method: 'POST',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                satellite_id: satId, influxdb_url: url, org, bucket, token,
+                measurement: meas, fields, subsystem: sub, start, stop,
+            }),
+        });
+        stopProgress('influxProgress', 'influxProgressFill');
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+            showImportResult('influxResult', null, 'error', err.detail || `Error ${resp.status}`);
+            toast('InfluxDB fetch failed.', 'error');
+            return;
+        }
+        const data = await resp.json();
+        showConnectorResult('influxResult', data);
+        toast(`InfluxDB: ${data.total_rows_inserted.toLocaleString()} rows, ${data.total_anomalies} anomalies in ${data.elapsed_s}s.`, 'success');
+        fetchAnomalies();
+    } catch (e) {
+        stopProgress('influxProgress', 'influxProgressFill');
+        showImportResult('influxResult', null, 'error', 'Network error: ' + e.message);
+        toast('InfluxDB fetch failed.', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function showConnectorResult(elId, data) {
+    const el = document.getElementById(elId);
+    el.style.display = '';
+    el.className = 'import-result result-success';
+    el.innerHTML = `
+        <div class="result-title">✓ Fetch &amp; Analysis Complete</div>
+        <div class="result-stats">
+            <div class="result-stat">
+                <span class="result-stat-value">${(data.total_rows_inserted || 0).toLocaleString()}</span>
+                <span class="result-stat-label">Rows</span>
+            </div>
+            <div class="result-stat">
+                <span class="result-stat-value">${data.channels_loaded || 0}</span>
+                <span class="result-stat-label">Channels</span>
+            </div>
+            <div class="result-stat">
+                <span class="result-stat-value">${data.total_anomalies || 0}</span>
+                <span class="result-stat-label">Anomalies</span>
+            </div>
+            <div class="result-stat">
+                <span class="result-stat-value">${data.elapsed_s || 0}s</span>
+                <span class="result-stat-label">Time</span>
+            </div>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-secondary)">
+            Source: <code>${data.source || ''}</code> · Refresh Monitor tab to view anomalies.
+        </div>`;
 }
 
 // ============================================================
@@ -1225,7 +1604,7 @@ function populateSatFilters() {
     const sats = state.satellites;
 
     // All satellite dropdowns (topbar + tabs) are now <select> elements
-    ['globalSatFilter', 'chanSatFilter', 'alertSatFilter'].forEach(id => {
+    ['globalSatFilter', 'chanSatFilter', 'alertSatFilter', 'anomSatFilter'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         const current = el.value;
@@ -1534,6 +1913,7 @@ function populateUserChip(user) {
     const badgeEl     = document.getElementById('userRoleBadge');
     const ddName      = document.getElementById('ddName');
     const ddEmail     = document.getElementById('ddEmail');
+    const ddTenant    = document.getElementById('ddTenant');
     const ddChangePw  = document.getElementById('ddChangePassword');
     const ddLogoutBtn = document.getElementById('ddLogout');
 
@@ -1550,6 +1930,12 @@ function populateUserChip(user) {
         badgeEl.className   = `user-role-badge role-${(user.role || '').replaceAll('_', '-')}`;
         ddName.textContent  = displayName;
         ddEmail.textContent = user.email || (user.tenant_id ? `Tenant: ${user.tenant_id}` : 'Sentinel Staff');
+        // Show tenant ID so customers always know what to type at login
+        if (ddTenant) {
+            ddTenant.textContent = user.tenant_id
+                ? `TENANT ID: ${user.tenant_id}`
+                : user.scope === 'sentinel' ? 'SENTINEL STAFF' : '';
+        }
         // Show change-password only for JWT tenant users (scope≠sentinel)
         ddChangePw.style.display  = (state.auth.mode === 'jwt' && user.tenant_id) ? '' : 'none';
         ddLogoutBtn.innerHTML = '<span class="user-dropdown-icon">↩</span> Logout';
@@ -1561,6 +1947,7 @@ function populateUserChip(user) {
         badgeEl.className   = 'user-role-badge';
         ddName.textContent  = 'Not signed in';
         ddEmail.textContent = 'Authentication required';
+        if (ddTenant) ddTenant.textContent = '';
         ddChangePw.style.display = 'none';
         ddLogoutBtn.innerHTML = '<span class="user-dropdown-icon">→</span> Sign In';
         ddLogoutBtn.classList.remove('danger');
@@ -1878,6 +2265,10 @@ document.getElementById('editorClose').addEventListener('click', () => {
     renderChannelTable();
 });
 
+document.getElementById('refreshAnomsBtn').addEventListener('click', loadAnomalies);
+document.getElementById('anomSatFilter').addEventListener('change', loadAnomalies);
+document.getElementById('anomSevFilter').addEventListener('change', loadAnomalies);
+document.getElementById('anomMLFilter').addEventListener('change', loadAnomalies);
 document.getElementById('refreshAlertsBtn').addEventListener('click', loadAlertHistory);
 document.getElementById('alertSatFilter').addEventListener('change', loadAlertHistory);
 document.getElementById('alertSevFilter').addEventListener('change', loadAlertHistory);
@@ -1885,6 +2276,11 @@ document.getElementById('saveAlertConfigBtn').addEventListener('click', saveAler
 
 document.getElementById('xtceUploadBtn').addEventListener('click', handleXtceUpload);
 document.getElementById('csvUploadBtn').addEventListener('click', handleCsvUpload);
+document.getElementById('csvAnalyzeBtn').addEventListener('click', handleRunAnalysis);
+document.getElementById('yamcsConnectBtn').addEventListener('click', handleYamcsConnect);
+document.getElementById('influxConnectBtn').addEventListener('click', handleInfluxConnect);
+// Populate API push info when the Import tab is first shown
+_populateApiPushInfo();
 
 document.getElementById('rateChartRange').addEventListener('change', () => {
     if (state.chartsInitialized) updateRateChart();
@@ -2007,6 +2403,7 @@ function switchTab(tab) {
         loadChannels();
     }
     if (tab === 'alerts') {
+        loadAnomalies();
         loadAlertHistory();
         loadAlertConfig();
         populateSatFilters();

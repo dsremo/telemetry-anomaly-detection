@@ -1,5 +1,40 @@
 # Sentinel — Target Company List
 
+---
+
+## Tier 0 — Seed-Stage / Pre-Revenue (Free tier → Starter conversion)
+
+These are early-stage operators with 1–3 satellites, tight budgets, and no dedicated ops tooling. Target with Template E (free tier offer). Conversion happens when they launch a second satellite or need archival retention.
+
+### CubeSat / Smallsat Builders
+| Company | HQ | Notes |
+|---|---|---|
+| Open Cosmos | Oxford, UK | Turnkey smallsat missions, 10+ customers — channel partner opportunity |
+| EnduroSat | Sofia, Bulgaria | CubeSat bus + services, active constellation ops, open to tooling partnerships |
+| GomSpace | Aalborg, Denmark | CubeSat platform; their customers need anomaly detection, not GomSpace itself |
+| NanoAvionics | Vilnius, Lithuania | 6U-16U buses; growing customer base |
+| Tyvak Nano-Satellite Systems | Irvine, CA | CubeSats + rideshare, Terran Orbital subsidiary |
+| Satellogic (early) | Buenos Aires | Now Tier 1 — started here, useful context |
+
+### University / Research Missions (Validation + PR, not revenue)
+| Institution | Mission Type | Value |
+|---|---|---|
+| MIT Lincoln Laboratory | Various smallsats | Technical credibility |
+| Stanford (STAR Lab) | CubeSats | Academic publication route |
+| Surrey Space Centre | SSTL missions | UK government + ESA-connected |
+| Aalto University | Aalto-1 heritage | Nordic space network entry |
+| TU Delft (Aerospace) | Delfi satellites | ESA education missions |
+
+### YC / Accelerator Alumni (Space vertical)
+| Company | Cohort | Notes |
+|---|---|---|
+| Skeyeon | YC S21 | High-res satellite imagery |
+| Albedo | — | Very high-res imaging, LEO |
+| HEO Robotics | — | On-orbit inspection, telemetry-rich |
+| Stara Space | — | LEO broadband |
+
+---
+
 ## Tier 1 — Best Fit (Active constellation operators, budget for tooling)
 
 ### NewSpace Operators
@@ -55,7 +90,7 @@
 
 | Organization | Type | Portfolio Relevance |
 |---|---|---|
-| Y Combinator | Accelerator | Multiple space startups |
+| Y Combinator | Accelerator | Multiple space startups — free tier = YC alumni network entry |
 | Seraphim Capital | Space VC | UK, largest space-focused VC |
 | Space Capital | VC | NYC, GPS/geo/space data |
 | Lux Capital | VC | Frontier tech, space portfolio |
@@ -69,10 +104,17 @@
 
 ## Cold Outreach Sequence
 
-**Week 1:** Tier 1 operators (10 companies)
-**Week 2:** Tier 2 operators (8 companies)
-**Week 3:** Research/Agency (for validation partnerships, no immediate revenue)
+**Week 1:** Tier 0 seed-stage startups (10 companies) — Template E, free tier, no friction
+**Week 2:** Tier 1 operators (10 companies) — Template A
+**Week 3:** Tier 2 operators (8 companies) — Template B
+**Week 4:** Research/Agency (for validation partnerships, no immediate revenue) — Template C
 **Ongoing:** Follow-up on non-replies at day 7 and day 21
+
+**Why start with seed-stage:**
+- Fastest yes/no cycle (founder makes the decision in hours, not weeks)
+- Free tier = no procurement process, no legal review
+- Word-of-mouth spreads fast in the smallsat community
+- 3-year retention: they upgrade to Starter/Pro as they grow
 
 ---
 
@@ -84,6 +126,11 @@ For finding the right contact at each company:
 "[Company Name]" AND ("telemetry" OR "ground operations" OR "satellite operations") AND ("engineer" OR "director" OR "VP")
 ```
 
+For seed-stage / CubeSat companies:
+```
+"CubeSat" OR "smallsat" AND ("founder" OR "CTO" OR "mission operations") AND (location filters)
+```
+
 Common job titles to target:
 - Head of Ground Segment Operations
 - VP of Engineering (at startups)
@@ -91,6 +138,7 @@ Common job titles to target:
 - Satellite Operations Engineer (for bottom-up)
 - Chief Technology Officer (at <100 person companies)
 - Director of Flight Operations
+- Co-founder (at <10 person seed-stage startups — they handle ops directly)
 
 ---
 
@@ -105,6 +153,8 @@ Common job titles to target:
 | NewSpace Europe | November | Luxembourg | European startups |
 | Reinventing Space | November | London | UK/EU new space |
 
+**Best conference for Tier 0 (seed-stage):** SmallSat (Logan) — founders attend directly, no gatekeepers.
+
 ---
 
 ## Email Personalization Notes
@@ -115,3 +165,4 @@ Before sending to any company, check:
 3. Any recent anomaly or mission loss (extremely sensitive — handle with care, useful for "insurance" angle)
 4. Their current ground segment tool stack (YAMCS, OpenMCT, custom — check job postings)
 5. Whether they use SatNOGS (we already have their data — powerful hook)
+6. For seed-stage: whether they have a launch date confirmed (urgency trigger — they need monitoring before launch, not after)

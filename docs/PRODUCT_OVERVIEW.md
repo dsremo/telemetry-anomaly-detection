@@ -9,6 +9,8 @@ Satellite operators spend hundreds of engineer-hours per month manually reviewin
 
 **The cost of a missed anomaly in orbit: $50K–$500M.**
 
+For early-stage operators — a single missed battery degradation can end a demonstration mission that took 3 years to build.
+
 ---
 
 ### What Sentinel Does
@@ -22,11 +24,11 @@ No model training required. No labeled data needed. Operational in under 30 minu
 ### How It Works
 
 ```
-Your Telemetry → Sentinel API → Feature Engine → 5-Detector Ensemble → Root Cause → Alert
+Your Telemetry → Sentinel API → Feature Engine → 6-Detector Ensemble → Root Cause → Alert
      JSON / CSV / YAMCS / InfluxDB                                      Email / Webhook / SMS
 ```
 
-**Detection stack (5 algorithms in consensus):**
+**Detection stack (6 algorithms in consensus):**
 | Detector | Catches |
 |---|---|
 | Z-Score | Sudden spikes, sensor faults |
@@ -34,8 +36,15 @@ Your Telemetry → Sentinel API → Feature Engine → 5-Detector Ensemble → R
 | CUSUM | Slow drift, gradual degradation |
 | PELT (changepoint) | Mode switches, orbital transitions |
 | Rolling-STD | Variance anomalies, noise increases |
+| Variance Detector | Variance spikes in STL residuals (sinusoidal/oscillating channels) |
 
 Anomalies are flagged only when **2+ detectors agree** — cutting false positives by 60–80% vs single-method approaches.
+
+**Adaptive signal processing:**
+- FFT-based period auto-detection — no manual orbital period configuration required
+- STL seasonal decomposition automatically removes orbital sinusoids before detection
+- Per-channel threshold overrides (operators can tune per-parameter sensitivity)
+- Auto-calibrating baseline: detectors warm up from your own data, no training labels needed
 
 ---
 
@@ -71,12 +80,12 @@ Anomalies are flagged only when **2+ detectors agree** — cutting false positiv
 - JWT + refresh token auth, API key support, per-tenant RBAC (viewer / operator / admin)
 - All secrets via env vars, parameterized SQL only, bandit security scanning in CI
 
-**Data Connectors (plug in your stack)**
-- REST API (JSON push)
-- CSV upload (bulk historical data)
-- YAMCS (flight operations standard)
-- InfluxDB (metrics infrastructure)
-- SatNOGS (open ground station network)
+**Data Connectors (plug in your stack — all accessible from the dashboard UI)**
+- REST API (JSON push) — streaming ingest, detection runs automatically
+- CSV upload (bulk historical data) + one-click analysis trigger
+- YAMCS (flight operations standard) — enter URL + credentials in the Import tab, click Connect
+- InfluxDB (metrics infrastructure) — Flux query per field, no client library needed
+- SatNOGS (open ground station network) — CLI ingestion for large archival pulls
 - Custom: `DataConnector` ABC — any source in <50 lines
 
 **Alert Routing**
@@ -86,10 +95,11 @@ Anomalies are flagged only when **2+ detectors agree** — cutting false positiv
 - Alert history + acknowledge API
 
 **Dashboard**
-- 5-tab UI: Monitor / Analysis / Channels / Alerts / Admin
+- 6-tab UI: Monitor / Analysis / Channels / Alerts / Import / Admin
 - Infinite scroll timeline, subsystem health matrix, severity bars
 - Light / dark / system theme
 - Per-channel threshold overrides
+- Live Data Integrations panel (REST Push, YAMCS, InfluxDB) — connect from the browser, no CLI needed
 
 ---
 
@@ -105,6 +115,30 @@ Anomalies are flagged only when **2+ detectors agree** — cutting false positiv
 | Deployment | Single process, Docker-ready |
 
 **Footprint:** Runs on 2 vCPU / 4 GB RAM. Scales to millions of telemetry points per day on a $50/mo VPS.
+
+---
+
+### For Startups: First Anomaly in 5 Minutes
+
+If you have one satellite and one engineer, here's the full onboarding flow:
+
+1. **Create account** — email + password in the dashboard login
+2. **Upload your CSV** — drag and drop your telemetry file (timestamp + parameter columns)
+3. **Click "Run Analysis"** — full 6-detector ensemble runs on your data
+4. **Review anomalies** — timeline view, severity breakdown, root-cause explanations
+5. **Set up alerts** — paste your Slack webhook or email address in the Alerts tab
+
+**Total time: under 15 minutes from zero to first anomaly report.**
+
+No engineering integration required for CSV. For live streaming, add two lines to your ground station script:
+
+```bash
+curl -X POST https://your-sentinel-host/api/v1/telemetry \
+  -H "X-API-Key: stl_your_key_here" \
+  -d '{"satellite_id":"SAT-1","timestamp":"...","subsystem":"eps","parameter":"battery_voltage","value":27.3}'
+```
+
+Detection runs automatically on every POST. No separate analysis step needed for real-time data.
 
 ---
 
@@ -147,6 +181,7 @@ curl https://your-sentinel-host/api/v1/anomalies?severity=critical \
 
 - **NewSpace launches doubling every 18 months** — more satellites, same number of engineers
 - **Constellation operators** (100+ sats) cannot manually monitor each vehicle
+- **Seed-stage startups** launching first satellites have zero ops budget for dedicated FDIR engineers — they need automation from day one
 - **In-orbit servicing missions** require predictive health monitoring to prioritize targets
 - **Insurance underwriters** increasingly require anomaly logs for coverage
 

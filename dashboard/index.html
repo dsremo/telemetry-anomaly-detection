@@ -46,6 +46,7 @@
                     <div class="user-dropdown-header">
                         <div class="user-dropdown-name" id="ddName">--</div>
                         <div class="user-dropdown-email" id="ddEmail">--</div>
+                        <div class="user-dropdown-email" id="ddTenant" style="margin-top:2px;opacity:0.7;font-size:10px;letter-spacing:0.5px"></div>
                     </div>
                     <button class="user-dropdown-item" id="ddSettings">
                         <span class="user-dropdown-icon">⚙</span> Settings &amp; Theme
@@ -304,6 +305,34 @@
          ================================================================ -->
     <div class="grid tab-content" id="tab-alerts" style="display:none">
         <div class="alerts-layout">
+
+            <!-- ── Anomaly Explorer (Sprint 12: ML Visibility + Feedback) ── -->
+            <section class="panel" style="grid-column: 1 / -1">
+                <div class="panel-header">
+                    <h2>Anomaly Explorer <span id="anomalyMLChip" class="ml-count-chip" style="display:none"></span></h2>
+                    <div class="filter-group">
+                        <select id="anomSatFilter" class="filter-select">
+                            <option value="">All Satellites</option>
+                        </select>
+                        <select id="anomSevFilter" class="filter-select">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="warning">Warning</option>
+                            <option value="watch">Watch</option>
+                        </select>
+                        <select id="anomMLFilter" class="filter-select">
+                            <option value="">All Detections</option>
+                            <option value="true">ML Pattern Only</option>
+                            <option value="false">Stats Detected</option>
+                        </select>
+                        <button class="btn-secondary" id="refreshAnomsBtn">Refresh</button>
+                    </div>
+                </div>
+                <div class="channel-table-wrap" id="anomalyExplorerWrap">
+                    <div class="empty-state">Click Refresh to load anomalies with ML/Stats breakdown.</div>
+                </div>
+            </section>
+
             <!-- Alert History -->
             <section class="panel">
                 <div class="panel-header">
@@ -440,13 +469,156 @@
                     </div>
                     <div class="file-info" id="csvFileInfo" style="display:none"></div>
                     <div class="import-actions">
-                        <button class="btn-primary" id="csvUploadBtn" disabled>Run Detection</button>
+                        <button class="btn-primary" id="csvUploadBtn" disabled>Upload Data</button>
+                        <button class="btn-secondary" id="csvAnalyzeBtn" style="display:none">Run Analysis</button>
                     </div>
                     <div class="import-progress" id="csvProgress" style="display:none">
                         <div class="progress-bar"><div class="progress-fill" id="csvProgressFill"></div></div>
-                        <span class="progress-text">Detecting anomalies...</span>
+                        <span class="progress-text" id="csvProgressText">Uploading data...</span>
                     </div>
                     <div class="import-result" id="csvResult" style="display:none"></div>
+                </div>
+            </section>
+
+            <!-- Live Data Integrations -->
+            <section class="panel import-card" style="grid-column: 1 / -1">
+                <div class="panel-header">
+                    <h2>Live Data Integrations</h2>
+                    <span class="import-badge">Streaming</span>
+                </div>
+                <div class="import-body">
+                    <!-- Source tabs -->
+                    <div class="connector-tabs">
+                        <button class="connector-tab active" id="ctabApi" onclick="switchConnectorTab('api')">REST API Push</button>
+                        <button class="connector-tab" id="ctabYamcs" onclick="switchConnectorTab('yamcs')">YAMCS Pull</button>
+                        <button class="connector-tab" id="ctabInflux" onclick="switchConnectorTab('influx')">InfluxDB Pull</button>
+                    </div>
+
+                    <!-- REST API Panel -->
+                    <div id="connectorPanelApi">
+                        <p class="import-desc">Push telemetry directly from your ground station or middleware to Sentinel. Detection runs automatically after every batch.</p>
+                        <div class="editor-field">
+                            <div class="editor-label"><span>Endpoint</span></div>
+                            <div style="display:flex;gap:8px;align-items:center">
+                                <input class="editor-input" id="apiPushEndpoint" readonly style="font-family:monospace;flex:1">
+                                <button class="btn-secondary" onclick="copyToClipboard('apiPushEndpoint')" style="white-space:nowrap">Copy</button>
+                            </div>
+                        </div>
+                        <div class="editor-field">
+                            <div class="editor-label"><span>Curl example</span></div>
+                            <pre id="apiPushCurl" style="background:var(--bg-panel);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:11px;overflow-x:auto;margin:0;color:var(--text-secondary)"></pre>
+                        </div>
+                        <div style="margin-top:10px;font-size:11px;color:var(--text-muted)">
+                            For continuous data: call this endpoint from your ground station software every few seconds.
+                            Compatible with any HTTP client — no SDK needed.
+                        </div>
+                    </div>
+
+                    <!-- YAMCS Panel -->
+                    <div id="connectorPanelYamcs" style="display:none">
+                        <p class="import-desc">Fetch archived telemetry from a YAMCS Mission Control System (ESA, CubeSat, open-source). For continuous ingestion, run this every 5–10 minutes via cron.</p>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                            <div class="editor-field">
+                                <div class="editor-label"><span>YAMCS URL</span></div>
+                                <input class="editor-input" id="yamcs-url" type="text" placeholder="http://yamcs.example.com:8090">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Instance</span></div>
+                                <input class="editor-input" id="yamcs-instance" type="text" placeholder="simulator">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Satellite ID</span></div>
+                                <input class="editor-input" id="yamcs-satellite-id" type="text" placeholder="DOVE-001">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Subsystem</span></div>
+                                <input class="editor-input" id="yamcs-subsystem" type="text" placeholder="eps" value="yamcs">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Start (ISO-8601 or blank = 30d ago)</span></div>
+                                <input class="editor-input" id="yamcs-start" type="text" placeholder="2024-01-01T00:00:00Z">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Stop (ISO-8601 or blank = now)</span></div>
+                                <input class="editor-input" id="yamcs-stop" type="text" placeholder="Leave blank for now">
+                            </div>
+                            <div class="editor-field" style="grid-column:1/-1">
+                                <div class="editor-label"><span>API Key (optional)</span></div>
+                                <input class="editor-input" id="yamcs-apikey" type="password" placeholder="Bearer token (if YAMCS auth enabled)">
+                            </div>
+                            <div class="editor-field" style="grid-column:1/-1">
+                                <div class="editor-label"><span>Parameters (one per line, fully-qualified paths)</span></div>
+                                <textarea class="editor-input" id="yamcs-parameters" rows="4"
+                                    placeholder="/YSS/SIMULATOR/BatteryVoltage&#10;/YSS/SIMULATOR/BatteryCurrent&#10;/YSS/SIMULATOR/Temperature"
+                                    style="resize:vertical;font-family:monospace;font-size:11px"></textarea>
+                            </div>
+                        </div>
+                        <div class="import-actions" style="margin-top:12px">
+                            <button class="btn-primary" id="yamcsConnectBtn">Fetch &amp; Analyze</button>
+                        </div>
+                        <div class="import-progress" id="yamcsProgress" style="display:none">
+                            <div class="progress-bar"><div class="progress-fill" id="yamcsProgressFill"></div></div>
+                            <span class="progress-text">Fetching from YAMCS...</span>
+                        </div>
+                        <div class="import-result" id="yamcsResult" style="display:none"></div>
+                    </div>
+
+                    <!-- InfluxDB Panel -->
+                    <div id="connectorPanelInflux" style="display:none">
+                        <p class="import-desc">Fetch telemetry from InfluxDB v2 via Flux query. Used with ATLAS, SatNOGS ground stations, and custom TSDB pipelines. For continuous ingestion, use <code>start="-10m"</code> on a cron schedule.</p>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                            <div class="editor-field">
+                                <div class="editor-label"><span>InfluxDB URL</span></div>
+                                <input class="editor-input" id="influx-url" type="text" placeholder="http://influxdb.example.com:8086">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Organization</span></div>
+                                <input class="editor-input" id="influx-org" type="text" placeholder="my-org">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Bucket</span></div>
+                                <input class="editor-input" id="influx-bucket" type="text" placeholder="telemetry">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Measurement</span></div>
+                                <input class="editor-input" id="influx-measurement" type="text" placeholder="satellite">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Satellite ID</span></div>
+                                <input class="editor-input" id="influx-satellite-id" type="text" placeholder="DOVE-001">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Subsystem</span></div>
+                                <input class="editor-input" id="influx-subsystem" type="text" placeholder="eps" value="influxdb">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Start (Flux duration or ISO-8601)</span></div>
+                                <input class="editor-input" id="influx-start" type="text" placeholder="-30d" value="-30d">
+                            </div>
+                            <div class="editor-field">
+                                <div class="editor-label"><span>Stop</span></div>
+                                <input class="editor-input" id="influx-stop" type="text" placeholder="now()" value="now()">
+                            </div>
+                            <div class="editor-field" style="grid-column:1/-1">
+                                <div class="editor-label"><span>API Token</span></div>
+                                <input class="editor-input" id="influx-token" type="password" placeholder="InfluxDB v2 API token">
+                            </div>
+                            <div class="editor-field" style="grid-column:1/-1">
+                                <div class="editor-label"><span>Fields (one per line)</span></div>
+                                <textarea class="editor-input" id="influx-fields" rows="4"
+                                    placeholder="battery_voltage&#10;panel_current&#10;temperature"
+                                    style="resize:vertical;font-family:monospace;font-size:11px"></textarea>
+                            </div>
+                        </div>
+                        <div class="import-actions" style="margin-top:12px">
+                            <button class="btn-primary" id="influxConnectBtn">Fetch &amp; Analyze</button>
+                        </div>
+                        <div class="import-progress" id="influxProgress" style="display:none">
+                            <div class="progress-bar"><div class="progress-fill" id="influxProgressFill"></div></div>
+                            <span class="progress-text">Fetching from InfluxDB...</span>
+                        </div>
+                        <div class="import-result" id="influxResult" style="display:none"></div>
+                    </div>
                 </div>
             </section>
 
@@ -464,29 +636,29 @@
                     <div class="ob-step" id="obStep2">
                         <div class="ob-num">2</div>
                         <div class="ob-content">
-                            <div class="ob-title">Import Parameters</div>
-                            <div class="ob-desc">Upload an XTCE file or CSV above to populate the channel registry with your satellite parameters and alarm ranges.</div>
+                            <div class="ob-title">Upload Telemetry CSV</div>
+                            <div class="ob-desc">Drop a wide-format CSV above (timestamp + parameter columns). Enter a Satellite ID, click <strong>Upload Data</strong>, then click <strong>Run Analysis</strong> to detect anomalies.</div>
                         </div>
                     </div>
                     <div class="ob-step" id="obStep3">
                         <div class="ob-num">3</div>
                         <div class="ob-content">
-                            <div class="ob-title">Tune Thresholds</div>
-                            <div class="ob-desc">Visit the Channels tab to override z-score thresholds, min confidence, and cooldown periods per parameter.</div>
+                            <div class="ob-title">Review Anomalies</div>
+                            <div class="ob-desc">Switch to the Monitor tab — anomalies are listed by severity and confidence. Use the satellite filter to scope by spacecraft.</div>
                         </div>
                     </div>
                     <div class="ob-step" id="obStep4">
                         <div class="ob-num">4</div>
                         <div class="ob-content">
-                            <div class="ob-title">Configure Alerts</div>
-                            <div class="ob-desc">Set a webhook URL or SMTP server in the Alerts tab to receive real-time notifications when anomalies are detected.</div>
+                            <div class="ob-title">Tune Thresholds</div>
+                            <div class="ob-desc">Visit the Channels tab to override z-score, CUSUM, EWMA, and variance thresholds per parameter. Changes take effect on the next analysis run.</div>
                         </div>
                     </div>
                     <div class="ob-step" id="obStep5">
                         <div class="ob-num">5</div>
                         <div class="ob-content">
-                            <div class="ob-title">Push Live Telemetry</div>
-                            <div class="ob-desc">Stream JSON via <code>POST /api/v1/telemetry/ingest</code> or connect YAMCS / InfluxDB via the connector scripts.</div>
+                            <div class="ob-title">Configure Alerts</div>
+                            <div class="ob-desc">Set a webhook URL or SMTP server in the Alerts tab to receive real-time notifications. For live streaming, push JSON via <code>POST /api/v1/telemetry</code>.</div>
                         </div>
                     </div>
                 </div>

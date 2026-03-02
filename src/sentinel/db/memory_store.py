@@ -105,6 +105,8 @@ def _anomaly_to_dict(a: Anomaly) -> dict:
         "explanation": a.explanation,
         "root_cause_group": a.root_cause_group,
         "contributing_params": json.dumps(a.contributing_params),
+        "reviewed": False,
+        "false_positive": False,
     }
 
 
@@ -184,16 +186,33 @@ async def get_anomalies(
     satellite_id: str | None = None,
     severity: str | None = None,
     since: datetime | None = None,
+    before: datetime | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     limit: int = 100,
+    include_false_positives: bool = False,
+    ml_only: bool | None = None,
 ) -> list[dict]:
     with _lock:
         results = list(_anomalies)
+    if not include_false_positives:
+        results = [r for r in results if not r.get("false_positive", False)]
     if satellite_id:
         results = [r for r in results if r["satellite_id"] == satellite_id]
     if severity:
         results = [r for r in results if r["severity"] == severity]
     if since:
         results = [r for r in results if r["timestamp"] >= since]
+    if before:
+        results = [r for r in results if r["timestamp"] < before]
+    if date_from:
+        results = [r for r in results if r["timestamp"] >= date_from]
+    if date_to:
+        results = [r for r in results if r["timestamp"] <= date_to]
+    if ml_only is True:
+        results = [r for r in results if r.get("detectors_triggered") == ["lstm"]]
+    elif ml_only is False:
+        results = [r for r in results if r.get("detectors_triggered") != ["lstm"]]
     results.sort(key=lambda r: r["timestamp"], reverse=True)
     return results[:min(limit, 1000)]
 
@@ -204,6 +223,22 @@ async def get_anomaly_by_id(anomaly_id: str) -> dict | None:
             if r["id"] == anomaly_id:
                 return r
     return None
+
+
+async def update_anomaly_review(anomaly_id: str, *, false_positive: bool) -> bool:
+    """Set reviewed=True and false_positive verdict. Returns True if found."""
+    with _lock:
+        for r in _anomalies:
+            if r["id"] == anomaly_id:
+                r["reviewed"] = True
+                r["false_positive"] = false_positive
+                return True
+    return False
+
+
+async def mark_false_positive(anomaly_id: str) -> bool:
+    """Flag anomaly as false positive (backward-compat shim)."""
+    return await update_anomaly_review(anomaly_id, false_positive=True)
 
 
 async def get_telemetry_stats() -> dict:

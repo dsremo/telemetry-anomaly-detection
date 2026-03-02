@@ -54,7 +54,7 @@ Hi [Name],
 
 Most operators I talk to are still running threshold-based alerting with Excel runbooks. That works until you have a slow battery cell degradation that stays inside nominal bounds for 6 weeks before it becomes a mission risk.
 
-**Sentinel uses a 5-algorithm ensemble** (Z-score, Isolation Forest, CUSUM, changepoint detection, rolling variance) to find what thresholds miss. Anomalies are flagged only when 2+ detectors agree — meaning your on-call engineer gets paged when something is actually wrong.
+**Sentinel uses a 6-algorithm ensemble** (Z-score, Isolation Forest, CUSUM, changepoint detection, rolling variance, variance spike detection) to find what thresholds miss. Anomalies are flagged only when 2+ detectors agree — meaning your on-call engineer gets paged when something is actually wrong.
 
 Three things that differentiate us from basic monitoring tools:
 
@@ -81,7 +81,7 @@ Hi [Name / Team],
 
 I'm reaching out because [Agency/Lab] has one of the most interesting telemetry archives in the field. I'd like to propose something: let us run Sentinel against a portion of your historical data and share the results with you — at no cost.
 
-Sentinel is a production anomaly detection platform for satellite telemetry. We use a 5-detector ensemble that recently achieved 100% detection rate on ISS anomaly events (blind test, results cross-referenced with NASA/AMSAT public records).
+Sentinel is a production anomaly detection platform for satellite telemetry. We use a 6-detector ensemble that recently achieved 100% detection rate on ISS anomaly events (blind test, results cross-referenced with NASA/AMSAT public records).
 
 We're validating against NASA SMAP/MSL telemetry right now (the Hundman et al. benchmark) and would welcome the chance to run against a mission with your team's domain knowledge to help interpret results.
 
@@ -115,6 +115,7 @@ Sentinel is a SaaS anomaly detection engine for satellite telemetry. We sit betw
 - Working product, deployed on real ISS and ESA data
 - 7.1M telemetry points ingested, 8,795 anomalies detected (validated)
 - Multi-tenant architecture supports constellation operators natively
+- Free tier for seed-stage startups — builds the install base bottom-up
 - Pricing designed for the NewSpace budget (not the traditional defense contractor budget)
 
 **Why now:**
@@ -128,6 +129,40 @@ I'm raising a [pre-seed / seed] round to fund the first 10 paying customers and 
 
 [Your name]
 [Email] | [LinkedIn]
+
+---
+
+## Template E — Seed-Stage Startup (Pre-revenue, first satellite)
+
+**Subject:** Free anomaly detection for your first satellite
+
+---
+
+Hi [Name],
+
+Congratulations on [recent milestone — launch manifest / funding / mission announcement]. Getting your first satellite to orbit is an enormous achievement.
+
+Here's the thing most first-time operators discover too late: the telemetry anomaly that ends the mission is almost never a sudden failure. It's a slow drift that looked normal until it wasn't.
+
+**I built Sentinel specifically for teams at your stage.**
+
+Sentinel is free for single-satellite operators. No credit card, no time limit. You get:
+
+- Full 6-detector ensemble (z-score, CUSUM, changepoint, Isolation Forest, rolling variance, variance spike)
+- Upload your CSV from the dashboard — first anomaly report in under 10 minutes
+- YAMCS and InfluxDB connectors built in (enter your credentials, click Connect)
+- Email alerts when something real is detected
+
+The only limitation on the free tier is 50K points/day and 14-day retention — more than enough for a CubeSat at 1-minute cadence.
+
+When you're ready to scale to multiple satellites or need longer data retention, paid plans start at $299/mo. But there's no pressure — free means free.
+
+Worth 10 minutes to see it running on your telemetry format?
+
+[Your name]
+[Email] | [LinkedIn]
+
+P.S. If your mission has already generated historical telemetry data, I'm happy to run a free retrospective anomaly report and send you a PDF. No account needed.
 
 ---
 
@@ -157,6 +192,11 @@ If the timing is wrong, happy to check back in [month]. Just let me know.
 - "The anomaly your team will miss this week"
 - "Your satellite's next failure has already started"
 - "Catching the 0.3-sigma drift before it becomes a mission loss"
+
+**Startup-specific:**
+- "Free anomaly detection for [Company]'s first satellite"
+- "First satellite anomaly report — no account needed"
+- "What your CubeSat's telemetry is already telling you"
 
 **Curiosity-focused:**
 - "We detected 4 ISS events before they were publicly confirmed"

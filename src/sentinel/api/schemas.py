@@ -65,6 +65,17 @@ class AnomalyOut(BaseModel):
     explanation: str
     root_cause_group: str | None
     contributing_params: dict[str, float]
+    # Sprint 12: operator feedback + ML visibility
+    reviewed: bool = False
+    false_positive: bool = False
+    ml_only: bool = False  # True when lstm was the sole detector triggered
+
+
+class FeedbackIn(BaseModel):
+    """Operator feedback on an anomaly — marks it as TP or FP."""
+
+    verdict: Literal["true_positive", "false_positive"]
+    note: str | None = Field(default=None, max_length=500)
 
 
 class IngestResponse(BaseModel):
@@ -438,3 +449,69 @@ class XTCEImportResult(BaseModel):
     satellite_id: str
     parameters_imported: int
     parameters: list[ParameterDefOut]
+
+
+class AnalyzeResult(BaseModel):
+    """Result of running anomaly detection on a satellite's stored telemetry."""
+
+    satellite_id: str
+    channels_analyzed: int
+    total_anomalies: int
+    anomalies_per_channel: dict[str, int]
+    elapsed_s: float
+
+
+# ---------------------------------------------------------------------------
+# Data-source connector schemas (YAMCS, InfluxDB)
+# ---------------------------------------------------------------------------
+
+class YAMCSConnectRequest(BaseModel):
+    """Request to pull telemetry from a YAMCS mission control server."""
+
+    satellite_id: str = Field(..., min_length=1, max_length=128)
+    yamcs_url: str = Field(..., min_length=1, max_length=512,
+                           examples=["http://localhost:8090"])
+    instance: str = Field(..., min_length=1, max_length=128,
+                          examples=["simulator"])
+    parameters: list[str] = Field(..., min_length=1,
+                                  examples=[["/YSS/SIMULATOR/BatteryVoltage"]])
+    subsystem: str = Field(default="yamcs", max_length=32)
+    api_key: str = Field(default="", max_length=512)
+    start: str | None = Field(default=None,
+                              description="ISO-8601 start time. Defaults to 30 days ago.",
+                              examples=["2024-01-01T00:00:00Z"])
+    stop: str | None = Field(default=None,
+                             description="ISO-8601 stop time. Defaults to now.",
+                             examples=["2024-02-01T00:00:00Z"])
+    resample_minutes: int = Field(default=1, ge=1, le=1440)
+
+
+class InfluxDBConnectRequest(BaseModel):
+    """Request to pull telemetry from an InfluxDB v2 instance."""
+
+    satellite_id: str = Field(..., min_length=1, max_length=128)
+    influxdb_url: str = Field(..., min_length=1, max_length=512,
+                              examples=["http://localhost:8086"])
+    org: str = Field(..., min_length=1, max_length=256)
+    bucket: str = Field(..., min_length=1, max_length=256)
+    token: str = Field(..., min_length=1, max_length=512)
+    measurement: str = Field(..., min_length=1, max_length=256)
+    fields: list[str] = Field(..., min_length=1,
+                              examples=[["battery_voltage", "panel_current"]])
+    subsystem: str = Field(default="influxdb", max_length=32)
+    start: str = Field(default="-30d",
+                       description="Flux duration (e.g. '-30d') or ISO-8601 timestamp.")
+    stop: str = Field(default="now()",
+                      description="'now()' or ISO-8601 timestamp.")
+    resample_minutes: int = Field(default=1, ge=1, le=1440)
+
+
+class ConnectorResult(BaseModel):
+    """Result of a YAMCS or InfluxDB pull-and-analyze operation."""
+
+    satellite_id: str
+    source: str
+    channels_loaded: int
+    total_rows_inserted: int
+    total_anomalies: int
+    elapsed_s: float
