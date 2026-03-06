@@ -107,6 +107,32 @@ class Anomaly:
 
 
 @dataclass(frozen=True, slots=True)
+class Incident:
+    """A group of correlated anomalies on the same satellite within a time window.
+
+    Production standard (NASA GSFC, SpaceX Doppel, YAMCS): raw per-channel
+    anomalies are never surfaced directly to operators.  Instead they are
+    correlated within a time window into a single Incident — operators see
+    one card per fault event, not one card per detector firing.
+
+    IncidentGrouper in detection/incident_grouper.py maintains open incidents
+    and assigns each new Anomaly to one.
+    """
+
+    id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
+    satellite_id: str = ""
+    first_anomaly_at: datetime = field(default_factory=datetime.utcnow)  # opened_at
+    last_anomaly_at: datetime = field(default_factory=datetime.utcnow)
+    closed_at: datetime | None = None
+    severity: Severity = Severity.WATCH          # max severity across members
+    confidence: float = 0.0                      # weighted average confidence
+    channels: tuple[str, ...] = ()               # all affected parameters
+    root_cause_summary: str = ""                 # top contributing detector pattern
+    anomaly_count: int = 1
+    status: str = "open"                         # open / resolved / false_positive
+
+
+@dataclass(frozen=True, slots=True)
 class Alert:
     """An alert dispatched to operators via webhook/email.
 

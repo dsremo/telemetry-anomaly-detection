@@ -57,7 +57,9 @@ from sentinel.detection.isolation import IsolationForestDetector
 from sentinel.detection.statistical import StatisticalDetector
 from sentinel.detection.stl_decomposer import STLDecomposer
 from sentinel.detection.autoencoder_detector import AutoencoderDetector
+from sentinel.detection.incident_grouper import IncidentGrouper
 from sentinel.detection.tcn_detector import TCNDetector
+from sentinel.detection.discord_detector import DiscordDetector
 from sentinel.detection.trend_velocity_detector import TrendVelocityDetector
 from sentinel.detection.variance_detector import VarianceDetector
 from sentinel.features.engine import FeatureEngine
@@ -75,6 +77,33 @@ _iso_detector:      IsolationForestDetector  = IsolationForestDetector()
 _cp_detector:       ChangePointDetector      = ChangePointDetector()
 _variance_detector:        VarianceDetector         = VarianceDetector()
 _trend_velocity_detector:  TrendVelocityDetector    = TrendVelocityDetector()
+_discord_detector:         DiscordDetector          = DiscordDetector()
+_incident_grouper:         IncidentGrouper          = IncidentGrouper()
+
+# Directory for persisted ML model checkpoints (warm-start across runs).
+# None = persistence disabled (default until configured via init_detectors).
+_model_dir: "Path | None" = None  # type: ignore[type-arg]
+
+
+def _lstm_model_path(satellite_id: str, parameter: str) -> "Path | None":
+    """Return the file path for a GRU checkpoint, or None if persistence is off."""
+    from pathlib import Path  # noqa: PLC0415
+    if _model_dir is None:
+        return None
+    safe_sat   = satellite_id.replace("/", "_").replace(":", "_")
+    safe_param = parameter.replace("/", "_").replace(":", "_")
+    return Path(_model_dir) / safe_sat / f"{safe_param}.lstm.pt"
+
+
+def _tcn_model_path(satellite_id: str, parameter: str) -> "Path | None":
+    """Return the file path for a TCN checkpoint, or None if persistence is off."""
+    from pathlib import Path  # noqa: PLC0415
+    if _model_dir is None:
+        return None
+    safe_sat   = satellite_id.replace("/", "_").replace(":", "_")
+    safe_param = parameter.replace("/", "_").replace(":", "_")
+    return Path(_model_dir) / safe_sat / f"{safe_param}.tcn.pt"
+
 
 # Per-channel GRU autoencoder models — keyed by "satellite_id:parameter".
 # Each AutoencoderDetector accumulates residuals, self-trains, and scores.
@@ -107,18 +136,24 @@ _tvel_window:          int   = 20
 _tvel_recent_points:   int   = 5
 _tvel_threshold_sigma: float = 3.0
 
+# DiscordDetector config — overridable via init_detectors() from sentinel.yaml.
+_discord_m:                int   = 20
+_discord_window:           int   = 300
+_discord_threshold_sigma:  float = 3.0
+
 # Ensemble weights (must sum to 1.0, overridable via config)
-# 9 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm, tcn, trend_velocity
+# 10 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm, tcn, trend_velocity, matrix_profile
 WEIGHTS: dict[str, float] = {
-    "cusum":            0.19,   # primary drift detector (NASA CUSUM standard)
-    "ewma":             0.16,   # level-shift detector
-    "statistical":      0.12,   # single-point spike detector (z-score)
-    "changepoint":      0.09,   # structural break detector (PELT)
+    "cusum":            0.18,   # primary drift detector (NASA CUSUM standard)
+    "ewma":             0.15,   # level-shift detector
+    "statistical":      0.11,   # single-point spike detector (z-score)
+    "changepoint":      0.08,   # structural break detector (PELT)
     "isolation_forest": 0.05,   # multivariate cross-parameter anomalies
-    "variance":         0.08,   # variance-spike detector (CATS-type oscillatory signals)
-    "lstm":             0.12,   # GRU autoencoder — temporal pattern anomalies (ML)
-    "tcn":              0.11,   # TCN — dilated causal convolutions, deeper ML patterns
+    "variance":         0.07,   # variance-spike detector (CATS-type oscillatory signals)
+    "lstm":             0.11,   # GRU autoencoder — temporal pattern anomalies (ML)
+    "tcn":              0.10,   # TCN — dilated causal convolutions, deeper ML patterns
     "trend_velocity":   0.08,   # STL trend acceleration — onset detection (Sprint 14)
+    "matrix_profile":   0.07,   # Matrix Profile discord — shape anomaly detection (Sprint 15)
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -155,6 +190,14 @@ _last_processed_ts: dict[str, float] = {}
 _alert_cooldown_s: float = 72.0 * 3600.0   # default 72 h; overridden by init
 _last_anomaly_ts:  dict[str, float] = {}    # key → epoch of last stored anomaly
 
+# Persistence filter: require N consecutive anomalous detections before alerting.
+# Production standard (NASA ASIST, YAMCS, SpaceX Doppel) — avoids single-sample
+# FPs without needing a data scan.  1 = disabled (backward-compatible default).
+# Applied only in run_detection_cycle() (streaming); analyze_channel_history()
+# uses the cooldown guard instead (batch analysis).
+_alert_persistence_min: int = 1             # set to 2-3 for production streaming
+_anomaly_streak:  dict[str, int] = {}       # key → consecutive anomalous windows
+
 # Adaptive context window: auto-scaled per channel based on FFT-detected period.
 # window = min(max(600, stl_window_factor × period), stl_max_window)
 _stl_window_factor: int = 3      # context_window = factor × detected_period
@@ -169,10 +212,14 @@ _channel_config_cache: dict[tuple[str, str], dict] = {}
 # ── Initialisation ───────────────────────────────────────────────────────────
 
 def _get_lstm_model(satellite_id: str, parameter: str) -> AutoencoderDetector:
-    """Return (creating if needed) the per-channel GRU autoencoder instance."""
+    """Return (creating if needed) the per-channel GRU autoencoder instance.
+
+    On first access attempts to warm-start from a persisted checkpoint so
+    the model is immediately ready for detection without retraining.
+    """
     key = f"{satellite_id}:{parameter}"
     if key not in _lstm_models:
-        _lstm_models[key] = AutoencoderDetector(
+        det = AutoencoderDetector(
             seq_length=_lstm_seq_length,
             hidden_size=_lstm_hidden_size,
             bottleneck_size=_lstm_bottleneck_size,
@@ -181,14 +228,23 @@ def _get_lstm_model(satellite_id: str, parameter: str) -> AutoencoderDetector:
             retrain_interval=_lstm_retrain_interval,
             threshold_sigma=_lstm_threshold_sigma,
         )
+        # Warm-start: try loading a checkpoint from the previous run.
+        path = _lstm_model_path(satellite_id, parameter)
+        if path is not None and path.exists():
+            det.load(path)
+        _lstm_models[key] = det
     return _lstm_models[key]
 
 
 def _get_tcn_model(satellite_id: str, parameter: str) -> TCNDetector:
-    """Return (creating if needed) the per-channel TCN detector instance."""
+    """Return (creating if needed) the per-channel TCN detector instance.
+
+    On first access attempts to warm-start from a persisted checkpoint so
+    the model is immediately ready for detection without retraining.
+    """
     key = f"{satellite_id}:{parameter}"
     if key not in _tcn_models:
-        _tcn_models[key] = TCNDetector(
+        det = TCNDetector(
             seq_length=_tcn_seq_length,
             n_channels=_tcn_n_channels,
             n_blocks=_tcn_n_blocks,
@@ -198,7 +254,33 @@ def _get_tcn_model(satellite_id: str, parameter: str) -> TCNDetector:
             retrain_interval=_tcn_retrain_interval,
             threshold_sigma=_tcn_threshold_sigma,
         )
+        # Warm-start: try loading a checkpoint from the previous run.
+        path = _tcn_model_path(satellite_id, parameter)
+        if path is not None and path.exists():
+            det.load(path)
+        _tcn_models[key] = det
     return _tcn_models[key]
+
+
+def get_incident_grouper() -> IncidentGrouper:
+    """Return the singleton IncidentGrouper for testing / API access."""
+    return _incident_grouper
+
+
+def save_channel_models(satellite_id: str, parameter: str) -> None:
+    """Persist GRU and TCN checkpoints for one channel to disk.
+
+    Called after each channel finishes in run_bulk_detection() so that
+    the next run can warm-start without retraining from scratch.
+    No-op when model_dir is not configured or models are not yet fitted.
+    """
+    key = f"{satellite_id}:{parameter}"
+    lstm_path = _lstm_model_path(satellite_id, parameter)
+    if lstm_path is not None and key in _lstm_models:
+        _lstm_models[key].save(lstm_path)
+    tcn_path = _tcn_model_path(satellite_id, parameter)
+    if tcn_path is not None and key in _tcn_models:
+        _tcn_models[key].save(tcn_path)
 
 
 def init_detectors(settings: object) -> None:
@@ -209,6 +291,7 @@ def init_detectors(settings: object) -> None:
     global WEIGHTS, _severity_thresholds
     global _last_processed_ts, _detection_cycle_count, _samples_since_fit
     global _alert_cooldown_s, _last_anomaly_ts
+    global _alert_persistence_min, _anomaly_streak
     global _stl_window_factor, _stl_max_window
     global _lstm_seq_length, _lstm_hidden_size, _lstm_bottleneck_size
     global _lstm_epochs, _lstm_min_train, _lstm_retrain_interval, _lstm_threshold_sigma
@@ -218,6 +301,10 @@ def init_detectors(settings: object) -> None:
     global _tcn_models
     global _tvel_window, _tvel_recent_points, _tvel_threshold_sigma
     global _trend_velocity_detector
+    global _discord_m, _discord_window, _discord_threshold_sigma
+    global _discord_detector
+    global _model_dir
+    global _incident_grouper
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
     feat = settings.get("features",  {})   # type: ignore[attr-defined]
@@ -310,6 +397,25 @@ def init_detectors(settings: object) -> None:
         threshold_sigma=_tvel_threshold_sigma,
     )
 
+    # ── DiscordDetector (Sprint 15) ───────────────────────────────────────
+    _discord_m                = int(det.get("matrix_profile_m",     20))
+    _discord_window           = int(det.get("matrix_profile_buffer", 300))
+    _discord_threshold_sigma  = float(det.get("matrix_profile_sigma", 3.0))
+    _discord_detector = DiscordDetector(
+        m=_discord_m,
+        window=_discord_window,
+        threshold_sigma=_discord_threshold_sigma,
+    )
+
+    # ── Model persistence directory (warm-start across runs) ─────────────
+    raw_model_dir = det.get("model_dir", None)
+    if raw_model_dir:
+        import os                   # noqa: PLC0415
+        from pathlib import Path    # noqa: PLC0415
+        _model_dir = Path(os.path.expanduser(str(raw_model_dir)))
+    else:
+        _model_dir = None
+
     # ── Ensemble weights ──────────────────────────────────────────────────
     cfg_weights = det.get("ensemble_weights", {})
     if cfg_weights:
@@ -328,9 +434,22 @@ def init_detectors(settings: object) -> None:
     # Alert cooldown from config (default 72 h).
     _alert_cooldown_s = float(det.get("alert_cooldown_hours", 72.0)) * 3600.0
 
+    # Persistence filter: require N consecutive anomalous windows before alerting.
+    # 1 = disabled (default, backward-compatible). Set to 2-3 for production streaming.
+    _alert_persistence_min = int(det.get("alert_persistence_min", 1))
+
+    # ── Incident grouper ──────────────────────────────────────────────────
+    incident_window_s     = float(det.get("incident_window_s",     300.0))
+    incident_close_after_s = float(det.get("incident_close_after_s", 3600.0))
+    _incident_grouper = IncidentGrouper(
+        window_s=incident_window_s,
+        close_after_s=incident_close_after_s,
+    )
+
     # Reset per-channel state so a server restart or re-init starts clean.
     _last_processed_ts.clear()
     _last_anomaly_ts.clear()
+    _anomaly_streak.clear()
     _detection_cycle_count.clear()
     _samples_since_fit.clear()
 
@@ -381,9 +500,11 @@ def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
         "ewma_lambda":         _get("ewma_lambda",         None),   # None = calibration-computed
         "ewma_sigma_mult":     _get("ewma_sigma_mult",     None),   # None = calibration-computed
         "min_confidence":      _get("min_confidence",      0.0),
-        "alert_cooldown_s":    _get("alert_cooldown_s",    _alert_cooldown_s),
+        "alert_cooldown_s":      _get("alert_cooldown_s",    _alert_cooldown_s),
+        "alert_persistence_min": _alert_persistence_min,
         "variance_z_threshold":  _get("variance_z_threshold",  _variance_detector.variance_z_threshold),
         "velocity_threshold":    _get("velocity_threshold",    None),   # None = calibrated dynamically
+        "discord_threshold":     _get("discord_threshold",     None),   # None = uses global threshold_sigma
     }
 
 
@@ -704,7 +825,21 @@ async def analyze_channel_history(
             )
         )
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result]
+        # ── Matrix Profile Discord (10th detector — shape anomaly detection)
+        hist_discord_result = (
+            _discord_detector.detect(
+                residuals,
+                _hist_cal,
+                eff.get("discord_threshold"),
+            )
+            if _hist_cal is not None and _hist_cal.is_calibrated
+            else DetectorResult(
+                detector_name="matrix_profile", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "warming_up"},
+            )
+        )
+
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result, hist_discord_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -753,12 +888,17 @@ async def analyze_channel_history(
                 await queries.insert_anomaly(anomaly)
                 anomalies.append(anomaly)
                 _last_anomaly_ts[key] = alarm_ts_epoch   # arm the cooldown timer
+                # Group into incident (NASA/SpaceX hierarchical routing).
+                incident = _incident_grouper.process(anomaly)
+                await queries.upsert_incident(incident)
+                await queries.link_anomaly_to_incident(anomaly.id, incident.id)
                 logger.debug(
                     "historical_anomaly_found",
                     parameter=parameter,
                     timestamp=str(alarm_ts_dt)[:19],
                     severity=severity.value,
                     confidence=round(confidence, 3),
+                    incident_id=incident.id,
                 )
             except Exception as exc:
                 logger.warning("anomaly_store_failed", parameter=parameter, error=str(exc))
@@ -949,8 +1089,22 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             )
         )
 
-        # ── 12. Ensemble vote ────────────────────────────────────────────
-        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, tvel_result]
+        # ── 12. Matrix Profile Discord (10th detector — shape anomaly detection)
+        discord_result = (
+            _discord_detector.detect(
+                residuals,
+                calibration,
+                eff.get("discord_threshold"),
+            )
+            if calibration is not None and calibration.is_calibrated
+            else DetectorResult(
+                detector_name="matrix_profile", is_anomaly=False, score=0.0,
+                severity=Severity.NOMINAL, details={"reason": "warming_up"},
+            )
+        )
+
+        # ── 13. Ensemble vote ────────────────────────────────────────────
+        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, tvel_result, discord_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -964,6 +1118,18 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             now_epoch = datetime.now(timezone.utc).timestamp()
             if now_epoch - _last_anomaly_ts.get(live_key, 0.0) < eff["alert_cooldown_s"]:
                 is_anomaly = False  # still in cooldown — suppress
+
+        # Persistence filter: require N consecutive anomalous detections before
+        # alerting (production standard — NASA ASIST, YAMCS, SpaceX Doppel).
+        # Streak increments on anomaly, resets on nominal.  Alert only fires when
+        # streak reaches _alert_persistence_min.  Cooldown check runs first so a
+        # suppressed alarm still counts toward the streak.
+        if is_anomaly:
+            _anomaly_streak[live_key] = _anomaly_streak.get(live_key, 0) + 1
+            if _anomaly_streak[live_key] < _alert_persistence_min:
+                is_anomaly = False  # not enough consecutive anomalous windows yet
+        else:
+            _anomaly_streak[live_key] = 0  # reset streak on any nominal window
 
         if is_anomaly:
             _last_anomaly_ts[live_key] = datetime.now(timezone.utc).timestamp()
@@ -989,6 +1155,11 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                 await queries.insert_anomaly(anomaly)
                 anomalies.append(anomaly)
 
+                # Group into incident — no raw alert reaches operator uncorrelated.
+                incident = _incident_grouper.process(anomaly)
+                await queries.upsert_incident(incident)
+                await queries.link_anomaly_to_incident(anomaly.id, incident.id)
+
                 from sentinel.api.websocket import broadcast_anomaly
                 await broadcast_anomaly({
                     "id":          anomaly.id,
@@ -999,6 +1170,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                     "confidence":  anomaly.confidence,
                     "explanation": anomaly.explanation,
                     "timestamp":   anomaly.timestamp.isoformat() if isinstance(anomaly.timestamp, datetime) else str(anomaly.timestamp),
+                    "incident_id": incident.id,
                 })
 
                 # Dispatch alert (webhook / email) for WARNING and CRITICAL only.
@@ -1206,6 +1378,14 @@ def _build_explanation(
                 parts.append(
                     f"Trend acceleration: velocity={vel:.4f} "
                     f"(threshold={thr:.4f}, ratio={rat:.2f}×)"
+                )
+            case "matrix_profile":
+                ds  = r.details.get("discord_score", 0)
+                thr = r.details.get("threshold", 0)
+                z   = r.details.get("z_score", 0)
+                parts.append(
+                    f"Unusual shape: discord score={ds:.4f} "
+                    f"(threshold={thr:.4f}, z={z:.2f})"
                 )
 
     parts.append(f"{len(triggered)}/{len(results)} detectors triggered")

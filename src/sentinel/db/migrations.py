@@ -33,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +774,14 @@ _MIGRATIONS: list[str] = [
     """
     ALTER TABLE channel_config
         ADD COLUMN IF NOT EXISTS variance_z_threshold REAL;
+    """,
+
+    # v17: Incident grouping — add confidence + channels[] to incidents table.
+    # IncidentGrouper (Sprint 17) populates these; old rows default to 0.0 / {}.
+    """
+    ALTER TABLE incidents
+        ADD COLUMN IF NOT EXISTS confidence REAL    NOT NULL DEFAULT 0.0,
+        ADD COLUMN IF NOT EXISTS channels   TEXT[]  NOT NULL DEFAULT '{}';
     """,
 ]
 

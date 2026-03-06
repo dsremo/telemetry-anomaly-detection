@@ -14,6 +14,7 @@ const WS_URL = `${WS_SCHEME}://${window.location.host}/api/v1/ws/live`;
 // State
 // ============================================================
 const state = {
+    incidents: [],
     anomalies: [],
     satellites: [],
     selectedAnomaly: null,
@@ -957,6 +958,99 @@ window.submitFeedback = async function(anomalyId, isTP) {
 };
 
 // ============================================================
+// Incident Explorer (Sprint 17 — Hierarchical Alert Routing)
+// ============================================================
+async function loadIncidents() {
+    const satId  = document.getElementById('incSatFilter').value;
+    const status = document.getElementById('incStatusFilter').value;
+    let url = `${API_BASE}/incidents?limit=100`;
+    if (satId)  url += `&satellite_id=${encodeURIComponent(satId)}`;
+    if (status) url += `&status=${encodeURIComponent(status)}`;
+    try {
+        const resp = await fetch(url, { headers: authHeaders() });
+        if (!resp.ok) {
+            document.getElementById('incidentExplorerWrap').innerHTML =
+                `<div class="empty-state">Could not load incidents (${resp.status}).</div>`;
+            return;
+        }
+        state.incidents = await resp.json();
+        renderIncidents();
+    } catch (e) {
+        document.getElementById('incidentExplorerWrap').innerHTML =
+            '<div class="empty-state">Could not load incidents.</div>';
+    }
+}
+
+function renderIncidents() {
+    const wrap      = document.getElementById('incidentExplorerWrap');
+    const incidents = state.incidents || [];
+    if (incidents.length === 0) {
+        wrap.innerHTML = '<div class="empty-state">No incidents found.</div>';
+        return;
+    }
+    const SEV_ORDER = { critical: 0, warning: 1, watch: 2, nominal: 3 };
+    const sorted = [...incidents].sort(
+        (a, b) => (SEV_ORDER[a.severity] ?? 3) - (SEV_ORDER[b.severity] ?? 3)
+    );
+    wrap.innerHTML = `
+        <table class="channel-table">
+            <thead>
+                <tr>
+                    <th>First Seen</th><th>Satellite</th><th>Severity</th>
+                    <th>Channels</th><th>Anomalies</th><th>Confidence</th>
+                    <th>Root Cause</th><th>Status</th><th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${sorted.map(inc => {
+                    const ts      = formatDateTime(inc.first_anomaly_at);
+                    const sev     = inc.severity || 'watch';
+                    const chans   = (inc.channels || []).slice(0, 3).join(', ')
+                                  + (inc.channels.length > 3 ? ` +${inc.channels.length - 3}` : '');
+                    const conf    = ((inc.confidence || 0) * 100).toFixed(0) + '%';
+                    const rootCause = (inc.root_cause_summary || '').replace(/"/g, '&quot;');
+                    const statusBadge = inc.status === 'open'
+                        ? '<span style="color:var(--warning)">Open</span>'
+                        : inc.status === 'resolved'
+                            ? '<span style="color:var(--nominal)">Resolved</span>'
+                            : '<span style="color:var(--text-muted)">FP</span>';
+                    const actionBtn = inc.status === 'open'
+                        ? `<button class="btn-secondary" style="padding:2px 8px;font-size:0.8rem"
+                               onclick="resolveIncident('${inc.id}')">Resolve</button>`
+                        : '—';
+                    return `<tr title="${rootCause}">
+                        <td>${ts}</td>
+                        <td>${inc.satellite_id}</td>
+                        <td><span class="timeline-severity ${sev}">${sev.toUpperCase()}</span></td>
+                        <td class="chan-param">${chans || '—'}</td>
+                        <td style="text-align:center">${inc.anomaly_count}</td>
+                        <td style="color:var(--accent)">${conf}</td>
+                        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                            title="${rootCause}">${inc.root_cause_summary || '—'}</td>
+                        <td>${statusBadge}</td>
+                        <td>${actionBtn}</td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>`;
+}
+
+window.resolveIncident = async function(incidentId) {
+    try {
+        const resp = await fetch(`${API_BASE}/incidents/${incidentId}/status`, {
+            method: 'PATCH',
+            headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'resolved' }),
+        });
+        if (!resp.ok) { toast(`Could not resolve incident (${resp.status})`, 'error'); return; }
+        toast('Incident resolved', 'success');
+        await loadIncidents();
+    } catch (e) {
+        toast('Error: ' + e.message, 'error');
+    }
+};
+
+// ============================================================
 // Alerts Tab
 // ============================================================
 async function loadAlertHistory() {
@@ -1605,7 +1699,7 @@ function populateSatFilters() {
     const sats = state.satellites;
 
     // All satellite dropdowns (topbar + tabs) are now <select> elements
-    ['globalSatFilter', 'chanSatFilter', 'alertSatFilter', 'anomSatFilter'].forEach(id => {
+    ['globalSatFilter', 'chanSatFilter', 'alertSatFilter', 'anomSatFilter', 'incSatFilter'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         const current = el.value;
@@ -2266,6 +2360,9 @@ document.getElementById('editorClose').addEventListener('click', () => {
     renderChannelTable();
 });
 
+document.getElementById('refreshIncidentsBtn').addEventListener('click', loadIncidents);
+document.getElementById('incSatFilter').addEventListener('change', loadIncidents);
+document.getElementById('incStatusFilter').addEventListener('change', loadIncidents);
 document.getElementById('refreshAnomsBtn').addEventListener('click', loadAnomalies);
 document.getElementById('anomSatFilter').addEventListener('change', loadAnomalies);
 document.getElementById('anomSevFilter').addEventListener('change', loadAnomalies);

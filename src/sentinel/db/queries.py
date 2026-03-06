@@ -934,6 +934,100 @@ async def link_anomaly_to_incident(anomaly_id: str, incident_id: str) -> None:
         )
 
 
+async def upsert_incident(incident: "Incident") -> None:  # type: ignore[name-defined]
+    """Insert or update an incident from IncidentGrouper state.
+
+    Uses the incident's hex id as the primary key.  On conflict, updates all
+    mutable fields (severity, confidence, channels, last_anomaly_at, etc.).
+    Called after every anomaly that belongs to the incident.
+    """
+    from sentinel.core.models import Incident  # noqa: PLC0415
+    async with acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO incidents
+                (id, tenant_id, satellite_id, severity, status,
+                 confidence, channels, root_cause_summary,
+                 anomaly_count, first_anomaly_at, last_anomaly_at, closed_at)
+            VALUES
+                ($1::uuid, $2, $3, $4, $5,
+                 $6, $7, $8,
+                 $9, $10, $11, $12)
+            ON CONFLICT (id) DO UPDATE SET
+                severity         = EXCLUDED.severity,
+                status           = EXCLUDED.status,
+                confidence       = EXCLUDED.confidence,
+                channels         = EXCLUDED.channels,
+                root_cause_summary = EXCLUDED.root_cause_summary,
+                anomaly_count    = EXCLUDED.anomaly_count,
+                last_anomaly_at  = EXCLUDED.last_anomaly_at,
+                closed_at        = EXCLUDED.closed_at
+            """,
+            incident.id,
+            get_tenant(),
+            incident.satellite_id,
+            incident.severity.value,
+            incident.status,
+            incident.confidence,
+            list(incident.channels),
+            incident.root_cause_summary,
+            incident.anomaly_count,
+            incident.first_anomaly_at,
+            incident.last_anomaly_at,
+            incident.closed_at,
+        )
+
+
+async def get_incidents_v2(
+    satellite_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Query incidents with confidence + channels columns (Sprint 17+)."""
+    conditions: list[str] = []
+    params: list = []
+
+    if satellite_id is not None:
+        params.append(satellite_id)
+        conditions.append(f"satellite_id = ${len(params)}")
+
+    if status is not None:
+        params.append(status)
+        conditions.append(f"status = ${len(params)}")
+
+    params.append(min(limit, 500))
+    limit_ph = f"${len(params)}"
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    sql = (
+        f"SELECT id::text, satellite_id, severity, status, confidence, channels, "
+        f"root_cause_summary, anomaly_count, first_anomaly_at, last_anomaly_at, "
+        f"closed_at, created_at "
+        f"FROM incidents {where} "
+        f"ORDER BY last_anomaly_at DESC LIMIT {limit_ph}"
+    )
+
+    async with acquire() as conn:
+        rows = await conn.fetch(sql, *params)
+    return [dict(r) for r in rows]
+
+
+async def update_incident_status(incident_id: str, status: str) -> bool:
+    """Set incident status (resolved / false_positive). Returns True if found."""
+    async with acquire() as conn:
+        result = await conn.execute(
+            """
+            UPDATE incidents
+               SET status    = $2,
+                   closed_at = CASE WHEN $2 IN ('resolved','false_positive')
+                                    THEN NOW() ELSE closed_at END
+             WHERE id = $1::uuid
+            """,
+            incident_id, status,
+        )
+    return result == "UPDATE 1"
+
+
 async def close_incident(incident_id: str) -> None:
     """Mark an incident as closed."""
     async with acquire() as conn:

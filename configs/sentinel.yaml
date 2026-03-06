@@ -59,6 +59,20 @@ detection:
   # σ_ref should reduce genuine alarm rate well below that ceiling).
   alert_cooldown_hours: 360  # 15 days between same-channel reports
 
+  # Persistence filter — require N consecutive anomalous detection windows
+  # before emitting an alert (streaming path only, run_detection_cycle).
+  # 1 = disabled (default for batch analysis).
+  # 2-3 = production streaming (NASA ASIST uses 3-5 consecutive OOL samples;
+  # YAMCS default = 2).  Eliminates single-sample FPs without any data scan.
+  alert_persistence_min: 1
+
+  # ── Hierarchical Alert Routing: Incident Grouping (Sprint 17) ────────
+  # Anomalies within incident_window_s on the same satellite → one Incident.
+  # Operators see one incident card, not N individual alarm notifications.
+  # Production standard: NASA GSFC 600s; SpaceX 5min for telemetry anomalies.
+  incident_window_s:      300   # 5 min correlation window
+  incident_close_after_s: 3600  # auto-close incident after 1 h of silence
+
   # ── Adaptive σ_ref: periodic noise-floor refresh ─────────────────────
   # After initial calibration, σ_ref is refreshed every N samples using
   # the last CALIBRATION_WINDOW post-calibration residuals.  This prevents
@@ -123,6 +137,21 @@ detection:
   tvel_recent_points:    5     # how many of the latest velocity values to evaluate
   tvel_threshold_sigma:  3.0   # alarm: velocity > σ × (ref_std / window)
 
+  # ── Matrix Profile Discord (shape anomaly — Sprint 15) ───────────────
+  # Finds subsequences with no close match in recent history (shape discords).
+  # Catches novel oscillation shapes, unusual recovery trajectories, flat
+  # periods in oscillating channels — anomalies statistical detectors miss.
+  # Pure numpy FFT-based O(n log n) per call; no stumpy/numba required.
+  matrix_profile_m:      20    # subsequence length (samples)
+  matrix_profile_buffer: 300   # look-back window (residual count)
+  matrix_profile_sigma:  3.0   # alarm: discord > mean + sigma × std
+
+  # ── ML Model persistence (warm-start across runs) — Sprint 16 ─────────
+  # Set to a writable path to enable warm-start; comment out to disable.
+  # Each channel saves two files: <sat>/<param>.lstm.pt and <sat>/<param>.tcn.pt
+  # (~20-30 KB each).  On the next run the model is ready without retraining.
+  model_dir: ~/.sentinel/models
+
   # ── Isolation Forest (multivariate cross-parameter) ──────────────────
   # Sprint 14: now activates for ANY satellite with ≥2 parameters (not just
   # standard simulator parameter names).  OPS-SAT, CATS, GECCO all benefit.
@@ -134,17 +163,18 @@ detection:
   changepoint_min_size: 50  # minimum segment length between breakpoints
 
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
-  # Sprint 14: 9-detector ensemble (trend_velocity added — onset detection)
+  # Sprint 15: 10-detector ensemble (matrix_profile added — shape anomaly detection)
   ensemble_weights:
-    cusum:            0.19   # primary: gradual drift accumulation
-    ewma:             0.16   # secondary: sudden level shifts
-    statistical:      0.12   # spike detection (single-point outliers)
-    changepoint:      0.09   # structural break detection
+    cusum:            0.18   # primary: gradual drift accumulation
+    ewma:             0.15   # secondary: sudden level shifts
+    statistical:      0.11   # spike detection (single-point outliers)
+    changepoint:      0.08   # structural break detection
     isolation_forest: 0.05   # multivariate (≥2 parameters required)
-    variance:         0.08   # variance-spike detector (CATS-type oscillatory signals)
-    lstm:             0.12   # GRU autoencoder — temporal pattern anomalies (ML)
-    tcn:              0.11   # TCN — dilated causal convolutions, deeper ML patterns
+    variance:         0.07   # variance-spike detector (CATS-type oscillatory signals)
+    lstm:             0.11   # GRU autoencoder — temporal pattern anomalies (ML)
+    tcn:              0.10   # TCN — dilated causal convolutions, deeper ML patterns
     trend_velocity:   0.08   # STL trend acceleration — onset detection (Sprint 14)
+    matrix_profile:   0.07   # Matrix Profile discord — shape anomaly detection (Sprint 15)
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:

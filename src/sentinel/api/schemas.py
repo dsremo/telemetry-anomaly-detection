@@ -78,6 +78,44 @@ class FeedbackIn(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+# ── Incident schemas (Sprint 17 — Hierarchical Alert Routing) ────────────────
+
+class IncidentOut(BaseModel):
+    """One incident as returned by the API.
+
+    An incident groups all correlated anomalies on the same satellite within
+    the correlation window.  Operators see incidents, not raw anomaly rows.
+    """
+
+    id: str
+    satellite_id: str
+    severity: str
+    status: str                           # open / resolved / false_positive
+    confidence: float
+    channels: list[str]                   # all affected parameters
+    root_cause_summary: str
+    anomaly_count: int
+    first_anomaly_at: Any
+    last_anomaly_at: Any
+    closed_at: Any | None = None
+
+
+class IncidentStatusIn(BaseModel):
+    """Operator sets incident status."""
+
+    status: Literal["resolved", "false_positive"]
+
+
+class IncidentSummary(BaseModel):
+    """Open incident count + severity breakdown for a satellite."""
+
+    satellite_id: str
+    open_count: int
+    critical: int = 0
+    warning: int = 0
+    watch: int = 0
+
+
 class IngestResponse(BaseModel):
     """Response after telemetry ingestion."""
 

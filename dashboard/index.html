@@ -306,6 +306,28 @@
     <div class="grid tab-content" id="tab-alerts" style="display:none">
         <div class="alerts-layout">
 
+            <!-- ── Incident Explorer (Sprint 17: Hierarchical Alert Routing) ── -->
+            <section class="panel" style="grid-column: 1 / -1">
+                <div class="panel-header">
+                    <h2>Incident Explorer</h2>
+                    <div class="filter-group">
+                        <select id="incSatFilter" class="filter-select">
+                            <option value="">All Satellites</option>
+                        </select>
+                        <select id="incStatusFilter" class="filter-select">
+                            <option value="">All Statuses</option>
+                            <option value="open">Open</option>
+                            <option value="resolved">Resolved</option>
+                            <option value="false_positive">False Positive</option>
+                        </select>
+                        <button class="btn-secondary" id="refreshIncidentsBtn">Refresh</button>
+                    </div>
+                </div>
+                <div class="channel-table-wrap" id="incidentExplorerWrap">
+                    <div class="empty-state">Click Refresh to load incidents.</div>
+                </div>
+            </section>
+
             <!-- ── Anomaly Explorer (Sprint 12: ML Visibility + Feedback) ── -->
             <section class="panel" style="grid-column: 1 / -1">
                 <div class="panel-header">

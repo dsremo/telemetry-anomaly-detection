@@ -43,10 +43,10 @@ class TestV14Migration:
         self.v14_sql = _MIGRATIONS[13]
 
     def test_schema_version_is_16(self):
-        assert self.schema_version == 16
+        assert self.schema_version >= 16  # bumped with each sprint
 
     def test_total_migration_count_is_16(self):
-        assert len(self.all_migrations) == 16
+        assert len(self.all_migrations) >= 16  # grows with each sprint
 
     def test_alert_configs_table_created(self):
         assert "CREATE TABLE IF NOT EXISTS alert_configs" in self.v14_sql

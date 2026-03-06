@@ -270,6 +270,69 @@ async def get_anomaly_severity_counts() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Incidents (Sprint 17 — Hierarchical Alert Routing)
+# ---------------------------------------------------------------------------
+
+_incidents: list[dict] = []
+
+
+async def upsert_incident(incident: object) -> None:  # type: ignore[type-arg]
+    """Insert or update an incident (in-memory shim for tests)."""
+    from sentinel.core.models import Incident  # noqa: PLC0415
+    assert isinstance(incident, Incident)
+    with _lock:
+        for i, existing in enumerate(_incidents):
+            if existing["id"] == incident.id:
+                _incidents[i] = _incident_to_dict(incident)
+                return
+        _incidents.append(_incident_to_dict(incident))
+
+
+async def get_incidents_v2(
+    satellite_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    with _lock:
+        rows = list(_incidents)
+    if satellite_id is not None:
+        rows = [r for r in rows if r["satellite_id"] == satellite_id]
+    if status is not None:
+        rows = [r for r in rows if r["status"] == status]
+    rows.sort(key=lambda r: r["last_anomaly_at"], reverse=True)
+    return rows[:limit]
+
+
+async def update_incident_status(incident_id: str, status: str) -> bool:
+    with _lock:
+        for r in _incidents:
+            if r["id"] == incident_id:
+                r["status"] = status
+                return True
+    return False
+
+
+def _incident_to_dict(incident: object) -> dict:
+    from datetime import timezone  # noqa: PLC0415
+    from sentinel.core.models import Incident  # noqa: PLC0415
+    assert isinstance(incident, Incident)
+    return {
+        "id":                 incident.id,
+        "satellite_id":       incident.satellite_id,
+        "severity":           incident.severity.value,
+        "status":             incident.status,
+        "confidence":         incident.confidence,
+        "channels":           list(incident.channels),
+        "root_cause_summary": incident.root_cause_summary,
+        "anomaly_count":      incident.anomaly_count,
+        "first_anomaly_at":   incident.first_anomaly_at,
+        "last_anomaly_at":    incident.last_anomaly_at,
+        "closed_at":          incident.closed_at,
+        "created_at":         datetime.now(timezone.utc),
+    }
+
+
+# ---------------------------------------------------------------------------
 # API Keys
 # ---------------------------------------------------------------------------
 
