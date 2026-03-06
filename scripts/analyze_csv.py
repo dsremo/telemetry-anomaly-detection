@@ -40,7 +40,7 @@ from sentinel.core.tenant import set_tenant
 from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
 from sentinel.ingest.csv_connector import CSVConnector
 from sentinel.ingest.pipeline import db_context, phase, print_run_header
-from sentinel.ingest.utils import adaptive_cooldown_hours, detect_data_frequency
+from sentinel.ingest.utils import adaptive_cooldown_hours, detect_data_frequency, smart_cooldown_hours
 
 
 async def main(
@@ -55,17 +55,26 @@ async def main(
     recal_factor: float | None,
     z_threshold: float | None,
     cusum_h_factor: float | None,
+    lstm_epochs: int | None,
+    tcn_epochs: int | None,
+    retrain_interval: int | None,
 ) -> None:
     set_tenant(tenant_id)
 
-    # Auto-detect data frequency and compute proportional cooldown (default).
-    # Override with --cooldown-hours to bypass auto-detection.
+    # Auto-detect optimal cooldown (default — override with --cooldown-hours).
+    # Strategy: try smart burst-analysis first; fall back to frequency-based.
     eff_cooldown = cooldown_hours
     if eff_cooldown is None:
         median_s = detect_data_frequency(file_path, timestamp_col)
-        eff_cooldown = adaptive_cooldown_hours(median_s)
-        print(f"  [auto-cooldown] median interval={median_s:.1f}s → "
-              f"cooldown={eff_cooldown*60:.0f} min ({eff_cooldown:.3f} h)")
+        smart = smart_cooldown_hours(file_path, timestamp_col)
+        if smart is not None:
+            eff_cooldown = smart
+            print(f"  [smart-cooldown] burst analysis → "
+                  f"cooldown={eff_cooldown*60:.0f} min ({eff_cooldown:.3f} h)")
+        else:
+            eff_cooldown = adaptive_cooldown_hours(median_s)
+            print(f"  [auto-cooldown] median interval={median_s:.1f}s → "
+                  f"cooldown={eff_cooldown*60:.0f} min ({eff_cooldown:.3f} h)")
 
     async with db_context():
         connector = CSVConnector(file_path, satellite_id, subsystem, timestamp_col)
@@ -104,6 +113,9 @@ async def main(
                 recal_factor=recal_factor,
                 z_threshold=z_threshold,
                 cusum_h_factor=cusum_h_factor,
+                lstm_epochs=lstm_epochs,
+                tcn_epochs=tcn_epochs,
+                retrain_interval=retrain_interval,
             )
             print(f"  {sum(len(v) for v in results.values())} anomalies")
 
@@ -140,6 +152,15 @@ if __name__ == "__main__":
     parser.add_argument("--cusum-h-factor", type=float, default=None, metavar="H",
                         help="Override CUSUM decision threshold multiplier (default: config, ~8.0). "
                              "Higher = requires larger drift before alarm. Try 12–20 for step-change data.")
+    parser.add_argument("--lstm-epochs", type=int, default=None, metavar="E",
+                        help="Override GRU autoencoder training epochs (default: config, 30). "
+                             "Use 0 to disable GRU entirely — 5–10× faster, stats-only detection.")
+    parser.add_argument("--tcn-epochs", type=int, default=None, metavar="E",
+                        help="Override TCN training epochs (default: config, 40). "
+                             "Use 0 to disable TCN entirely — 5–10× faster, stats-only detection.")
+    parser.add_argument("--retrain-interval", type=int, default=None, metavar="N",
+                        help="Override ML retrain interval in samples (default: config, 500). "
+                             "Higher = less frequent retraining. Try 2000–5000 for faster runs.")
     args = parser.parse_args()
     asyncio.run(main(
         file_path=args.file,
@@ -153,4 +174,7 @@ if __name__ == "__main__":
         recal_factor=args.recal_factor,
         z_threshold=args.z_threshold,
         cusum_h_factor=args.cusum_h_factor,
+        lstm_epochs=args.lstm_epochs,
+        tcn_epochs=args.tcn_epochs,
+        retrain_interval=args.retrain_interval,
     ))

@@ -251,12 +251,14 @@ class TestEnsembleWith9Detectors:
         assert "trend_velocity" in WEIGHTS
 
     def test_nine_detector_names_in_weights(self) -> None:
+        """Sprint 14 added trend_velocity as 9th detector; Sprint 15 added matrix_profile.
+        Verify the 9 Sprint-14 detectors are all present (at minimum)."""
         from sentinel.detection.detector import WEIGHTS
         expected = {
             "cusum", "ewma", "statistical", "changepoint",
             "isolation_forest", "variance", "lstm", "tcn", "trend_velocity",
         }
-        assert set(WEIGHTS.keys()) == expected
+        assert expected.issubset(set(WEIGHTS.keys()))
 
     def test_cusum_still_highest_weight(self) -> None:
         from sentinel.detection.detector import WEIGHTS

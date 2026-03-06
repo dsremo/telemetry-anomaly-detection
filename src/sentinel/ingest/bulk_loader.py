@@ -40,7 +40,11 @@ from tqdm import tqdm
 from sentinel.core.models import Anomaly, TelemetryPoint
 from sentinel.db import connection as db_connection
 from sentinel.db import queries
-from sentinel.detection.detector import analyze_channel_history, flush_all_states
+from sentinel.detection.detector import (
+    analyze_channel_history,
+    flush_all_states,
+    save_channel_models,
+)
 from sentinel.ingest.utils import prepare_series, validated_satellite_id
 
 logger = structlog.get_logger()
@@ -142,6 +146,9 @@ async def bulk_insert_channel(
 # Bulk detection
 # ---------------------------------------------------------------------------
 
+_SKIP_ML_THRESHOLD = 999_999_999  # unreachably large min_train → ML never trains
+
+
 async def run_bulk_detection(
     satellite_id: str,
     parameters: list[str],
@@ -151,27 +158,32 @@ async def run_bulk_detection(
     recal_factor: float | None = None,
     z_threshold: float | None = None,
     cusum_h_factor: float | None = None,
+    lstm_epochs: int | None = None,
+    tcn_epochs: int | None = None,
+    retrain_interval: int | None = None,
 ) -> dict[str, list[Anomaly]]:
     """Run streaming anomaly detection over all stored channels.
 
     Fetches data from the DB in chronological order for each parameter
-    and feeds it through the full 5-detector pipeline via
+    and feeds it through the full 10-detector pipeline via
     analyze_channel_history().  Flushes accumulated CUSUM/EWMA state
     to DB when all channels have been processed.
 
     Args:
-        satellite_id:    Satellite whose telemetry to analyse.
-        parameters:      Ordered list of channel/parameter names.
-        subsystem_map:   Maps parameter → subsystem label for anomaly records.
-        batch_size:      DB fetch page size (600 = one full STL window).
-        cooldown_hours:  Override alert cooldown (hours). None = use config value.
-                         Scale to data frequency: e.g. 0.05 (3 min) for 1-second data.
-        recal_factor:    Override CUSUM recalibration sensitivity. None = use config.
-                         Higher = more stable baseline (less chasing of anomalous data).
-        z_threshold:     Override z-score threshold. None = use config (default 3.0).
-                         Higher = less sensitive to spikes (try 4.0–5.0 for seasonal data).
-        cusum_h_factor:  Override CUSUM decision threshold multiplier. None = use config.
-                         Higher = requires larger drift accumulation before alarm (try 12–20).
+        satellite_id:     Satellite whose telemetry to analyse.
+        parameters:       Ordered list of channel/parameter names.
+        subsystem_map:    Maps parameter → subsystem label for anomaly records.
+        batch_size:       DB fetch page size (600 = one full STL window).
+        cooldown_hours:   Override alert cooldown (hours). None = use config value.
+        recal_factor:     Override CUSUM recalibration sensitivity. None = use config.
+        z_threshold:      Override z-score threshold. None = use config (default 3.0).
+        cusum_h_factor:   Override CUSUM decision threshold multiplier. None = use config.
+        lstm_epochs:      Override GRU training epochs. 0 = disable GRU entirely (fast).
+                          None = use config (default 30). Useful for benchmark runs.
+        tcn_epochs:       Override TCN training epochs. 0 = disable TCN entirely (fast).
+                          None = use config (default 40). Useful for benchmark runs.
+        retrain_interval: Override how often ML models retrain (samples between retrains).
+                          None = use config (default 500). Higher = faster but less adaptive.
 
     Returns:
         Dict mapping each parameter name to its list of detected Anomaly objects.
@@ -180,10 +192,16 @@ async def run_bulk_detection(
     import sentinel.detection.calibration as _cal_mod
 
     # Apply transient overrides — saved and restored after detection.
-    _orig_cooldown  = _det_mod._alert_cooldown_s
-    _orig_recal     = _cal_mod.RECAL_FACTOR
-    _orig_z         = _det_mod._stat_detector.z_threshold
-    _orig_cusum_h   = _cal_mod.CUSUM_H_FACTOR
+    _orig_cooldown      = _det_mod._alert_cooldown_s
+    _orig_recal         = _cal_mod.RECAL_FACTOR
+    _orig_z             = _det_mod._stat_detector.z_threshold
+    _orig_cusum_h       = _cal_mod.CUSUM_H_FACTOR
+    _orig_lstm_epochs   = _det_mod._lstm_epochs
+    _orig_lstm_min      = _det_mod._lstm_min_train
+    _orig_tcn_epochs    = _det_mod._tcn_epochs
+    _orig_tcn_min       = _det_mod._tcn_min_train
+    _orig_lstm_retrain  = _det_mod._lstm_retrain_interval
+    _orig_tcn_retrain   = _det_mod._tcn_retrain_interval
 
     if cooldown_hours is not None:
         _det_mod._alert_cooldown_s = cooldown_hours * 3600.0
@@ -194,6 +212,22 @@ async def run_bulk_detection(
         _det_mod._stat_detector.z_threshold = z_threshold
     if cusum_h_factor is not None:
         _cal_mod.CUSUM_H_FACTOR = cusum_h_factor
+    if lstm_epochs is not None:
+        _det_mod._lstm_epochs = lstm_epochs
+        if lstm_epochs == 0:
+            _det_mod._lstm_min_train = _SKIP_ML_THRESHOLD  # never reaches training threshold
+        _det_mod._lstm_models.clear()   # drop stale instances so new ones use new epochs
+    if tcn_epochs is not None:
+        _det_mod._tcn_epochs = tcn_epochs
+        if tcn_epochs == 0:
+            _det_mod._tcn_min_train = _SKIP_ML_THRESHOLD
+        _det_mod._tcn_models.clear()
+    if retrain_interval is not None:
+        _det_mod._lstm_retrain_interval = retrain_interval
+        _det_mod._tcn_retrain_interval  = retrain_interval
+        _det_mod._lstm_models.clear()
+        _det_mod._tcn_models.clear()
+
     results: dict[str, list[Anomaly]] = {}
 
     for param in tqdm(parameters, desc="Detecting", unit="ch"):
@@ -232,6 +266,9 @@ async def run_bulk_detection(
             )
         results[param] = anomalies
 
+        # Persist ML model checkpoints for warm-start on the next run.
+        save_channel_models(satellite_id, param)
+
     # Persist CUSUM/EWMA/calibration states to DB.
     await flush_all_states()
 
@@ -240,6 +277,14 @@ async def run_bulk_detection(
     _cal_mod.RECAL_FACTOR               = _orig_recal
     _det_mod._stat_detector.z_threshold = _orig_z
     _cal_mod.CUSUM_H_FACTOR             = _orig_cusum_h
+    _det_mod._lstm_epochs               = _orig_lstm_epochs
+    _det_mod._lstm_min_train            = _orig_lstm_min
+    _det_mod._tcn_epochs                = _orig_tcn_epochs
+    _det_mod._tcn_min_train             = _orig_tcn_min
+    _det_mod._lstm_retrain_interval     = _orig_lstm_retrain
+    _det_mod._tcn_retrain_interval      = _orig_tcn_retrain
+    _det_mod._lstm_models.clear()   # drop run-scoped ML models (may have used different epochs)
+    _det_mod._tcn_models.clear()
 
     return results
 

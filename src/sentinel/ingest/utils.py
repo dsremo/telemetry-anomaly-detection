@@ -11,6 +11,9 @@ Data-frequency utilities (usable by all analyze_* scripts):
                                 capped at 72 h.  Scales automatically from
                                 1-second SCADA data (≈8 min) to 1-hour satellite
                                 telemetry (72 h cap).
+    smart_cooldown_hours()    — scan raw CSV z-scores to find natural anomaly
+                                burst spacing and set cooldown proportionally.
+                                Falls back to None when signal is insufficient.
 """
 
 from __future__ import annotations
@@ -177,3 +180,91 @@ def adaptive_cooldown_hours(median_interval_s: float) -> float:
     cooldown_s = max(300.0, 500.0 * max(0.0, median_interval_s))
     cooldown_s = min(cooldown_s, 72.0 * 3600.0)   # cap at 72 h
     return cooldown_s / 3600.0
+
+
+def smart_cooldown_hours(
+    file_path: Path,
+    timestamp_col: str = "timestamp",
+    z_threshold: float = 2.0,
+    min_bursts: int = 5,
+    cooldown_fraction: float = 0.5,
+) -> float | None:
+    """Estimate optimal cooldown by scanning raw value bursts in the CSV.
+
+    Scans the whole file, computes rolling z-scores per channel, finds
+    "proto-alarm" bursts (samples where any channel exceeds z_threshold),
+    clusters them, measures the median gap between burst starts, and returns
+    cooldown = gap × cooldown_fraction.
+
+    This answers the question "how far apart are anomaly events?" using only
+    the raw signal — no GT, no ML, no DB required.
+
+    Returns None (caller should fall back to adaptive_cooldown_hours) when:
+      - The file cannot be read
+      - Fewer than min_bursts burst clusters are found (not enough signal)
+      - The data is too uniform to trigger any z-score alarms
+
+    Args:
+        file_path:         Wide-format CSV with timestamp + value columns.
+        timestamp_col:     Name of the timestamp column.
+        z_threshold:       Rolling z-score threshold for proto-alarm detection.
+        min_bursts:        Minimum burst clusters required to return an estimate.
+        cooldown_fraction: Cooldown = median_burst_gap × this fraction.
+
+    Returns:
+        Estimated cooldown in hours, or None.
+    """
+    try:
+        text_peek = file_path.read_text(errors="replace")[:500]
+        sep = ";" if ";" in text_peek else ","
+        df = pd.read_csv(file_path, sep=sep)
+
+        if timestamp_col not in df.columns or len(df) < 50:
+            return None
+
+        ts = pd.to_datetime(df[timestamp_col], utc=True, errors="coerce")
+        median_s = float(ts.diff().dt.total_seconds().dropna().median())
+        if median_s <= 0:
+            return None
+
+        # Tight burst gap: 20 data points worth of time
+        burst_gap_s = max(60.0, 20.0 * median_s)
+
+        # Build a boolean mask: True where any channel exceeds z_threshold
+        value_cols = [c for c in df.columns if c != timestamp_col]
+        proto_alarm = pd.Series(False, index=df.index)
+        for col in value_cols:
+            s = pd.to_numeric(df[col], errors="coerce")
+            if s.notna().sum() < 30:
+                continue
+            roll = s.rolling(min(100, len(s) // 4), min_periods=10)
+            z = ((s - roll.mean()) / roll.std().clip(lower=1e-9)).abs()
+            proto_alarm |= (z > z_threshold)
+
+        alarm_ts = ts[proto_alarm].dropna().sort_values()
+        if len(alarm_ts) < min_bursts:
+            return None
+
+        # Cluster tight alarms into bursts, collect burst start timestamps
+        burst_starts: list[float] = [alarm_ts.iloc[0].timestamp()]
+        for i in range(1, len(alarm_ts)):
+            gap = (alarm_ts.iloc[i] - alarm_ts.iloc[i - 1]).total_seconds()
+            if gap > burst_gap_s:
+                burst_starts.append(alarm_ts.iloc[i].timestamp())
+
+        if len(burst_starts) < min_bursts:
+            return None
+
+        # Median gap between consecutive burst starts
+        inter_gaps = sorted(
+            burst_starts[i] - burst_starts[i - 1]
+            for i in range(1, len(burst_starts))
+        )
+        median_gap_s = inter_gaps[len(inter_gaps) // 2]
+
+        cooldown_s = max(300.0, median_gap_s * cooldown_fraction)
+        cooldown_s = min(cooldown_s, 72.0 * 3600.0)
+        return cooldown_s / 3600.0
+
+    except Exception:
+        return None

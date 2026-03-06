@@ -49,6 +49,8 @@ AutoencoderDetector mirrors the IsolationForestDetector API:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import structlog
 
 logger = structlog.get_logger()
@@ -315,3 +317,74 @@ class AutoencoderDetector:
                 "z_score":        z,
             },
         )
+
+    # ── Persistence (warm-start across runs) ──────────────────────────────────
+
+    def save(self, path: Path) -> None:
+        """Persist model weights and thresholds to disk.
+
+        Saves a small checkpoint (~20 KB) with the PyTorch state_dict plus
+        the learned MSE statistics.  Called after each successful retrain so
+        the next run can warm-start instead of training from scratch.
+
+        No-op if the model has not been fitted yet or if torch is unavailable.
+        """
+        if not self._is_fitted or self._model is None:
+            return
+        try:
+            import torch  # noqa: PLC0415
+            path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "state_dict":      self._model.state_dict(),
+                    "train_mean":      self._train_mean,
+                    "train_std":       self._train_std,
+                    "train_mse_mean":  self._train_mse_mean,
+                    "train_mse_std":   self._train_mse_std,
+                    "threshold":       self._threshold,
+                    "sample_count":    len(self._buffer),
+                    "config": {
+                        "seq_length":      self.seq_length,
+                        "hidden_size":     self.hidden_size,
+                        "bottleneck_size": self.bottleneck_size,
+                    },
+                },
+                path,
+            )
+            logger.debug("lstm_model_saved", path=str(path))
+        except Exception as exc:
+            logger.warning("lstm_model_save_failed", path=str(path), error=str(exc))
+
+    def load(self, path: Path) -> bool:
+        """Load model weights from a previous run (warm-start).
+
+        Rebuilds the architecture from saved config, loads state_dict, and
+        restores the MSE statistics so detection can begin immediately without
+        retraining.
+
+        Returns True on success, False on any error (caller continues cold-start).
+        """
+        try:
+            import torch  # noqa: PLC0415
+            checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+            cfg = checkpoint.get("config", {})
+            model = _build_model(
+                cfg.get("seq_length",      self.seq_length),
+                cfg.get("hidden_size",     self.hidden_size),
+                cfg.get("bottleneck_size", self.bottleneck_size),
+            )
+            model.load_state_dict(checkpoint["state_dict"])
+            model.eval()
+            self._model           = model
+            self._train_mean      = float(checkpoint["train_mean"])
+            self._train_std       = float(checkpoint["train_std"])
+            self._train_mse_mean  = float(checkpoint["train_mse_mean"])
+            self._train_mse_std   = float(checkpoint["train_mse_std"])
+            self._threshold       = float(checkpoint["threshold"])
+            self._is_fitted       = True
+            self._samples_since_fit = 0
+            logger.debug("lstm_model_loaded", path=str(path))
+            return True
+        except Exception as exc:
+            logger.warning("lstm_model_load_failed", path=str(path), error=str(exc))
+            return False
