@@ -73,6 +73,17 @@ detection:
   incident_window_s:      300   # 5 min correlation window
   incident_close_after_s: 3600  # auto-close incident after 1 h of silence
 
+  # ── Stale Data Detection (NASA ASIST / ISRO FOLIO standard, Sprint 18) ─
+  # Alert when a channel's last known telemetry timestamp is older than
+  # stale_threshold_s.  Catches sensor dropout, power-off, and comms loss.
+  # Set to orbital_period_s / 3 for deep-space missions (e.g. 1800s for LEO).
+  stale_threshold_s: 300   # 5 min default (matches ISS downlink cadence)
+
+  # ── Time-to-Limit Prediction (SpaceX / ISRO pattern, Sprint 18) ────────
+  # When hard_limit_high/low are set on a channel and TrendVelocity detects
+  # active drift, warn when the redline will be breached within ttl_warn_min.
+  ttl_warn_min: 60   # warn at < 60 min to redline; critical at < 20 min
+
   # ── Adaptive σ_ref: periodic noise-floor refresh ─────────────────────
   # After initial calibration, σ_ref is refreshed every N samples using
   # the last CALIBRATION_WINDOW post-calibration residuals.  This prevents

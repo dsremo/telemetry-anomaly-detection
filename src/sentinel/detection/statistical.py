@@ -38,12 +38,33 @@ class StatisticalDetector:
         self.severe_z_threshold = severe_z_threshold
         self.min_window = min_window
 
+    @staticmethod
+    def _mad_z(current: float, window: np.ndarray) -> float:
+        """Modified z-score using MAD (Median Absolute Deviation).
+
+        Grafana/Prometheus production insight (2024): standard std squares
+        differences, so one spike blows up the band and blinds the detector
+        for hours.  MAD = median(|x − median(x)|) is spike-immune by design.
+        Factor 0.6745 normalises MAD to match σ for Gaussian data (NIST).
+        Returns 0.0 when MAD ≈ 0 (constant signal — caller falls back to std).
+        """
+        med = float(np.median(window))
+        mad = float(np.median(np.abs(window - med)))
+        if mad < 1e-6:
+            return 0.0
+        return float(0.6745 * abs(current - med) / mad)
+
     def detect(
         self,
         features: FeatureVector,
         window_values: np.ndarray | None = None,
     ) -> DetectorResult:
         """Evaluate a single parameter's feature vector for spikes.
+
+        Uses MAD-based modified z-score (spike-robust) when enough window data
+        is available, falling back to rolling-std z-score otherwise.  The MAD
+        approach prevents single outlier spikes from collapsing the detection
+        band — a known failure mode in production monitoring systems.
 
         Args:
             features:     FeatureVector computed on the STL residual window.
@@ -55,7 +76,13 @@ class StatisticalDetector:
         Returns:
             DetectorResult from the "statistical" detector.
         """
-        z = abs(features.z_score)
+        # Prefer MAD-based z when we have enough data (spike-robust).
+        z_std = abs(features.z_score)
+        if window_values is not None and len(window_values) >= self.min_window:
+            z_mad = self._mad_z(float(features.raw_value), window_values)
+            z = z_mad if z_mad > 0.0 else z_std
+        else:
+            z = z_std
 
         # Constant-signal guard: perfectly flat residuals mean the STL
         # decomposition captured everything — this channel is nominal.
@@ -72,7 +99,9 @@ class StatisticalDetector:
             )
 
         # Insufficient history for a meaningful z-score.
-        n = len(window_values) if window_values is not None else 0
+        # When window_values is None we rely on the feature engine's rolling_std
+        # (already validated above), so skip the window-size check entirely.
+        n = len(window_values) if window_values is not None else self.min_window
         if n < self.min_window:
             return DetectorResult(
                 detector_name="statistical",

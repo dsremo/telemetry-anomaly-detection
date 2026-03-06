@@ -33,7 +33,7 @@ from sentinel.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +782,17 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE incidents
         ADD COLUMN IF NOT EXISTS confidence REAL    NOT NULL DEFAULT 0.0,
         ADD COLUMN IF NOT EXISTS channels   TEXT[]  NOT NULL DEFAULT '{}';
+    """,
+
+    # v18: Sprint 18 — Stale Data + TTL Prediction + Subsystem Health.
+    # hard_limit_high/low: operator-configured absolute redlines for TTL pred.
+    # velocity_threshold: per-channel override for TrendVelocityDetector.
+    # (Subsystem health uses existing channel_registry.subsystem — no new col.)
+    """
+    ALTER TABLE channel_config
+        ADD COLUMN IF NOT EXISTS hard_limit_high    REAL,
+        ADD COLUMN IF NOT EXISTS hard_limit_low     REAL,
+        ADD COLUMN IF NOT EXISTS velocity_threshold REAL;
     """,
 ]
 

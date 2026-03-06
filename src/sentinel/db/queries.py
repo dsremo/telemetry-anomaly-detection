@@ -399,6 +399,9 @@ async def upsert_channel_config(
     min_confidence: float | None = None,
     alert_cooldown_s: int | None = None,
     variance_z_threshold: float | None = None,
+    hard_limit_high: float | None = None,
+    hard_limit_low: float | None = None,
+    velocity_threshold: float | None = None,
 ) -> dict:
     """Insert or partially update per-channel threshold overrides.
 
@@ -415,8 +418,9 @@ async def upsert_channel_config(
                  z_threshold, cusum_h, cusum_k,
                  ewma_lambda, ewma_sigma_mult,
                  min_confidence, alert_cooldown_s, variance_z_threshold,
+                 hard_limit_high, hard_limit_low, velocity_threshold,
                  updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
             ON CONFLICT (tenant_id, satellite_id, parameter) DO UPDATE
                 SET z_threshold           = COALESCE(EXCLUDED.z_threshold,           channel_config.z_threshold),
                     cusum_h               = COALESCE(EXCLUDED.cusum_h,               channel_config.cusum_h),
@@ -426,14 +430,19 @@ async def upsert_channel_config(
                     min_confidence        = COALESCE(EXCLUDED.min_confidence,        channel_config.min_confidence),
                     alert_cooldown_s      = COALESCE(EXCLUDED.alert_cooldown_s,      channel_config.alert_cooldown_s),
                     variance_z_threshold  = COALESCE(EXCLUDED.variance_z_threshold,  channel_config.variance_z_threshold),
+                    hard_limit_high       = COALESCE(EXCLUDED.hard_limit_high,       channel_config.hard_limit_high),
+                    hard_limit_low        = COALESCE(EXCLUDED.hard_limit_low,        channel_config.hard_limit_low),
+                    velocity_threshold    = COALESCE(EXCLUDED.velocity_threshold,    channel_config.velocity_threshold),
                     updated_at            = NOW()
             RETURNING z_threshold, cusum_h, cusum_k, ewma_lambda, ewma_sigma_mult,
-                      min_confidence, alert_cooldown_s, variance_z_threshold, updated_at
+                      min_confidence, alert_cooldown_s, variance_z_threshold,
+                      hard_limit_high, hard_limit_low, velocity_threshold, updated_at
             """,
             get_tenant(), satellite_id, parameter,
             z_threshold, cusum_h, cusum_k,
             ewma_lambda, ewma_sigma_mult,
             min_confidence, alert_cooldown_s, variance_z_threshold,
+            hard_limit_high, hard_limit_low, velocity_threshold,
         )
     return dict(row)
 
@@ -1026,6 +1035,51 @@ async def update_incident_status(incident_id: str, status: str) -> bool:
             incident_id, status,
         )
     return result == "UPDATE 1"
+
+
+async def get_subsystem_health(satellite_id: str) -> list[dict]:
+    """Return health score per subsystem for a satellite (Sprint 18).
+
+    Health = 1.0 − (channels_with_open_incidents / total_channels_in_subsystem)
+    Uses channel_registry.subsystem for grouping + incidents.channels[] for
+    the anomalous channel set.  Returns [] if satellite has no registered channels.
+    """
+    async with acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH open_chans AS (
+                SELECT UNNEST(channels) AS parameter
+                  FROM incidents
+                 WHERE satellite_id = $1
+                   AND status = 'open'
+            ),
+            chan_sub AS (
+                SELECT parameter, COALESCE(subsystem, 'unknown') AS subsystem
+                  FROM channel_registry
+                 WHERE satellite_id = $1
+            ),
+            totals AS (
+                SELECT subsystem, COUNT(*) AS total
+                  FROM chan_sub
+                 GROUP BY subsystem
+            ),
+            anomalous AS (
+                SELECT cs.subsystem, COUNT(DISTINCT oc.parameter) AS bad
+                  FROM open_chans oc
+                  JOIN chan_sub cs USING (parameter)
+                 GROUP BY cs.subsystem
+            )
+            SELECT t.subsystem,
+                   t.total::INT                                              AS total_channels,
+                   COALESCE(a.bad, 0)::INT                                  AS anomalous_channels,
+                   1.0 - COALESCE(a.bad, 0)::REAL / t.total::REAL          AS health
+              FROM totals t
+              LEFT JOIN anomalous a USING (subsystem)
+             ORDER BY health ASC
+            """,
+            satellite_id,
+        )
+    return [dict(r) for r in rows]
 
 
 async def close_incident(incident_id: str) -> None:

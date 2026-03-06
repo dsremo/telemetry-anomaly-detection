@@ -198,6 +198,15 @@ _last_anomaly_ts:  dict[str, float] = {}    # key → epoch of last stored anoma
 _alert_persistence_min: int = 1             # set to 2-3 for production streaming
 _anomaly_streak:  dict[str, int] = {}       # key → consecutive anomalous windows
 
+# Stale data detection (NASA ASIST / ISRO FOLIO standard, Sprint 18).
+# Tracks when each channel last produced a telemetry value.  If the gap
+# exceeds stale_threshold_s, a CRITICAL "stale_data" anomaly is raised.
+# This catches sensor dropout, instrument power-off, and comms loss —
+# scenarios our 10-detector ensemble is completely blind to.
+_channel_last_seen:  dict[str, float] = {}  # key=sat:param → UTC epoch
+_stale_threshold_s:  float = 300.0          # default 5 min; overridden by config
+_ttl_warn_min:       float = 60.0           # default 60 min; warn when ttl < this
+
 # Adaptive context window: auto-scaled per channel based on FFT-detected period.
 # window = min(max(600, stl_window_factor × period), stl_max_window)
 _stl_window_factor: int = 3      # context_window = factor × detected_period
@@ -304,6 +313,7 @@ def init_detectors(settings: object) -> None:
     global _discord_m, _discord_window, _discord_threshold_sigma
     global _discord_detector
     global _model_dir
+    global _stale_threshold_s, _ttl_warn_min
     global _incident_grouper
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
@@ -446,10 +456,15 @@ def init_detectors(settings: object) -> None:
         close_after_s=incident_close_after_s,
     )
 
+    # ── Stale data + TTL config (Sprint 18) ───────────────────────────────
+    _stale_threshold_s = float(det.get("stale_threshold_s", 300.0))
+    _ttl_warn_min      = float(det.get("ttl_warn_min",      60.0))
+
     # Reset per-channel state so a server restart or re-init starts clean.
     _last_processed_ts.clear()
     _last_anomaly_ts.clear()
     _anomaly_streak.clear()
+    _channel_last_seen.clear()
     _detection_cycle_count.clear()
     _samples_since_fit.clear()
 
@@ -505,6 +520,8 @@ def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
         "variance_z_threshold":  _get("variance_z_threshold",  _variance_detector.variance_z_threshold),
         "velocity_threshold":    _get("velocity_threshold",    None),   # None = calibrated dynamically
         "discord_threshold":     _get("discord_threshold",     None),   # None = uses global threshold_sigma
+        "hard_limit_high":       _get("hard_limit_high",       None),   # absolute redline (high)
+        "hard_limit_low":        _get("hard_limit_low",        None),   # absolute redline (low)
     }
 
 
@@ -928,6 +945,42 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
     if not latest:
         return anomalies
 
+    # ── Stale data check (NASA ASIST / ISRO FOLIO standard, Sprint 18) ────
+    # For every channel we've seen before, if the latest known timestamp is
+    # older than _stale_threshold_s, fire a CRITICAL stale_data anomaly.
+    # This catches sensor dropout, instrument power-off, and comms loss.
+    now_epoch = datetime.now(timezone.utc).timestamp()
+    for row in latest:
+        param    = row["parameter"]
+        ts_epoch = row["timestamp"].timestamp() if hasattr(row["timestamp"], "timestamp") else float(row["timestamp"])
+        key      = f"{satellite_id}:{param}"
+        if key in _channel_last_seen and (now_epoch - ts_epoch) > _stale_threshold_s:
+            stale_anomaly = Anomaly(
+                satellite_id=satellite_id,
+                timestamp=row["timestamp"],
+                subsystem=row.get("subsystem", ""),
+                parameter=param,
+                value=float(row["value"]),
+                severity=Severity.CRITICAL,
+                confidence=0.95,
+                detectors_triggered=("stale_data",),
+                explanation=(
+                    f"Telemetry silence detected: last sample {round((now_epoch - ts_epoch)/60, 1)} min ago "
+                    f"(threshold {round(_stale_threshold_s/60, 1)} min). "
+                    "Possible sensor dropout, power-off, or comms loss."
+                ),
+                contributing_params=(),
+            )
+            try:
+                await queries.insert_anomaly(stale_anomaly)
+                anomalies.append(stale_anomaly)
+                incident = _incident_grouper.process(stale_anomaly)
+                await queries.upsert_incident(incident)
+                await queries.link_anomaly_to_incident(stale_anomaly.id, incident.id)
+            except Exception:  # noqa: BLE001
+                pass
+        _channel_last_seen[key] = ts_epoch
+
     for row in latest:
         param    = row["parameter"]
         value    = float(row["value"])
@@ -1088,6 +1141,36 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                 severity=Severity.NOMINAL, details={"reason": "warming_up"},
             )
         )
+
+        # ── Time-to-Limit prediction (SpaceX/ISRO pattern, Sprint 18) ──────
+        # When hard_limit_high / hard_limit_low are configured for a channel,
+        # compute how long until the current trend reaches the redline.
+        # ttl_min < ttl_warn_min → escalate tvel_result severity.
+        _hl_high = eff.get("hard_limit_high")
+        _hl_low  = eff.get("hard_limit_low")
+        _vel     = tvel_result.details.get("max_velocity", 0.0) if tvel_result.details else 0.0
+        if _vel != 0.0 and (_hl_high is not None or _hl_low is not None):
+            _ttl_min: float | None = None
+            if _vel > 1e-8 and _hl_high is not None:
+                _remaining = _hl_high - value
+                if _remaining > 0:
+                    _ttl_min = round(_remaining / _vel / 60.0, 1)
+            elif _vel < -1e-8 and _hl_low is not None:
+                _remaining = value - _hl_low
+                if _remaining > 0:
+                    _ttl_min = round(_remaining / abs(_vel) / 60.0, 1)
+            if _ttl_min is not None:
+                tvel_result.details["ttl_min"] = _ttl_min
+                if _ttl_min < _ttl_warn_min:
+                    # Escalate: trend will breach the hard limit soon.
+                    sev = Severity.CRITICAL if _ttl_min < _ttl_warn_min / 3 else Severity.WARNING
+                    tvel_result = DetectorResult(
+                        detector_name="trend_velocity",
+                        is_anomaly=True,
+                        score=max(tvel_result.score, 0.75),
+                        severity=sev,
+                        details={**tvel_result.details, "ttl_triggered": True},
+                    )
 
         # ── 12. Matrix Profile Discord (10th detector — shape anomaly detection)
         discord_result = (

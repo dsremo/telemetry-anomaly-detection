@@ -116,6 +116,19 @@ class IncidentSummary(BaseModel):
     watch: int = 0
 
 
+class SubsystemHealth(BaseModel):
+    """Per-subsystem health score for a satellite (Sprint 18).
+
+    health = 1.0 − (anomalous_channels / total_channels).
+    1.0 = fully nominal, 0.0 = all channels in open incidents.
+    """
+
+    subsystem: str
+    total_channels: int
+    anomalous_channels: int
+    health: float  # 0.0 – 1.0
+
+
 class IngestResponse(BaseModel):
     """Response after telemetry ingestion."""
 

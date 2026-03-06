@@ -958,6 +958,57 @@ window.submitFeedback = async function(anomalyId, isTP) {
 };
 
 // ============================================================
+// Subsystem Health Strip (Sprint 18 — NASA/ISRO pattern)
+// ============================================================
+async function loadSubsystemHealth(satelliteId) {
+    if (!satelliteId) {
+        document.getElementById('subsystemHealthPanel').style.display = 'none';
+        return;
+    }
+    try {
+        const resp = await fetch(`${API_BASE}/satellites/${encodeURIComponent(satelliteId)}/subsystem-health`, {
+            headers: authHeaders(),
+        });
+        if (!resp.ok) return;
+        const subsystems = await resp.json();
+        renderSubsystemHealth(satelliteId, subsystems);
+    } catch (_) { /* silent — health strip is non-critical */ }
+}
+
+function renderSubsystemHealth(satelliteId, subsystems) {
+    const panel = document.getElementById('subsystemHealthPanel');
+    const strip = document.getElementById('subsystemHealthStrip');
+    const label = document.getElementById('healthSatLabel');
+    if (!subsystems || subsystems.length === 0) {
+        panel.style.display = 'none';
+        return;
+    }
+    panel.style.display = '';
+    label.textContent = satelliteId;
+
+    strip.innerHTML = subsystems.map(s => {
+        const pct   = Math.round(s.health * 100);
+        const color = pct >= 90 ? 'var(--nominal)' : pct >= 60 ? 'var(--warning)' : 'var(--critical)';
+        const label = pct >= 90 ? 'NOMINAL' : pct >= 60 ? 'DEGRADED' : 'CRITICAL';
+        return `
+        <div style="min-width:140px;background:var(--bg-panel);border:1px solid ${color};
+                    border-radius:6px;padding:8px 12px">
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;
+                        letter-spacing:0.05em">${s.subsystem}</div>
+            <div style="font-size:1.4rem;font-weight:700;color:${color}">${pct}%</div>
+            <div style="font-size:0.7rem;color:${color}">${label}</div>
+            <div style="margin-top:4px;height:4px;background:var(--bg);border-radius:2px">
+                <div style="height:100%;width:${pct}%;background:${color};border-radius:2px;
+                            transition:width 0.3s"></div>
+            </div>
+            <div style="font-size:0.65rem;color:var(--text-muted);margin-top:3px">
+                ${s.anomalous_channels}/${s.total_channels} channels affected
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// ============================================================
 // Incident Explorer (Sprint 17 — Hierarchical Alert Routing)
 // ============================================================
 async function loadIncidents() {
@@ -2343,6 +2394,7 @@ document.getElementById('globalSatFilter').addEventListener('change', e => {
     renderMetrics();
     renderSeverityBar();
     maybeUpdateAnalysis();
+    loadSubsystemHealth(state.satFilter);
 });
 
 document.getElementById('clearAlerts').addEventListener('click', () => {

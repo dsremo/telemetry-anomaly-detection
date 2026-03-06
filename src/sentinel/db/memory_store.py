@@ -312,6 +312,11 @@ async def update_incident_status(incident_id: str, status: str) -> bool:
     return False
 
 
+async def get_subsystem_health(satellite_id: str) -> list[dict]:
+    """Memory-store shim — returns empty list (no channel_registry in tests)."""
+    return []
+
+
 def _incident_to_dict(incident: object) -> dict:
     from datetime import timezone  # noqa: PLC0415
     from sentinel.core.models import Incident  # noqa: PLC0415
