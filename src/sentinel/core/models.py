@@ -92,7 +92,7 @@ class Anomaly:
     we are, which detectors agree, and a human-readable explanation.
     """
 
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     satellite_id: str = ""
     timestamp: datetime = field(default_factory=datetime.utcnow)
     subsystem: str = ""
@@ -119,7 +119,7 @@ class Incident:
     and assigns each new Anomaly to one.
     """
 
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     satellite_id: str = ""
     first_anomaly_at: datetime = field(default_factory=datetime.utcnow)  # opened_at
     last_anomaly_at: datetime = field(default_factory=datetime.utcnow)
@@ -139,7 +139,7 @@ class Alert:
     Alerts are deduplicated — the same ongoing anomaly doesn't spam.
     """
 
-    id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
     anomaly_id: str = ""
     satellite_id: str = ""
     severity: Severity = Severity.WARNING

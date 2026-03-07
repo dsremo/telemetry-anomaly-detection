@@ -489,7 +489,7 @@ async def insert_alert(anomaly: "Anomaly") -> str:  # type: ignore[name-defined]
     """Stub: store alert in-memory."""
     from datetime import timezone
     import uuid as _uuid
-    alert_id = _uuid.uuid4().hex[:12]
+    alert_id = str(_uuid.uuid4())
     title = f"[{anomaly.severity.value.upper()}] {anomaly.satellite_id} — {anomaly.parameter}"
     with _lock:
         _alerts.append({

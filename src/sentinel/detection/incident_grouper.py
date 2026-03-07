@@ -146,7 +146,7 @@ class _OpenIncident:
 
 def _new_id() -> str:
     import uuid  # noqa: PLC0415
-    return uuid.uuid4().hex[:16]
+    return str(uuid.uuid4())
 
 
 class IncidentGrouper:

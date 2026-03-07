@@ -1140,7 +1140,7 @@ async def insert_alert(anomaly: "Anomaly") -> str:
     BUG FIX: Previously alerts were dispatched (webhook/email) but never stored.
     This ensures the alerts table is populated for the history endpoint.
     """
-    alert_id = _uuid.uuid4().hex[:12]
+    alert_id = str(_uuid.uuid4())
     title = f"[{anomaly.severity.value.upper()}] {anomaly.satellite_id} — {anomaly.parameter}"
     async with acquire() as conn:
         await conn.execute(
