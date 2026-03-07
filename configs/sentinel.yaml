@@ -173,19 +173,29 @@ detection:
   changepoint_penalty: 10   # higher = fewer, more confident changepoints
   changepoint_min_size: 50  # minimum segment length between breakpoints
 
+  # ── Correlation Graph Detector (STGLR-inspired, Sprint 19) ──────────
+  # Detects relationship breakdown between correlated channels.
+  # window: rolling buffer size per channel (samples)
+  # min_calibration: samples before detection activates (per pair)
+  # threshold_sigma: z-score of correlation deviation to alarm
+  corr_graph_window:           60    # rolling window per channel
+  corr_graph_min_calibration:  100   # samples to establish baseline correlation
+  corr_graph_threshold_sigma:  3.0   # alarm when correlation z > this
+
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
-  # Sprint 15: 10-detector ensemble (matrix_profile added — shape anomaly detection)
+  # Sprint 19: 11-detector ensemble (correlation_graph added — relationship breakdown)
   ensemble_weights:
-    cusum:            0.18   # primary: gradual drift accumulation
-    ewma:             0.15   # secondary: sudden level shifts
-    statistical:      0.11   # spike detection (single-point outliers)
-    changepoint:      0.08   # structural break detection
-    isolation_forest: 0.05   # multivariate (≥2 parameters required)
-    variance:         0.07   # variance-spike detector (CATS-type oscillatory signals)
-    lstm:             0.11   # GRU autoencoder — temporal pattern anomalies (ML)
-    tcn:              0.10   # TCN — dilated causal convolutions, deeper ML patterns
-    trend_velocity:   0.08   # STL trend acceleration — onset detection (Sprint 14)
-    matrix_profile:   0.07   # Matrix Profile discord — shape anomaly detection (Sprint 15)
+    cusum:             0.17   # primary: gradual drift accumulation
+    ewma:              0.14   # secondary: sudden level shifts
+    statistical:       0.10   # spike detection (single-point outliers)
+    changepoint:       0.08   # structural break detection
+    isolation_forest:  0.05   # multivariate (≥2 parameters required)
+    variance:          0.07   # variance-spike detector (CATS-type oscillatory signals)
+    lstm:              0.10   # GRU autoencoder — temporal pattern anomalies (ML)
+    tcn:               0.09   # TCN — dilated causal convolutions, deeper ML patterns
+    trend_velocity:    0.08   # STL trend acceleration — onset detection (Sprint 14)
+    matrix_profile:    0.06   # Matrix Profile discord — shape anomaly detection (Sprint 15)
+    correlation_graph: 0.06   # Correlation graph — relationship breakdown (Sprint 19)
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:

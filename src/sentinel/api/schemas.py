@@ -129,6 +129,30 @@ class SubsystemHealth(BaseModel):
     health: float  # 0.0 – 1.0
 
 
+class SuppressionIn(BaseModel):
+    """Request body for POST /satellites/{sat}/suppress."""
+
+    parameter: str = Field(description="Channel to suppress (e.g. 'TEMP_PANEL_3')")
+    duration_min: float = Field(
+        gt=0, le=1440,
+        description="Suppression duration in minutes (max 24h = 1440 min)"
+    )
+    reason: str | None = Field(
+        default=None, max_length=256,
+        description="Optional reason (e.g. 'planned momentum dump at 14:30 UTC')"
+    )
+
+
+class SuppressionOut(BaseModel):
+    """Active suppression window for one channel."""
+
+    satellite_id: str
+    parameter: str
+    duration_min: float
+    reason: str | None
+    until_epoch: float   # UTC epoch when suppression expires
+
+
 class IngestResponse(BaseModel):
     """Response after telemetry ingestion."""
 
@@ -407,6 +431,20 @@ class ChannelConfigIn(BaseModel):
         default=None, gt=0,
         description="Variance detector ratio threshold (> 0). Default: 2.5. "
                     "Lower for high-noise oscillatory channels; higher for stable DC channels."
+    )
+    hard_limit_high: float | None = Field(
+        default=None,
+        description="Absolute redline (high). Value > limit fires CRITICAL immediately, "
+                    "bypassing ensemble confidence scoring."
+    )
+    hard_limit_low: float | None = Field(
+        default=None,
+        description="Absolute redline (low). Value < limit fires CRITICAL immediately."
+    )
+    velocity_threshold: float | None = Field(
+        default=None, gt=0,
+        description="Per-channel trend velocity alarm threshold (engineering units/s). "
+                    "Overrides the global calibrated threshold."
     )
 
 

@@ -59,6 +59,7 @@ from sentinel.detection.stl_decomposer import STLDecomposer
 from sentinel.detection.autoencoder_detector import AutoencoderDetector
 from sentinel.detection.incident_grouper import IncidentGrouper
 from sentinel.detection.tcn_detector import TCNDetector
+from sentinel.detection.correlation_detector import CorrelationGraphDetector
 from sentinel.detection.discord_detector import DiscordDetector
 from sentinel.detection.trend_velocity_detector import TrendVelocityDetector
 from sentinel.detection.variance_detector import VarianceDetector
@@ -78,6 +79,7 @@ _cp_detector:       ChangePointDetector      = ChangePointDetector()
 _variance_detector:        VarianceDetector         = VarianceDetector()
 _trend_velocity_detector:  TrendVelocityDetector    = TrendVelocityDetector()
 _discord_detector:         DiscordDetector          = DiscordDetector()
+_correlation_detector:     CorrelationGraphDetector = CorrelationGraphDetector()
 _incident_grouper:         IncidentGrouper          = IncidentGrouper()
 
 # Directory for persisted ML model checkpoints (warm-start across runs).
@@ -141,19 +143,32 @@ _discord_m:                int   = 20
 _discord_window:           int   = 300
 _discord_threshold_sigma:  float = 3.0
 
+# CorrelationGraphDetector config — overridable via init_detectors() from sentinel.yaml.
+_corr_graph_window:            int   = 60
+_corr_graph_min_calibration:   int   = 100
+_corr_graph_threshold_sigma:   float = 3.0
+
+# Alert suppression windows (maintenance mode, Sprint 19).
+# key = "satellite_id:parameter" → UTC epoch when suppression expires.
+# In-memory only — cleared on server restart (by design; maintenance windows
+# should not silently persist across deployments).
+_suppressed: dict[str, float] = {}
+
 # Ensemble weights (must sum to 1.0, overridable via config)
-# 10 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance, lstm, tcn, trend_velocity, matrix_profile
+# 11 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance,
+#               lstm, tcn, trend_velocity, matrix_profile, correlation_graph
 WEIGHTS: dict[str, float] = {
-    "cusum":            0.18,   # primary drift detector (NASA CUSUM standard)
-    "ewma":             0.15,   # level-shift detector
-    "statistical":      0.11,   # single-point spike detector (z-score)
-    "changepoint":      0.08,   # structural break detector (PELT)
-    "isolation_forest": 0.05,   # multivariate cross-parameter anomalies
-    "variance":         0.07,   # variance-spike detector (CATS-type oscillatory signals)
-    "lstm":             0.11,   # GRU autoencoder — temporal pattern anomalies (ML)
-    "tcn":              0.10,   # TCN — dilated causal convolutions, deeper ML patterns
-    "trend_velocity":   0.08,   # STL trend acceleration — onset detection (Sprint 14)
-    "matrix_profile":   0.07,   # Matrix Profile discord — shape anomaly detection (Sprint 15)
+    "cusum":              0.17,   # primary drift detector (NASA CUSUM standard)
+    "ewma":               0.14,   # level-shift detector
+    "statistical":        0.10,   # single-point spike detector (z-score)
+    "changepoint":        0.08,   # structural break detector (PELT)
+    "isolation_forest":   0.05,   # multivariate cross-parameter anomalies
+    "variance":           0.07,   # variance-spike detector (CATS-type oscillatory signals)
+    "lstm":               0.10,   # GRU autoencoder — temporal pattern anomalies (ML)
+    "tcn":                0.09,   # TCN — dilated causal convolutions, deeper ML patterns
+    "trend_velocity":     0.08,   # STL trend acceleration — onset detection (Sprint 14)
+    "matrix_profile":     0.06,   # Matrix Profile discord — shape anomaly detection (Sprint 15)
+    "correlation_graph":  0.06,   # Correlation graph — relationship breakdown (Sprint 19)
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -312,6 +327,9 @@ def init_detectors(settings: object) -> None:
     global _trend_velocity_detector
     global _discord_m, _discord_window, _discord_threshold_sigma
     global _discord_detector
+    global _corr_graph_window, _corr_graph_min_calibration, _corr_graph_threshold_sigma
+    global _correlation_detector
+    global _suppressed
     global _model_dir
     global _stale_threshold_s, _ttl_warn_min
     global _incident_grouper
@@ -456,6 +474,21 @@ def init_detectors(settings: object) -> None:
         close_after_s=incident_close_after_s,
     )
 
+    # ── CorrelationGraphDetector (Sprint 19) ──────────────────────────────
+    _corr_graph_window           = int(det.get("corr_graph_window",           60))
+    _corr_graph_min_calibration  = int(det.get("corr_graph_min_calibration",  100))
+    _corr_graph_threshold_sigma  = float(det.get("corr_graph_threshold_sigma", 3.0))
+    _correlation_detector = CorrelationGraphDetector(
+        window=_corr_graph_window,
+        min_calibration=_corr_graph_min_calibration,
+        threshold_sigma=_corr_graph_threshold_sigma,
+    )
+
+    # ── Suppression windows (Sprint 19) ───────────────────────────────────
+    # Clear expired suppressions on re-init (active ones survive restart via
+    # the public suppress_channel() API which callers must re-call).
+    _suppressed.clear()
+
     # ── Stale data + TTL config (Sprint 18) ───────────────────────────────
     _stale_threshold_s = float(det.get("stale_threshold_s", 300.0))
     _ttl_warn_min      = float(det.get("ttl_warn_min",      60.0))
@@ -523,6 +556,67 @@ def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
         "hard_limit_high":       _get("hard_limit_high",       None),   # absolute redline (high)
         "hard_limit_low":        _get("hard_limit_low",        None),   # absolute redline (low)
     }
+
+
+# ── Alert suppression helpers (Sprint 19) ────────────────────────────────────
+
+def suppress_channel(satellite_id: str, parameter: str, duration_min: float) -> float:
+    """Mute anomaly alerts for a channel for *duration_min* minutes.
+
+    Returns the UTC epoch timestamp when the suppression expires.
+    Overwrites any existing suppression for the same channel.
+    """
+    until = datetime.now(timezone.utc).timestamp() + duration_min * 60.0
+    _suppressed[f"{satellite_id}:{parameter}"] = until
+    logger.info("channel_suppressed", satellite=satellite_id, parameter=parameter,
+                duration_min=duration_min)
+    return until
+
+
+def lift_suppression(satellite_id: str, parameter: str) -> bool:
+    """Remove the suppression window for a channel.
+
+    Returns True if a suppression was active, False if none existed.
+    """
+    key = f"{satellite_id}:{parameter}"
+    if key in _suppressed:
+        del _suppressed[key]
+        logger.info("suppression_lifted", satellite=satellite_id, parameter=parameter)
+        return True
+    return False
+
+
+def list_suppressions(satellite_id: str) -> list[dict]:
+    """Return active (non-expired) suppressions for *satellite_id*."""
+    now = datetime.now(timezone.utc).timestamp()
+    result = []
+    expired = []
+    for key, until in _suppressed.items():
+        sat, _, param = key.partition(":")
+        if sat != satellite_id:
+            continue
+        if until > now:
+            result.append({
+                "parameter":    param,
+                "until_epoch":  until,
+                "remaining_min": round((until - now) / 60.0, 1),
+            })
+        else:
+            expired.append(key)
+    for k in expired:
+        del _suppressed[k]
+    return result
+
+
+def _is_suppressed(key: str) -> bool:
+    """Return True if the sat:param key has an active suppression window."""
+    until = _suppressed.get(key, 0.0)
+    if until == 0.0:
+        return False
+    if datetime.now(timezone.utc).timestamp() < until:
+        return True
+    del _suppressed[key]   # clean up expired entry
+    return False
 
 
 def _apply_calibration_overrides(cal: "CalibrationState", eff: dict) -> None:  # type: ignore[name-defined]
@@ -856,7 +950,11 @@ async def analyze_channel_history(
             )
         )
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result, hist_discord_result]
+        # Correlation graph update for historical analysis
+        _correlation_detector.update(satellite_id, parameter, final_residual)
+        hist_corr_result = _correlation_detector.detect(satellite_id, parameter)
+
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result, hist_discord_result, hist_corr_result]
         is_anomaly, confidence, severity = _ensemble_vote(all_results)
 
         # Point 3: per-channel min_confidence gate
@@ -1186,9 +1284,34 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             )
         )
 
-        # ── 13. Ensemble vote ────────────────────────────────────────────
-        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, tvel_result, discord_result]
-        is_anomaly, confidence, severity = _ensemble_vote(all_results)
+        # ── 13. Correlation Graph (11th detector — relationship breakdown) ─
+        # Update buffer with the current residual, then score.
+        _correlation_detector.update(satellite_id, param, current_residual)
+        corr_result = _correlation_detector.detect(satellite_id, param)
+
+        # ── 14. Hard Limit Override (zero-FN absolute redline check) ──────
+        # If value has crossed a hard limit, force CRITICAL regardless of
+        # ensemble confidence.  Redlines are absolute — no statistical gate.
+        hl_high = eff.get("hard_limit_high")
+        hl_low  = eff.get("hard_limit_low")
+        hard_limit_breached = (
+            (hl_high is not None and value > hl_high) or
+            (hl_low  is not None and value < hl_low)
+        )
+
+        # ── 15. Ensemble vote ────────────────────────────────────────────
+        all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result,
+                       var_result, lstm_result, tcn_result, tvel_result, discord_result,
+                       corr_result]
+        if hard_limit_breached:
+            is_anomaly, confidence, severity = True, 1.0, Severity.CRITICAL
+        else:
+            is_anomaly, confidence, severity = _ensemble_vote(all_results)
+
+        # Suppression window (maintenance mode — mutes alerts, not detection).
+        live_key = f"{satellite_id}:{param}"
+        if is_anomaly and _is_suppressed(live_key):
+            is_anomaly = False
 
         # Point 3: per-channel min_confidence gate
         if is_anomaly and eff["min_confidence"] > 0.0 and confidence < eff["min_confidence"]:
@@ -1196,7 +1319,6 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
 
         # Cooldown guard: one alarm per channel per cooldown window.
         # Point 4: use per-channel cooldown instead of global _alert_cooldown_s.
-        live_key = f"{satellite_id}:{param}"
         if is_anomaly:
             now_epoch = datetime.now(timezone.utc).timestamp()
             if now_epoch - _last_anomaly_ts.get(live_key, 0.0) < eff["alert_cooldown_s"]:
@@ -1469,6 +1591,13 @@ def _build_explanation(
                 parts.append(
                     f"Unusual shape: discord score={ds:.4f} "
                     f"(threshold={thr:.4f}, z={z:.2f})"
+                )
+            case "correlation_graph":
+                cz   = r.details.get("correlation_z", 0)
+                peer = r.details.get("peer", "unknown")
+                parts.append(
+                    f"Correlation breakdown with {peer}: z={cz:.2f} "
+                    "(expected peer relationship no longer holds)"
                 )
 
     parts.append(f"{len(triggered)}/{len(results)} detectors triggered")

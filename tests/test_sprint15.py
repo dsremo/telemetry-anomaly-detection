@@ -281,7 +281,7 @@ class TestEnsembleWith10Detectors:
             "isolation_forest", "variance", "lstm", "tcn",
             "trend_velocity", "matrix_profile",
         }
-        assert expected == set(WEIGHTS.keys())
+        assert expected.issubset(set(WEIGHTS.keys()))  # forward-compatible (new detectors added each sprint)
 
     def test_build_explanation_handles_matrix_profile(self) -> None:
         """_build_explanation must not raise for 'matrix_profile' detector name."""

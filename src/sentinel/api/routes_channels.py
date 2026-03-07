@@ -30,6 +30,7 @@ _OVERRIDE_FIELDS = (
     "ewma_lambda", "ewma_sigma_mult",
     "min_confidence", "alert_cooldown_s",
     "variance_z_threshold",
+    "hard_limit_high", "hard_limit_low", "velocity_threshold",
 )
 
 
