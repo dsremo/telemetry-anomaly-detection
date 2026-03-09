@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from sentinel.core.models import Severity
-from sentinel.detection.changepoint import ChangePointDetector
+from dsremo.core.models import Severity
+from dsremo.detection.changepoint import ChangePointDetector
 
 
 class TestChangePointDetector:

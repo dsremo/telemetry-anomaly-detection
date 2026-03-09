@@ -128,13 +128,13 @@ class TestXTCEParser:
     """Unit tests for sentinel.ingest.xtce_parser.parse_xtce()."""
 
     def _parse(self, xml: bytes):
-        from sentinel.ingest.xtce_parser import parse_xtce
+        from dsremo.ingest.xtce_parser import parse_xtce
         return parse_xtce(xml)
 
     # --- Basic correctness ---
 
     def test_returns_list_of_parameter_defs(self):
-        from sentinel.ingest.xtce_parser import ParameterDef
+        from dsremo.ingest.xtce_parser import ParameterDef
         result = self._parse(_MINIMAL_XTCE)
         assert isinstance(result, list)
         assert all(isinstance(p, ParameterDef) for p in result)
@@ -292,13 +292,13 @@ class TestXTCEParser:
     def test_accepts_path_input(self, tmp_path):
         p = tmp_path / "mission.xml"
         p.write_bytes(_MINIMAL_XTCE)
-        from sentinel.ingest.xtce_parser import parse_xtce
+        from dsremo.ingest.xtce_parser import parse_xtce
         result = parse_xtce(p)
         assert len(result) == 1
 
     def test_accepts_io_bytes_input(self):
         import io
-        from sentinel.ingest.xtce_parser import parse_xtce
+        from dsremo.ingest.xtce_parser import parse_xtce
         result = parse_xtce(io.BytesIO(_MINIMAL_XTCE))
         assert len(result) == 1
 
@@ -309,7 +309,7 @@ class TestXTCEParser:
 
 @pytest.fixture(scope="module")
 def demo_client():
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -429,7 +429,7 @@ class TestMemoryStoreChannels:
     @pytest.mark.asyncio
     async def test_upsert_satellite_seen_stores_satellite(self):
         from datetime import datetime, timezone
-        from sentinel.db.memory_store import (
+        from dsremo.db.memory_store import (
             _satellites_seen, upsert_satellite_seen
         )
         ts = datetime.now(timezone.utc)
@@ -438,7 +438,7 @@ class TestMemoryStoreChannels:
 
     @pytest.mark.asyncio
     async def test_upsert_channel_seen_stores_channel(self):
-        from sentinel.db.memory_store import (
+        from dsremo.db.memory_store import (
             _channels_seen, upsert_channel_seen
         )
         await upsert_channel_seen("MEM-SAT", "volt", "eps", "V")
@@ -446,7 +446,7 @@ class TestMemoryStoreChannels:
 
     @pytest.mark.asyncio
     async def test_upsert_channel_seen_updates_existing(self):
-        from sentinel.db.memory_store import (
+        from dsremo.db.memory_store import (
             _channels_seen, upsert_channel_seen
         )
         await upsert_channel_seen("UPD-SAT", "temp", "eps", "degC")
@@ -458,7 +458,7 @@ class TestMemoryStoreChannels:
 
     @pytest.mark.asyncio
     async def test_get_channel_stats_returns_upserted_channels(self):
-        from sentinel.db.memory_store import get_channel_stats, upsert_channel_seen
+        from dsremo.db.memory_store import get_channel_stats, upsert_channel_seen
         await upsert_channel_seen("STATS-SAT", "gyro_x", "adcs", "deg/s")
         rows = await get_channel_stats(satellite_id="STATS-SAT")
         names = [r["parameter"] for r in rows]
@@ -466,7 +466,7 @@ class TestMemoryStoreChannels:
 
     @pytest.mark.asyncio
     async def test_get_channel_stats_filters_by_satellite(self):
-        from sentinel.db.memory_store import get_channel_stats, upsert_channel_seen
+        from dsremo.db.memory_store import get_channel_stats, upsert_channel_seen
         await upsert_channel_seen("FILTER-A", "p1", "s1", "")
         await upsert_channel_seen("FILTER-B", "p2", "s2", "")
         rows_a = await get_channel_stats(satellite_id="FILTER-A")

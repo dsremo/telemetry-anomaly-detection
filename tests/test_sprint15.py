@@ -61,21 +61,21 @@ class TestDiscordDetector:
     # ── Construction ─────────────────────────────────────────────────────────
 
     def test_construction_defaults(self) -> None:
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector()
         assert det.m == 20
         assert det.threshold_sigma == 3.0
         assert det.min_window_factor == 4
 
     def test_construction_custom_params(self) -> None:
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=200, threshold_sigma=2.5)
         assert det.m == 10
         assert det.threshold_sigma == 2.5
 
     def test_window_enforced_min(self) -> None:
         """window must be >= min_window_factor × m + 1."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=20, window=10, min_window_factor=4)
         # window=10 < 4×20+1=81 → enforced to 81
         assert det.window >= 4 * det.m + 1
@@ -83,8 +83,8 @@ class TestDiscordDetector:
     # ── Warm-up / guard returns ───────────────────────────────────────────────
 
     def test_returns_nominal_when_not_calibrated(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100)
         cal = _make_calibration(is_calibrated=False)
         result = det.detect(_periodic_residuals(200), cal)
@@ -93,8 +93,8 @@ class TestDiscordDetector:
         assert result.details.get("reason") == "warming_up"
 
     def test_returns_nominal_when_insufficient_data(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=20, window=300, min_window_factor=4)
         cal = _make_calibration()
         # Need 4×20+1=81 samples; provide only 10
@@ -104,8 +104,8 @@ class TestDiscordDetector:
         assert result.details.get("reason") == "insufficient_data"
 
     def test_returns_nominal_when_constant_channel(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100)
         cal = _make_calibration()
         # All-constant signal → std=0 → constant channel guard
@@ -118,7 +118,7 @@ class TestDiscordDetector:
 
     def test_periodic_signal_no_alarm(self) -> None:
         """Periodic signal with many repeating windows → low discord → no alarm."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=20, window=200, threshold_sigma=3.0)
         cal = _make_calibration(ref_std=1.0)
         residuals = _periodic_residuals(n=200, period=30.0)
@@ -128,7 +128,7 @@ class TestDiscordDetector:
 
     def test_flat_signal_near_zero_score(self) -> None:
         """Truly flat signal triggers constant_channel guard (score=0)."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100)
         cal = _make_calibration(ref_std=1.0)
         result = det.detect(np.zeros(100), cal)
@@ -139,7 +139,7 @@ class TestDiscordDetector:
 
     def test_discord_injection_raises_score(self) -> None:
         """Injecting a flat constant block into a periodic signal raises discord score."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=20, window=280, threshold_sigma=3.0)
         cal = _make_calibration(ref_std=1.0)
         normal = _periodic_residuals(n=280, period=30.0)
@@ -152,7 +152,7 @@ class TestDiscordDetector:
 
     def test_discord_injection_can_trigger_anomaly(self) -> None:
         """A steep ramp injected at end of periodic signal should trigger alarm."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=15, window=200, threshold_sigma=1.5)
         cal = _make_calibration(ref_std=1.0)
         normal = _periodic_residuals(n=200, period=20.0, amp=1.0)
@@ -166,7 +166,7 @@ class TestDiscordDetector:
     # ── Score clamping ────────────────────────────────────────────────────────
 
     def test_score_clamped_to_unit_interval(self) -> None:
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100, threshold_sigma=3.0)
         cal = _make_calibration(ref_std=1.0)
         for residuals in [
@@ -179,8 +179,8 @@ class TestDiscordDetector:
     # ── Severity classification ───────────────────────────────────────────────
 
     def test_severity_watch_when_anomaly_with_low_z(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100, threshold_sigma=3.0)
         cal = _make_calibration(ref_std=1.0)
         normal = _periodic_residuals(n=100, period=15.0)
@@ -191,8 +191,8 @@ class TestDiscordDetector:
             assert result.severity in (Severity.WATCH, Severity.WARNING, Severity.CRITICAL)
 
     def test_severity_critical_when_extreme_discord(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.discord_detector import DiscordDetector
         # Very low threshold → extreme discord ratio → CRITICAL
         det = DiscordDetector(m=10, window=150, threshold_sigma=0.5)
         cal = _make_calibration(ref_std=1.0)
@@ -205,7 +205,7 @@ class TestDiscordDetector:
     # ── Detector name ─────────────────────────────────────────────────────────
 
     def test_detector_name(self) -> None:
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100)
         cal = _make_calibration()
         result = det.detect(_periodic_residuals(200), cal)
@@ -214,7 +214,7 @@ class TestDiscordDetector:
     # ── Details dict ─────────────────────────────────────────────────────────
 
     def test_details_keys_present_on_detection(self) -> None:
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100, threshold_sigma=3.0)
         cal = _make_calibration(ref_std=1.0)
         result = det.detect(_periodic_residuals(200), cal)
@@ -230,7 +230,7 @@ class TestDiscordDetector:
 
     def test_discord_threshold_override(self) -> None:
         """Providing discord_threshold=None should use detector default; non-None overrides."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         det = DiscordDetector(m=10, window=100, threshold_sigma=100.0)
         cal = _make_calibration(ref_std=1.0)
         normal = _periodic_residuals(n=150, period=15.0)
@@ -245,7 +245,7 @@ class TestDiscordDetector:
 
     def test_window_limits_history(self) -> None:
         """Only the last `window` residuals should be used."""
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         # Small window so only last 82 of 500 residuals used
         det = DiscordDetector(m=10, window=82, threshold_sigma=3.0)
         cal = _make_calibration(ref_std=1.0)
@@ -267,15 +267,15 @@ class TestEnsembleWith10Detectors:
     """Verify that the 10-detector ensemble is correctly wired."""
 
     def test_weights_sum_to_one(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, f"Sum={sum(WEIGHTS.values())}"
 
     def test_matrix_profile_key_in_weights(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert "matrix_profile" in WEIGHTS
 
     def test_ten_detector_keys_in_weights(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         expected = {
             "cusum", "ewma", "statistical", "changepoint",
             "isolation_forest", "variance", "lstm", "tcn",
@@ -285,8 +285,8 @@ class TestEnsembleWith10Detectors:
 
     def test_build_explanation_handles_matrix_profile(self) -> None:
         """_build_explanation must not raise for 'matrix_profile' detector name."""
-        from sentinel.detection.detector import _build_explanation
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _build_explanation
+        from dsremo.core.models import DetectorResult, Severity
 
         discord_result = DetectorResult(
             detector_name="matrix_profile",
@@ -314,12 +314,12 @@ class TestEnsembleWith10Detectors:
         assert "Unusual shape" in explanation or "matrix_profile" in explanation.lower() or "discord" in explanation.lower()
 
     def test_matrix_profile_weight_positive(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert WEIGHTS["matrix_profile"] > 0.0
 
     def test_init_detectors_reads_matrix_profile_config(self) -> None:
         """init_detectors must read matrix_profile config keys without error."""
-        from sentinel.detection.detector import init_detectors
+        from dsremo.detection.detector import init_detectors
         settings = MagicMock()
         settings.get.side_effect = lambda key, default=None: {
             "detection": {
@@ -334,8 +334,8 @@ class TestEnsembleWith10Detectors:
 
     def test_discord_alone_above_consensus_contributes_to_ensemble(self) -> None:
         """If discord fires with high score, ensemble confidence should reflect it."""
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
 
         def _nominal(name: str) -> DetectorResult:
             return DetectorResult(
@@ -363,8 +363,8 @@ class TestEnsembleWith10Detectors:
 
     def test_discord_plus_cusum_higher_confidence(self) -> None:
         """discord + cusum together should produce higher confidence than discord alone."""
-        from sentinel.detection.detector import _ensemble_vote, WEIGHTS
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote, WEIGHTS
+        from dsremo.core.models import DetectorResult, Severity
 
         def _nominal(name: str) -> DetectorResult:
             return DetectorResult(
@@ -404,14 +404,14 @@ class TestDiscordIntegration:
 
     def test_discord_detector_singleton_exists(self) -> None:
         """_discord_detector singleton should be a DiscordDetector."""
-        from sentinel.detection import detector as det_mod
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection import detector as det_mod
+        from dsremo.detection.discord_detector import DiscordDetector
         assert hasattr(det_mod, "_discord_detector")
         assert isinstance(det_mod._discord_detector, DiscordDetector)
 
     def test_discord_globals_exist(self) -> None:
         """Config globals for discord should be present in detector module."""
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
         assert hasattr(det_mod, "_discord_m")
         assert hasattr(det_mod, "_discord_window")
         assert hasattr(det_mod, "_discord_threshold_sigma")
@@ -424,25 +424,25 @@ class TestDiscordIntegration:
             str(_ROOT / "src" / "sentinel" / "detection" / "detector.py"),
         )
         # Just confirm import doesn't crash
-        from sentinel.detection.discord_detector import DiscordDetector
+        from dsremo.detection.discord_detector import DiscordDetector
         assert DiscordDetector is not None
 
     def test_discord_models_not_in_dict(self) -> None:
         """DiscordDetector is a singleton (not per-channel dict like lstm/tcn)."""
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
         # There is no _discord_models dict — it's a stateless singleton
         assert not hasattr(det_mod, "_discord_models")
 
     def test_discord_threshold_in_effective_thresholds(self) -> None:
         """get_effective_thresholds must include 'discord_threshold' key."""
-        from sentinel.detection.detector import get_effective_thresholds
+        from dsremo.detection.detector import get_effective_thresholds
         eff = get_effective_thresholds("test_sat", "test_param")
         assert "discord_threshold" in eff
 
     def test_discord_detect_returns_detector_result(self) -> None:
         """Direct detect() call on the singleton returns a DetectorResult."""
-        from sentinel.detection import detector as det_mod
-        from sentinel.core.models import DetectorResult
+        from dsremo.detection import detector as det_mod
+        from dsremo.core.models import DetectorResult
         cal = _make_calibration(ref_std=1.0, is_calibrated=True)
         residuals = _periodic_residuals(200)
         result = det_mod._discord_detector.detect(residuals, cal)
@@ -452,6 +452,6 @@ class TestDiscordIntegration:
     def test_analyze_channel_history_includes_discord_in_all_results(self) -> None:
         """Source inspection: analyze_channel_history should reference matrix_profile."""
         import inspect
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
         src = inspect.getsource(det_mod.analyze_channel_history)
         assert "matrix_profile" in src or "discord_result" in src

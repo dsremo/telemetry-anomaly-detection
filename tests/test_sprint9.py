@@ -34,7 +34,7 @@ def _utc(offset_s: float) -> datetime:
 
 def _make_calibration(ref_std: float = 1.0, state: str = "calibrated") -> Any:
     """Build a lightweight CalibrationState-like object for testing."""
-    from sentinel.detection.calibration import CalibrationState
+    from dsremo.detection.calibration import CalibrationState
     cal = CalibrationState()
     cal.state = state
     cal.ref_mean = 0.0
@@ -50,34 +50,34 @@ def _make_calibration(ref_std: float = 1.0, state: str = "calibrated") -> Any:
 # ---------------------------------------------------------------------------
 
 class TestScoringModule:
-    """sentinel.eval.scoring — cluster_events + score + ScoringResult."""
+    """dsremo.eval.scoring — cluster_events + score + ScoringResult."""
 
     def test_cluster_events_single_cluster(self):
-        from sentinel.eval.scoring import cluster_events
+        from dsremo.eval.scoring import cluster_events
         ts = [_utc(0), _utc(60), _utc(120)]
         result = cluster_events(ts, gap_s=600)
         assert len(result) == 1
         assert len(result[0]) == 3
 
     def test_cluster_events_two_separate_clusters(self):
-        from sentinel.eval.scoring import cluster_events
+        from dsremo.eval.scoring import cluster_events
         # gap_s=300: 600s > 300s → two clusters
         ts = [_utc(0), _utc(600 + 1)]
         result = cluster_events(ts, gap_s=300)
         assert len(result) == 2
 
     def test_cluster_events_empty_list_returns_empty(self):
-        from sentinel.eval.scoring import cluster_events
+        from dsremo.eval.scoring import cluster_events
         assert cluster_events([], gap_s=600) == []
 
     def test_cluster_events_all_same_second_one_cluster(self):
-        from sentinel.eval.scoring import cluster_events
+        from dsremo.eval.scoring import cluster_events
         ts = [_utc(0), _utc(0), _utc(0)]
         result = cluster_events(ts, gap_s=600)
         assert len(result) == 1
 
     def test_score_perfect_detection(self):
-        from sentinel.eval.scoring import score
+        from dsremo.eval.scoring import score
         detected = [_utc(300)]   # inside GT window
         gt = [(_utc(0), _utc(600))]
         r = score(detected, gt, window_s=60)
@@ -87,7 +87,7 @@ class TestScoringModule:
         assert r.f1 == pytest.approx(1.0)
 
     def test_score_all_false_positives(self):
-        from sentinel.eval.scoring import score
+        from dsremo.eval.scoring import score
         detected = [_utc(10_000)]   # far from any GT
         gt = [(_utc(0), _utc(600))]
         r = score(detected, gt, window_s=60)
@@ -95,21 +95,21 @@ class TestScoringModule:
         assert r.precision == 0.0 and r.recall == 0.0 and r.f1 == 0.0
 
     def test_score_all_false_negatives(self):
-        from sentinel.eval.scoring import score
+        from dsremo.eval.scoring import score
         gt = [(_utc(0), _utc(600))]
         r = score([], gt, window_s=60)
         assert r.tp == 0 and r.fp == 0 and r.fn == 1
         assert r.recall == 0.0
 
     def test_score_partial_tp_fp_fn(self):
-        from sentinel.eval.scoring import score
+        from dsremo.eval.scoring import score
         gt = [(_utc(0), _utc(600)), (_utc(3600), _utc(4200))]
         detected = [_utc(300), _utc(8000)]   # 1 TP + 1 FP; 1 FN
         r = score(detected, gt, window_s=60)
         assert r.tp == 1 and r.fp == 1 and r.fn == 1
 
     def test_score_window_tolerance_just_inside(self):
-        from sentinel.eval.scoring import score
+        from dsremo.eval.scoring import score
         # Detection is exactly window_s seconds before GT start → should match
         gt = [(_utc(300), _utc(600))]
         detected = [_utc(300 - 60)]   # 60s before start, window_s=60
@@ -117,7 +117,7 @@ class TestScoringModule:
         assert r.tp == 1
 
     def test_scoring_result_is_frozen_dataclass(self):
-        from sentinel.eval.scoring import ScoringResult
+        from dsremo.eval.scoring import ScoringResult
         r = ScoringResult(tp=1, fp=0, fn=0, precision=1.0, recall=1.0, f1=1.0,
                           event_count=1, detected_count=1)
         with pytest.raises((AttributeError, TypeError)):
@@ -136,7 +136,7 @@ class TestVarianceDetector:
         return rng.normal(0, std, n).astype(np.float64)
 
     def test_nominal_signal_below_threshold(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=2.5)
         cal = _make_calibration(ref_std=1.0)
         residuals = self._make_residuals(std=0.9)   # ratio ≈ 0.9 < 2.5
@@ -145,7 +145,7 @@ class TestVarianceDetector:
         assert result.detector_name == "variance"
 
     def test_variance_spike_above_threshold(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=2.5, window=30)
         cal = _make_calibration(ref_std=1.0)
         # Use deterministic alternating ±4 signal: std = 4.0 exactly, ratio=4.0 > 2.5
@@ -154,8 +154,8 @@ class TestVarianceDetector:
         assert result.is_anomaly
 
     def test_severity_watch_at_threshold(self):
-        from sentinel.detection.variance_detector import VarianceDetector
-        from sentinel.core.models import Severity
+        from dsremo.detection.variance_detector import VarianceDetector
+        from dsremo.core.models import Severity
         vd = VarianceDetector(variance_z_threshold=2.5, window=30)
         cal = _make_calibration(ref_std=1.0)
         # Construct residuals so rolling_std ≈ 2.7 (just above threshold, below 2×)
@@ -166,7 +166,7 @@ class TestVarianceDetector:
             assert result.severity in (Severity.WATCH, Severity.WARNING)
 
     def test_returns_nominal_if_not_calibrated(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector()
         cal = _make_calibration(ref_std=1.0, state="warming_up")
         result = vd.detect(np.ones(50), cal)
@@ -174,7 +174,7 @@ class TestVarianceDetector:
         assert result.details["reason"] == "warming_up"
 
     def test_returns_nominal_if_insufficient_residuals(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(window=30)
         cal = _make_calibration(ref_std=1.0)
         result = vd.detect(np.ones(5), cal)   # only 5, min = 15
@@ -182,14 +182,14 @@ class TestVarianceDetector:
         assert result.details["reason"] == "insufficient_data"
 
     def test_near_zero_ref_std_guard(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector()
         cal = _make_calibration(ref_std=1e-12)
         result = vd.detect(np.ones(50), cal)
         assert not result.is_anomaly   # constant channel guard
 
     def test_per_channel_threshold_override(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=2.5, window=30)
         cal = _make_calibration(ref_std=1.0)
         residuals = self._make_residuals(std=2.7)
@@ -200,7 +200,7 @@ class TestVarianceDetector:
 
     def test_cats_synthetic_sigma_doubles_detected(self):
         """CATS-type: anomaly segment has 2× the normal σ."""
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=1.8, window=30)
         cal = _make_calibration(ref_std=137.0)
         # Anomaly: rolling_std ≈ 311
@@ -211,7 +211,7 @@ class TestVarianceDetector:
 
     def test_cats_synthetic_sigma_stable_not_detected(self):
         """Normal CATS segment: rolling_std ≈ ref_std → no alarm."""
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=2.5, window=30)
         cal = _make_calibration(ref_std=137.0)
         rng = np.random.default_rng(2)
@@ -220,7 +220,7 @@ class TestVarianceDetector:
         assert not result.is_anomaly
 
     def test_score_proportional_to_ratio(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=2.5, window=30)
         cal_low = _make_calibration(ref_std=1.0)
         cal_high = _make_calibration(ref_std=1.0)
@@ -234,7 +234,7 @@ class TestVarianceDetector:
             assert r_high.score >= r_low.score
 
     def test_window_uses_only_last_n_residuals(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector(variance_z_threshold=2.5, window=10)
         cal = _make_calibration(ref_std=1.0)
         # First 90 residuals are normal (std≈1), last 10 are high-variance (std≈5)
@@ -244,7 +244,7 @@ class TestVarianceDetector:
         assert result.is_anomaly
 
     def test_detector_name_is_variance(self):
-        from sentinel.detection.variance_detector import VarianceDetector
+        from dsremo.detection.variance_detector import VarianceDetector
         vd = VarianceDetector()
         cal = _make_calibration(ref_std=1.0)
         result = vd.detect(np.ones(50), cal)
@@ -259,27 +259,27 @@ class TestSTLFFTPeriod:
     """STLDecomposer._fft_period + _estimate_period."""
 
     def test_pure_sine_fft_detects_correct_period(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         period = 30
         x = np.sin(2 * np.pi * np.arange(300) / period).astype(np.float64)
         detected = STLDecomposer._fft_period(x)
         assert abs(detected - period) <= 2  # allow ±2 sample rounding
 
     def test_broadband_noise_returns_zero(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         rng = np.random.default_rng(99)
         noise = rng.normal(0, 1, 300).astype(np.float64)
         detected = STLDecomposer._fft_period(noise)
         assert detected == 0
 
     def test_period_smaller_than_min_period_returns_zero(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         x = np.sin(2 * np.pi * np.arange(100) / 2.0)  # period=2 < min_period=4
         detected = STLDecomposer._fft_period(x, min_period=4)
         assert detected == 0
 
     def test_period_larger_than_half_window_returns_zero(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 100
         # Period = n (= n // 2 * 2), but FFT period must be <= n // 2
         x = np.sin(2 * np.pi * np.arange(n) / n)
@@ -287,7 +287,7 @@ class TestSTLFFTPeriod:
         assert detected == 0
 
     def test_detrending_allows_sine_plus_linear_ramp(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         period = 30
         n = 300
         t = np.arange(n, dtype=np.float64)
@@ -297,7 +297,7 @@ class TestSTLFFTPeriod:
 
     def test_cats_synthetic_90s_period_at_1hz_600_window(self):
         """CATS root cause: 90s period at 1Hz, window=600 → FFT finds period=90."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         period = 90
         n = 600
         t = np.arange(n, dtype=np.float64)
@@ -307,7 +307,7 @@ class TestSTLFFTPeriod:
 
     def test_estimate_period_fallback_to_orbital_when_fft_zero(self):
         """If FFT finds nothing (pure DC), fallback uses orbital_period_s hint."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         decomp = STLDecomposer(orbital_period_s=600)
         # DC signal → FFT returns 0, fallback: 600s / 60s = 10 samples
         dc_values = np.ones(200, dtype=np.float64)
@@ -317,7 +317,7 @@ class TestSTLFFTPeriod:
         assert period == 0 or period == 10
 
     def test_estimate_period_returns_zero_when_both_fail(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         decomp = STLDecomposer(orbital_period_s=5400)
         # 1Hz data: orbital_period_s=5400 samples > n//2=300 → returns 0
         noise = np.random.default_rng(77).normal(0, 1, 600).astype(np.float64)
@@ -328,7 +328,7 @@ class TestSTLFFTPeriod:
 
     def test_stl_used_when_fft_finds_valid_period(self):
         """When FFT detects a period, decomp.method should be 'stl'."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         period = 30
         n = 300
         t = np.arange(n, dtype=np.float64)
@@ -342,7 +342,7 @@ class TestSTLFFTPeriod:
 
     def test_decompose_api_unchanged(self):
         """decompose() public API unchanged — returns DecompositionResult."""
-        from sentinel.detection.stl_decomposer import STLDecomposer, DecompositionResult
+        from dsremo.detection.stl_decomposer import STLDecomposer, DecompositionResult
         decomp = STLDecomposer()
         x = np.random.default_rng(5).normal(0, 1, 50).astype(np.float64)
         result = decomp.decompose("key:param", x)
@@ -364,7 +364,7 @@ class TestCooldownUtils:
         return p
 
     def test_detect_1hz_data(self, tmp_path: Path):
-        from sentinel.ingest.utils import detect_data_frequency
+        from dsremo.ingest.utils import detect_data_frequency
         # 10 rows at 1-second intervals
         rows = [f"2024-01-01T00:00:{i:02d}Z,1.0" for i in range(10)]
         p = self._write_csv(tmp_path, rows)
@@ -372,14 +372,14 @@ class TestCooldownUtils:
         assert abs(interval - 1.0) < 0.1
 
     def test_detect_5min_data(self, tmp_path: Path):
-        from sentinel.ingest.utils import detect_data_frequency
+        from dsremo.ingest.utils import detect_data_frequency
         rows = [f"2024-01-01T0{i//60}:{i%60:02d}:00Z,1.0" for i in range(0, 60, 5)]
         p = self._write_csv(tmp_path, rows)
         interval = detect_data_frequency(p)
         assert abs(interval - 300.0) < 30.0
 
     def test_detect_semicolon_separator(self, tmp_path: Path):
-        from sentinel.ingest.utils import detect_data_frequency
+        from dsremo.ingest.utils import detect_data_frequency
         rows = [f"2024-01-01T00:00:{i:02d}Z;1.0" for i in range(5)]
         p = tmp_path / "test.csv"
         p.write_text("timestamp;val\n" + "\n".join(rows))
@@ -387,30 +387,30 @@ class TestCooldownUtils:
         assert abs(interval - 1.0) < 0.5
 
     def test_detect_fewer_than_2_rows_returns_fallback(self, tmp_path: Path):
-        from sentinel.ingest.utils import detect_data_frequency
+        from dsremo.ingest.utils import detect_data_frequency
         p = self._write_csv(tmp_path, ["2024-01-01T00:00:00Z,1.0"])
         interval = detect_data_frequency(p)
         assert interval == pytest.approx(3600.0)
 
     def test_adaptive_cooldown_1s_data(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         result = adaptive_cooldown_hours(1.0)
         # max(300, 500×1) = 500s → 500/3600 ≈ 0.139h
         assert result == pytest.approx(500.0 / 3600.0, rel=1e-3)
 
     def test_adaptive_cooldown_5min_data(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         result = adaptive_cooldown_hours(300.0)
         # max(300, 500×300=150000) = 150000s = 41.67h (not capped — cap is 72h=259200s)
         assert result == pytest.approx(150000.0 / 3600.0, rel=1e-3)
 
     def test_adaptive_cooldown_1h_data_capped(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         result = adaptive_cooldown_hours(3600.0)
         assert result == pytest.approx(72.0)
 
     def test_adaptive_cooldown_very_short_interval_floors_at_5min(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         result = adaptive_cooldown_hours(0.1)
         # max(300, 500×0.1=50) = 300s → 300/3600 ≈ 0.0833h
         assert result == pytest.approx(300.0 / 3600.0, rel=1e-3)
@@ -424,24 +424,24 @@ class TestEnsembleWithVariance:
     """6-detector ensemble: WEIGHTS, variance integration, explanation."""
 
     def test_weights_sum_to_one(self):
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9
 
     def test_variance_key_present_in_weights(self):
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert "variance" in WEIGHTS
         assert WEIGHTS["variance"] > 0
 
     def test_six_detectors_in_results_list(self):
         """Ensemble now has 7 detectors (lstm added in Sprint 11)."""
         # Verify by checking WEIGHTS has at least 6 keys (7 after Sprint 11)
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert len(WEIGHTS) >= 6
 
     def test_variance_alone_triggers_ensemble(self):
         """_ensemble_vote with only variance triggered → is_anomaly=True."""
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
         nominal = lambda name: DetectorResult(  # noqa: E731
             detector_name=name, is_anomaly=False, score=0.0,
             severity=Severity.NOMINAL, details={},
@@ -460,8 +460,8 @@ class TestEnsembleWithVariance:
 
     def test_variance_plus_cusum_higher_confidence(self):
         """Two detectors → higher confidence than one."""
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
         nominal = lambda name: DetectorResult(  # noqa: E731
             detector_name=name, is_anomaly=False, score=0.0,
             severity=Severity.NOMINAL, details={},
@@ -480,8 +480,8 @@ class TestEnsembleWithVariance:
 
     def test_agreement_factor_uses_six_detectors(self):
         """Agreement factor: 1/6 triggered should give < 1/5 triggered."""
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
         nominal = lambda name: DetectorResult(  # noqa: E731
             detector_name=name, is_anomaly=False, score=0.0,
             severity=Severity.NOMINAL, details={},
@@ -499,9 +499,9 @@ class TestEnsembleWithVariance:
 
     def test_build_explanation_handles_variance_case(self):
         """_build_explanation should not crash on 'variance' detector."""
-        from sentinel.detection.detector import _build_explanation
-        from sentinel.core.models import DetectorResult, Severity
-        from sentinel.features.engine import FeatureVector
+        from dsremo.detection.detector import _build_explanation
+        from dsremo.core.models import DetectorResult, Severity
+        from dsremo.features.engine import FeatureVector
 
         features = FeatureVector(
             parameter="ch1", timestamp_epoch=0.0, raw_value=1.0,
@@ -522,7 +522,7 @@ class TestEnsembleWithVariance:
 
     def test_init_detectors_sets_variance_threshold(self):
         """init_detectors() should accept variance_z_threshold from config."""
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
         # Build a minimal settings mock
         settings = {
             "detection": {"variance_z_threshold": 3.0, "variance_window": 20},
@@ -554,7 +554,7 @@ def demo_client():
     - lifespan replaces routes_channels.queries with memory_store (no real DB)
     """
     from fastapi.testclient import TestClient
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -564,16 +564,16 @@ class TestVarianceChannelConfig:
     """Per-channel variance_z_threshold: DB stub + API routes."""
 
     def test_variance_z_threshold_in_override_fields(self):
-        from sentinel.api.routes_channels import _OVERRIDE_FIELDS
+        from dsremo.api.routes_channels import _OVERRIDE_FIELDS
         assert "variance_z_threshold" in _OVERRIDE_FIELDS
 
     def test_channel_config_in_has_variance_field(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         fields = ChannelConfigIn.model_fields
         assert "variance_z_threshold" in fields
 
     def test_channel_config_in_validates_gt_zero(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         with pytest.raises(Exception):
             ChannelConfigIn(variance_z_threshold=-1.0)  # must be > 0
 
@@ -607,7 +607,7 @@ class TestVarianceChannelConfig:
         assert resp.status_code == 200
 
     def test_effective_thresholds_include_variance_z_threshold(self):
-        from sentinel.detection.detector import get_effective_thresholds
+        from dsremo.detection.detector import get_effective_thresholds
         eff = get_effective_thresholds("ANY-SAT", "any_param")
         assert "variance_z_threshold" in eff
         assert eff["variance_z_threshold"] > 0
@@ -615,7 +615,7 @@ class TestVarianceChannelConfig:
     def test_upsert_channel_config_stores_variance_z_threshold(self):
         """Memory store stub correctly stores variance_z_threshold."""
         import asyncio
-        from sentinel.db import memory_store as ms
+        from dsremo.db import memory_store as ms
         async def run():
             result = await ms.upsert_channel_config(
                 "MYSAT", "ch_test",
@@ -651,7 +651,7 @@ class TestVarianceChannelConfig:
     def test_load_all_channel_configs_includes_variance(self):
         """load_all_channel_configs in memory_store includes variance_z_threshold."""
         import asyncio
-        from sentinel.db import memory_store as ms
+        from dsremo.db import memory_store as ms
         async def run():
             await ms.upsert_channel_config(
                 "LOADTEST", "ch1",
@@ -671,11 +671,11 @@ class TestAutoCoooldownDefault:
     """analyze_csv.py auto-cooldown is now DEFAULT (not opt-in)."""
 
     def test_detect_data_frequency_importable_from_utils(self):
-        from sentinel.ingest.utils import detect_data_frequency
+        from dsremo.ingest.utils import detect_data_frequency
         assert callable(detect_data_frequency)
 
     def test_adaptive_cooldown_hours_importable_from_utils(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         assert callable(adaptive_cooldown_hours)
 
     def test_analyze_csv_imports_from_utils_not_local(self):
@@ -693,14 +693,14 @@ class TestAutoCoooldownDefault:
             "analyze_csv.py still has local _adaptive_cooldown — should import from utils"
 
     def test_adaptive_cooldown_hours_1hz_returns_8_min(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         result = adaptive_cooldown_hours(1.0)
         # 500s / 3600 ≈ 0.139h ≈ 8.3 min
         assert 0.13 < result < 0.15
 
     def test_explicit_cooldown_hours_disables_auto_detect(self, tmp_path: Path):
         """When cooldown_hours is provided, auto-detect must be skipped."""
-        from sentinel.ingest.utils import adaptive_cooldown_hours, detect_data_frequency
+        from dsremo.ingest.utils import adaptive_cooldown_hours, detect_data_frequency
         # The logic in analyze_csv.py: if eff_cooldown is None → auto-detect
         eff_cooldown = 5.0  # explicit
         if eff_cooldown is None:

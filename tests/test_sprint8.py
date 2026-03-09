@@ -53,7 +53,7 @@ def cluster_events(timestamps: list[datetime], gap_s: float) -> list[datetime]:
     Sprint 9: delegates to sentinel.eval.scoring.cluster_events and returns
     the first timestamp of each cluster (for backwards-compat with these tests).
     """
-    from sentinel.eval.scoring import cluster_events as _ce
+    from dsremo.eval.scoring import cluster_events as _ce
     clusters = _ce(timestamps, gap_s=gap_s)
     return [c[0] for c in clusters]
 

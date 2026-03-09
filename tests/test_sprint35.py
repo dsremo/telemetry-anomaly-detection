@@ -22,7 +22,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from sentinel.ingest.utils import (
+from dsremo.ingest.utils import (
     ensure_utc_series,
     prepare_series,
     validated_resample,
@@ -139,14 +139,14 @@ class TestCSVConnectorFixedSync:
 
     def test_empty_satellite_id_rejected_at_init(self, tmp_path):
         """Empty satellite_id raises ValueError at construction time, not later."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = tmp_path / "x.csv"
         with pytest.raises(ValueError, match="satellite_id"):
             CSVConnector(f, "")
 
     def test_whitespace_satellite_id_rejected(self, tmp_path):
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = tmp_path / "x.csv"
         with pytest.raises(ValueError, match="satellite_id"):
@@ -154,7 +154,7 @@ class TestCSVConnectorFixedSync:
 
     def test_file_not_found_raises_clear_error(self, tmp_path):
         """Missing file → FileNotFoundError with a human-readable message."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         connector = CSVConnector(tmp_path / "missing.csv", "SAT-1")
         with pytest.raises(FileNotFoundError, match="missing.csv"):
@@ -162,7 +162,7 @@ class TestCSVConnectorFixedSync:
 
     def test_missing_timestamp_col_raises_clear_error(self, tmp_path):
         """Wrong --timestamp-col → KeyError with hint about the column name."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = _make_csv(tmp_path, "timestamp,voltage\n2024-01-01T00:00:00Z,3.3")
         connector = CSVConnector(f, "SAT-1", timestamp_col="time")  # wrong col
@@ -171,7 +171,7 @@ class TestCSVConnectorFixedSync:
 
     def test_malformed_csv_raises_clear_error(self, tmp_path):
         """A CSV that pandas can't parse → ValueError (not a bare ParserError)."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = tmp_path / "bad.csv"
         f.write_bytes(b"\x00\x01\x02\x03\x04")  # binary garbage
@@ -181,7 +181,7 @@ class TestCSVConnectorFixedSync:
 
     def test_bytesio_source_name_includes_satellite(self):
         """source_name for IO source should mention the satellite_id."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         connector = CSVConnector(io.BytesIO(b""), "MYSAT-1")
         assert "MYSAT-1" in connector.source_name
@@ -197,20 +197,20 @@ class TestCSVConnectorFixedAsync:
 
     async def test_accepts_bytesio_source(self):
         """CSVConnector must accept io.BytesIO (enables API upload without temp file)."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         raw = _csv_bytes("""
             timestamp,voltage
             2024-01-01T00:00:00Z,3.3
         """)
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count",
+            patch("dsremo.ingest.csv_connector.check_channel_row_count",
                   new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel",
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel",
                   new_callable=AsyncMock) as mock_insert,
-            patch("sentinel.ingest.csv_connector.queries.upsert_satellite_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_satellite_seen",
                   new_callable=AsyncMock),
-            patch("sentinel.ingest.csv_connector.queries.upsert_channel_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_channel_seen",
                   new_callable=AsyncMock),
         ):
             mock_check.return_value = 0
@@ -221,7 +221,7 @@ class TestCSVConnectorFixedAsync:
         assert "voltage" in totals
 
     async def test_resample_zero_rejected(self, tmp_path):
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = _make_csv(tmp_path, "timestamp,v\n2024-01-01T00:00:00Z,1.0")
         with pytest.raises(ValueError, match="resample_minutes"):
@@ -229,20 +229,20 @@ class TestCSVConnectorFixedAsync:
 
     async def test_metadata_upserts_called(self, tmp_path):
         """upsert_satellite_seen + upsert_channel_seen must be called per channel."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = _make_csv(tmp_path, """
             timestamp,voltage,current
             2024-01-01T00:00:00Z,3.3,1.2
         """)
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count",
+            patch("dsremo.ingest.csv_connector.check_channel_row_count",
                   new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel",
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel",
                   new_callable=AsyncMock) as mock_insert,
-            patch("sentinel.ingest.csv_connector.queries.upsert_satellite_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_satellite_seen",
                   new_callable=AsyncMock) as mock_sat,
-            patch("sentinel.ingest.csv_connector.queries.upsert_channel_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_channel_seen",
                   new_callable=AsyncMock) as mock_ch,
         ):
             mock_check.return_value = 0
@@ -255,7 +255,7 @@ class TestCSVConnectorFixedAsync:
 
     async def test_non_numeric_column_skipped_not_inserted(self, tmp_path):
         """Non-numeric parameter columns must be silently skipped, not crash."""
-        from sentinel.ingest.csv_connector import CSVConnector
+        from dsremo.ingest.csv_connector import CSVConnector
 
         f = _make_csv(tmp_path, """
             timestamp,voltage,mode
@@ -263,13 +263,13 @@ class TestCSVConnectorFixedAsync:
             2024-01-01T00:01:00Z,3.4,SAFE
         """)
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count",
+            patch("dsremo.ingest.csv_connector.check_channel_row_count",
                   new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel",
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel",
                   new_callable=AsyncMock) as mock_insert,
-            patch("sentinel.ingest.csv_connector.queries.upsert_satellite_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_satellite_seen",
                   new_callable=AsyncMock),
-            patch("sentinel.ingest.csv_connector.queries.upsert_channel_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_channel_seen",
                   new_callable=AsyncMock),
         ):
             mock_check.return_value = 0
@@ -289,7 +289,7 @@ class TestCSVConnectorFixedAsync:
 class TestSatNOGSClassConstants:
     def test_parameters_on_class_not_instance(self):
         """PARAMETERS must be a class attribute, not a method-local variable."""
-        from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
+        from dsremo.ingest.satnogs_fetcher import SatNOGSFetcher
 
         assert hasattr(SatNOGSFetcher, "PARAMETERS")
         assert isinstance(SatNOGSFetcher.PARAMETERS, (tuple, list))
@@ -297,7 +297,7 @@ class TestSatNOGSClassConstants:
 
     def test_units_on_class_not_instance(self):
         """UNITS must be a class attribute mapping parameter → unit string."""
-        from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
+        from dsremo.ingest.satnogs_fetcher import SatNOGSFetcher
 
         assert hasattr(SatNOGSFetcher, "UNITS")
         assert isinstance(SatNOGSFetcher.UNITS, dict)
@@ -309,7 +309,7 @@ class TestSatNOGSClassConstants:
 
     def test_expected_parameters_present(self):
         """Regression: the 4 core telemetry parameters must be present."""
-        from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
+        from dsremo.ingest.satnogs_fetcher import SatNOGSFetcher
 
         expected = {"frame_length", "byte_mean", "byte_entropy", "frame_gap"}
         assert expected <= set(SatNOGSFetcher.PARAMETERS)
@@ -321,7 +321,7 @@ class TestSatNOGSClassConstants:
 
 class TestPhaseContextManager:
     def test_prints_header(self, capsys):
-        from sentinel.ingest.pipeline import phase
+        from dsremo.ingest.pipeline import phase
 
         with phase("Test Phase"):
             pass
@@ -329,7 +329,7 @@ class TestPhaseContextManager:
         assert "Test Phase" in out
 
     def test_prints_elapsed(self, capsys):
-        from sentinel.ingest.pipeline import phase
+        from dsremo.ingest.pipeline import phase
 
         with phase("Timing Test"):
             pass
@@ -338,7 +338,7 @@ class TestPhaseContextManager:
         assert "s)" in out
 
     def test_yields_control(self, capsys):
-        from sentinel.ingest.pipeline import phase
+        from dsremo.ingest.pipeline import phase
 
         executed = []
         with phase("Exec Test"):
@@ -346,7 +346,7 @@ class TestPhaseContextManager:
         assert executed == [True]
 
     def test_exception_still_prints_elapsed(self, capsys):
-        from sentinel.ingest.pipeline import phase
+        from dsremo.ingest.pipeline import phase
 
         with pytest.raises(RuntimeError):
             with phase("Error Phase"):
@@ -358,14 +358,14 @@ class TestPhaseContextManager:
 
 class TestPrintRunHeader:
     def test_outputs_title(self, capsys):
-        from sentinel.ingest.pipeline import print_run_header
+        from dsremo.ingest.pipeline import print_run_header
 
         print_run_header("My Title", Dataset="76 channels")
         out = capsys.readouterr().out
         assert "My Title" in out
 
     def test_outputs_key_value_pairs(self, capsys):
-        from sentinel.ingest.pipeline import print_run_header
+        from dsremo.ingest.pipeline import print_run_header
 
         print_run_header("Title", Satellite="ISS-25544", Resolution="5-min")
         out = capsys.readouterr().out
@@ -373,7 +373,7 @@ class TestPrintRunHeader:
         assert "5-min" in out
 
     def test_underscore_in_key_replaced_with_space(self, capsys):
-        from sentinel.ingest.pipeline import print_run_header
+        from dsremo.ingest.pipeline import print_run_header
 
         print_run_header("T", Skip_if_gte="50,000 rows")
         out = capsys.readouterr().out
@@ -386,12 +386,12 @@ class TestPrintRunHeader:
 
 class TestPayloadLimitMiddlewareUploadPath:
     def test_upload_path_in_exempt_set(self):
-        from sentinel.api.middleware import PayloadLimitMiddleware
+        from dsremo.api.middleware import PayloadLimitMiddleware
 
         assert "/api/v1/telemetry/upload" in PayloadLimitMiddleware._UPLOAD_PATHS
 
     def test_regular_paths_not_exempt(self):
-        from sentinel.api.middleware import PayloadLimitMiddleware
+        from dsremo.api.middleware import PayloadLimitMiddleware
 
         for path in ("/api/v1/telemetry", "/api/v1/anomalies", "/api/v1/health"):
             assert path not in PayloadLimitMiddleware._UPLOAD_PATHS
@@ -403,7 +403,7 @@ class TestPayloadLimitMiddlewareUploadPath:
 
 class TestCsvUploadResultSchema:
     def test_valid_construction(self):
-        from sentinel.api.schemas import CsvUploadResult
+        from dsremo.api.schemas import CsvUploadResult
 
         result = CsvUploadResult(
             satellite_id="MYSAT-1",
@@ -419,7 +419,7 @@ class TestCsvUploadResultSchema:
         assert result.total_rows_inserted == 9000
 
     def test_serialization(self):
-        from sentinel.api.schemas import CsvUploadResult
+        from dsremo.api.schemas import CsvUploadResult
 
         r = CsvUploadResult(
             satellite_id="S",
@@ -441,7 +441,7 @@ class TestCsvUploadResultSchema:
 @pytest.fixture(scope="module")
 def demo_client():
     """Demo-mode TestClient — no DB, auth always succeeds."""
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -469,7 +469,7 @@ class TestCsvUploadEndpoint:
         # CSVConnector is a local import inside the route handler, so patch
         # at its canonical module path (not sentinel.api.routes.CSVConnector).
         with patch(
-            "sentinel.ingest.csv_connector.CSVConnector",
+            "dsremo.ingest.csv_connector.CSVConnector",
             autospec=True,
         ) as MockConnector:
             instance = MockConnector.return_value
@@ -518,7 +518,7 @@ class TestCsvUploadEndpoint:
 
     def test_upload_invalid_csv_returns_422(self, demo_client):
         """CSVConnector raising ValueError/KeyError should map to 422."""
-        with patch("sentinel.ingest.csv_connector.CSVConnector") as MockConnector:
+        with patch("dsremo.ingest.csv_connector.CSVConnector") as MockConnector:
             instance = MockConnector.return_value
             instance.bulk_load_to_db = AsyncMock(
                 side_effect=ValueError("Malformed CSV: ...")

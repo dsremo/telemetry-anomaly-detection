@@ -1,4 +1,4 @@
-# Sentinel — AI Telemetry Anomaly Detection Engine
+# Dsremo — AI Telemetry Anomaly Detection Engine
 ## Product Overview
 
 ---
@@ -13,9 +13,9 @@ For early-stage operators — a single missed battery degradation can end a demo
 
 ---
 
-### What Sentinel Does
+### What Dsremo Does
 
-Sentinel is a **multi-tenant SaaS platform** that ingests your satellite telemetry and automatically detects anomalies in real time — with confidence scores, root-cause explanations, and alert routing built in.
+Dsremo is a **multi-tenant SaaS platform** that ingests your satellite telemetry and automatically detects anomalies in real time — with confidence scores, root-cause explanations, and alert routing built in.
 
 No model training required. No labeled data needed. Operational in under 30 minutes.
 
@@ -24,7 +24,7 @@ No model training required. No labeled data needed. Operational in under 30 minu
 ### How It Works
 
 ```
-Your Telemetry → Sentinel API → Feature Engine → 6-Detector Ensemble → Root Cause → Alert
+Your Telemetry → Dsremo API → Feature Engine → 6-Detector Ensemble → Root Cause → Alert
      JSON / CSV / YAMCS / InfluxDB                                      Email / Webhook / SMS
 ```
 
@@ -133,7 +133,7 @@ If you have one satellite and one engineer, here's the full onboarding flow:
 No engineering integration required for CSV. For live streaming, add two lines to your ground station script:
 
 ```bash
-curl -X POST https://your-sentinel-host/api/v1/telemetry \
+curl -X POST https://your-dsremo-host/api/v1/telemetry \
   -H "X-API-Key: stl_your_key_here" \
   -d '{"satellite_id":"SAT-1","timestamp":"...","subsystem":"eps","parameter":"battery_voltage","value":27.3}'
 ```
@@ -146,7 +146,7 @@ Detection runs automatically on every POST. No separate analysis step needed for
 
 ```bash
 # Push a telemetry reading
-curl -X POST https://your-sentinel-host/api/v1/telemetry \
+curl -X POST https://your-dsremo-host/api/v1/telemetry \
   -H "X-API-Key: stl_your_key_here" \
   -H "Content-Type: application/json" \
   -d '{
@@ -159,7 +159,7 @@ curl -X POST https://your-sentinel-host/api/v1/telemetry \
   }'
 
 # Query anomalies
-curl https://your-sentinel-host/api/v1/anomalies?severity=critical \
+curl https://your-dsremo-host/api/v1/anomalies?severity=critical \
   -H "X-API-Key: stl_your_key_here"
 ```
 
@@ -187,9 +187,9 @@ curl https://your-sentinel-host/api/v1/anomalies?severity=critical \
 
 ---
 
-### About Sentinel
+### About Dsremo
 
-Built by a team with experience in ground segment operations and ML infrastructure. Sentinel is production-ready, tested against 7M+ real telemetry points across 5 satellites, and designed from day one for multi-tenant commercial deployment.
+Built by a team with experience in ground segment operations and ML infrastructure. Dsremo is production-ready, tested against 7M+ real telemetry points across 5 satellites, and designed from day one for multi-tenant commercial deployment.
 
 **Contact:** [your email]
 **Demo:** Available on request (live dashboard with real ISS + ESA data)

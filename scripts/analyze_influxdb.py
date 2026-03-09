@@ -42,9 +42,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
-from sentinel.ingest.influxdb_connector import InfluxDBConnector
-from sentinel.ingest.pipeline import db_context, phase, print_run_header
+from dsremo.ingest.bulk_loader import print_detection_report, run_bulk_detection
+from dsremo.ingest.influxdb_connector import InfluxDBConnector
+from dsremo.ingest.pipeline import db_context, phase, print_run_header
 
 
 async def main(

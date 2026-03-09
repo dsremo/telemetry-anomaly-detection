@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sentinel.ingest.adapter import AdapterError, adapt_batch, adapt_single
+from dsremo.ingest.adapter import AdapterError, adapt_batch, adapt_single
 
 
 class TestAdaptSingle:

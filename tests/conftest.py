@@ -9,9 +9,9 @@ import pytest
 import numpy as np
 from datetime import datetime, timezone
 
-from sentinel.core.models import TelemetryPoint, Anomaly, Severity
-from sentinel.simulate.spacecraft import SpacecraftSimulator
-from sentinel.features.engine import FeatureEngine
+from dsremo.core.models import TelemetryPoint, Anomaly, Severity
+from dsremo.simulate.spacecraft import SpacecraftSimulator
+from dsremo.features.engine import FeatureEngine
 
 
 @pytest.fixture

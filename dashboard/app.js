@@ -1,5 +1,5 @@
 /**
- * Sentinel Dashboard — zero-dependency vanilla JS + Chart.js.
+ * Dsremo Dashboard — zero-dependency vanilla JS + Chart.js.
  *
  * Connects via WebSocket for live anomaly events.
  * Polls REST API for initial state and periodic refresh.
@@ -42,7 +42,7 @@ const state = {
         refreshToken:  null,
         user:          null,
         mode:          null,            // null = not authenticated | 'jwt' = signed in
-        tenantContext: null,           // sentinel users only: which tenant to view
+        tenantContext: null,           // dsremo users only: which tenant to view
     },
     // Cancellable poll intervals
     pollIntervals: { health: null, anomaly: null, satellites: null, stats: null },
@@ -1713,7 +1713,7 @@ function exportCsv() {
     ]);
 
     const csv = [headers, ...rows].map(r => r.map(v => `"${v}"`).join(',')).join('\n');
-    downloadFile('sentinel_anomalies.csv', csv, 'text/csv');
+    downloadFile('dsremo_anomalies.csv', csv, 'text/csv');
     toast(`Exported ${data.length} anomalies as CSV.`, 'success');
 }
 
@@ -1723,14 +1723,14 @@ function exportJson() {
         : state.anomalies;
 
     if (data.length === 0) { toast('No anomalies to export.', 'info'); return; }
-    downloadFile('sentinel_anomalies.json', JSON.stringify(data, null, 2), 'application/json');
+    downloadFile('dsremo_anomalies.json', JSON.stringify(data, null, 2), 'application/json');
     toast(`Exported ${data.length} anomalies as JSON.`, 'success');
 }
 
 window.exportAnomaly = function() {
     const a = state.selectedAnomaly;
     if (!a) return;
-    const name = `sentinel_${(a.satellite_id || 'unknown')}_${(a.parameter || 'param')}_${Date.now()}.json`;
+    const name = `dsremo_${(a.satellite_id || 'unknown')}_${(a.parameter || 'param')}_${Date.now()}.json`;
     downloadFile(name, JSON.stringify(a, null, 2), 'application/json');
     toast('Anomaly exported.', 'success');
 };
@@ -1838,7 +1838,7 @@ async function fetchAnomalies() {
         _refreshUI();
     } catch (e) { /* ignore */ } finally {
         _paging.loading = false;
-        _updateScrollSentinel();
+        _updateScrollDsremo();
     }
 }
 
@@ -1878,7 +1878,7 @@ async function loadOlderAnomalies() {
     } catch (e) { /* ignore */ } finally {
         _paging.loading = false;
         document.getElementById('timelineLoadingSpinner').style.display = 'none';
-        _updateScrollSentinel();
+        _updateScrollDsremo();
     }
 }
 
@@ -1920,24 +1920,24 @@ function _updateLoadedInfo() {
     }
 }
 
-function _updateScrollSentinel() {
-    const sentinel = document.getElementById('timelineScrollSentinel');
-    if (!sentinel) return;
+function _updateScrollDsremo() {
+    const dsremo = document.getElementById('timelineScrollDsremo');
+    if (!dsremo) return;
     if (_paging.allLoaded) {
-        sentinel.style.display = 'none';
+        dsremo.style.display = 'none';
     } else {
-        sentinel.style.display = 'block';
+        dsremo.style.display = 'block';
     }
 }
 
-// Wire IntersectionObserver to the sentinel div
+// Wire IntersectionObserver to the dsremo div
 (function initInfiniteScroll() {
-    const sentinel = document.getElementById('timelineScrollSentinel');
-    if (!sentinel) return;
+    const dsremo = document.getElementById('timelineScrollDsremo');
+    if (!dsremo) return;
     const observer = new IntersectionObserver(entries => {
         if (entries[0].isIntersecting) loadOlderAnomalies();
     }, { rootMargin: '200px' });
-    observer.observe(sentinel);
+    observer.observe(dsremo);
 })();
 
 // Date filter helpers
@@ -2022,8 +2022,8 @@ function formatBytes(n) {
 function authHeaders(extra = {}) {
     const h = { ...extra };
     if (state.auth.accessToken) h['Authorization'] = `Bearer ${state.auth.accessToken}`;
-    // Sentinel users scope all requests to a selected tenant via X-Tenant-ID header
-    if (state.auth.user?.scope === 'sentinel' && state.auth.tenantContext) {
+    // Dsremo users scope all requests to a selected tenant via X-Tenant-ID header
+    if (state.auth.user?.scope === 'dsremo' && state.auth.tenantContext) {
         h['X-Tenant-ID'] = state.auth.tenantContext;
     }
     return h;
@@ -2033,15 +2033,15 @@ function authHeaders(extra = {}) {
 // Theme Management
 // ============================================================
 function initTheme() {
-    const stored = localStorage.getItem('sentinel-theme') || 'system';
+    const stored = localStorage.getItem('dsremo-theme') || 'system';
     applyTheme(stored);
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-        if ((localStorage.getItem('sentinel-theme') || 'system') === 'system') applyTheme('system');
+        if ((localStorage.getItem('dsremo-theme') || 'system') === 'system') applyTheme('system');
     });
 }
 
 function applyTheme(theme) {
-    localStorage.setItem('sentinel-theme', theme);
+    localStorage.setItem('dsremo-theme', theme);
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     const isDark = theme === 'dark' || (theme === 'system' && prefersDark);
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
@@ -2075,14 +2075,14 @@ function populateUserChip(user) {
         badgeEl.textContent = (user.role || '').toUpperCase();
         badgeEl.className   = `user-role-badge role-${(user.role || '').replaceAll('_', '-')}`;
         ddName.textContent  = displayName;
-        ddEmail.textContent = user.email || (user.tenant_id ? `Tenant: ${user.tenant_id}` : 'Sentinel Staff');
+        ddEmail.textContent = user.email || (user.tenant_id ? `Tenant: ${user.tenant_id}` : 'Dsremo Staff');
         // Show tenant ID so customers always know what to type at login
         if (ddTenant) {
             ddTenant.textContent = user.tenant_id
                 ? `TENANT ID: ${user.tenant_id}`
-                : user.scope === 'sentinel' ? 'SENTINEL STAFF' : '';
+                : user.scope === 'dsremo' ? 'DSREMO STAFF' : '';
         }
-        // Show change-password only for JWT tenant users (scope≠sentinel)
+        // Show change-password only for JWT tenant users (scope≠dsremo)
         ddChangePw.style.display  = (state.auth.mode === 'jwt' && user.tenant_id) ? '' : 'none';
         ddLogoutBtn.innerHTML = '<span class="user-dropdown-icon">↩</span> Logout';
         ddLogoutBtn.classList.add('danger');
@@ -2101,11 +2101,23 @@ function populateUserChip(user) {
 }
 
 // ============================================================
-// Auth — Init (restore session from localStorage)
+// Auth — Init (restore session from localStorage or Google OAuth fragment)
 // ============================================================
 async function initAuth() {
-    const stored        = localStorage.getItem('sentinel-access-token');
-    const storedRefresh = localStorage.getItem('sentinel-refresh-token');
+    // 1. Check URL fragment for tokens from Google OAuth callback.
+    //    e.g. /dashboard/#access_token=...&refresh_token=...&plan=free
+    const fragment = new URLSearchParams(window.location.hash.slice(1));
+    const fragAccess  = fragment.get('access_token');
+    const fragRefresh = fragment.get('refresh_token');
+    if (fragAccess) {
+        localStorage.setItem('dsremo-access-token',  fragAccess);
+        localStorage.setItem('dsremo-refresh-token', fragRefresh || '');
+        // Clean the fragment from the URL so the token doesn't linger in history
+        history.replaceState(null, '', window.location.pathname);
+    }
+
+    const stored        = localStorage.getItem('dsremo-access-token');
+    const storedRefresh = localStorage.getItem('dsremo-refresh-token');
 
     if (stored) {
         state.auth.accessToken  = stored;
@@ -2118,9 +2130,9 @@ async function initAuth() {
                 const user = await resp.json();
                 state.auth.user = user;
                 state.auth.mode = 'jwt';
-                // Restore sentinel tenant context from last session
-                if (user.scope === 'sentinel') {
-                    const saved = localStorage.getItem('sentinel-tenant-ctx');
+                // Restore dsremo tenant context from last session
+                if (user.scope === 'dsremo') {
+                    const saved = localStorage.getItem('dsremo-tenant-ctx');
                     if (saved) state.auth.tenantContext = saved;
                 }
                 populateUserChip(user);
@@ -2128,16 +2140,16 @@ async function initAuth() {
                 return;
             }
         } catch (e) { /* network error — fall through */ }
-        // Token expired or invalid — clear
-        localStorage.removeItem('sentinel-access-token');
-        localStorage.removeItem('sentinel-refresh-token');
+        // Token expired or invalid — clear and fall through to landing redirect
+        localStorage.removeItem('dsremo-access-token');
+        localStorage.removeItem('dsremo-refresh-token');
         state.auth.accessToken  = null;
         state.auth.refreshToken = null;
     }
-    // No valid session — require login
-    populateUserChip(null);
-    applyRoleGating('viewer', '');
-    showLoginModal();
+
+    // 2. No valid session — redirect to landing page (not login modal).
+    //    The landing page has the "Sign in with Google" button.
+    window.location.href = '/';
 }
 
 // ============================================================
@@ -2159,8 +2171,8 @@ async function handleLogin() {
     try {
         // Strategy:
         //   1. If tenant_id supplied → try tenant login with that tenant only.
-        //   2. If no tenant_id → try sentinel-login first, then 'default' tenant.
-        //      This way Sentinel staff (most common single-box deployment) land first.
+        //   2. If no tenant_id → try dsremo-login first, then 'default' tenant.
+        //      This way Dsremo staff (most common single-box deployment) land first.
         let resp;
         if (tenantId) {
             // Explicit tenant supplied — single attempt
@@ -2170,8 +2182,8 @@ async function handleLogin() {
                 body:    JSON.stringify({ email, password, tenant_id: tenantId }),
             });
         } else {
-            // No tenant specified — try sentinel login first, then 'default' tenant
-            resp = await fetch(`${API_BASE}/auth/sentinel-login`, {
+            // No tenant specified — try dsremo login first, then 'default' tenant
+            resp = await fetch(`${API_BASE}/auth/dsremo-login`, {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify({ email, password }),
@@ -2195,8 +2207,8 @@ async function handleLogin() {
         state.auth.accessToken  = data.access_token;
         state.auth.refreshToken = data.refresh_token;
         state.auth.mode         = 'jwt';
-        localStorage.setItem('sentinel-access-token',  data.access_token);
-        localStorage.setItem('sentinel-refresh-token', data.refresh_token);
+        localStorage.setItem('dsremo-access-token',  data.access_token);
+        localStorage.setItem('dsremo-refresh-token', data.refresh_token);
 
         // Fetch user profile
         const meResp = await fetch(`${API_BASE}/auth/me`, {
@@ -2260,10 +2272,10 @@ async function handleLogout() {
     state.auth.user          = null;
     state.auth.mode          = null;
     state.auth.tenantContext = null;
-    localStorage.removeItem('sentinel-access-token');
-    localStorage.removeItem('sentinel-refresh-token');
-    localStorage.removeItem('sentinel-tenant-ctx');
-    const sw = document.getElementById('sentinelTenantSwitch');
+    localStorage.removeItem('dsremo-access-token');
+    localStorage.removeItem('dsremo-refresh-token');
+    localStorage.removeItem('dsremo-tenant-ctx');
+    const sw = document.getElementById('dsremoTenantSwitch');
     if (sw) sw.style.display = 'none';
     populateUserChip(null);
     applyRoleGating('viewer', '');
@@ -2324,8 +2336,8 @@ async function handleChangePassword() {
         state.auth.refreshToken = null;
         state.auth.user         = null;
         state.auth.mode         = null;
-        localStorage.removeItem('sentinel-access-token');
-        localStorage.removeItem('sentinel-refresh-token');
+        localStorage.removeItem('dsremo-access-token');
+        localStorage.removeItem('dsremo-refresh-token');
         populateUserChip(null);
         showLoginModal();
     } catch (e) {
@@ -2344,11 +2356,11 @@ function openSettings() {
     document.getElementById('settingsApiBase').value  = API_BASE;
     document.getElementById('settingsAuthMode').value =
         state.auth.mode === 'jwt' ? 'JWT Bearer Token' : 'Demo / API Key';
-    const theme = localStorage.getItem('sentinel-theme') || 'system';
+    const theme = localStorage.getItem('dsremo-theme') || 'system';
     document.querySelectorAll('.theme-option').forEach(b => {
         b.classList.toggle('active', b.dataset.theme === theme);
     });
-    const stored = localStorage.getItem('sentinel-poll-interval') || '10000';
+    const stored = localStorage.getItem('dsremo-poll-interval') || '10000';
     document.getElementById('pollInterval').value = stored;
     document.getElementById('settingsOverlay').classList.add('open');
 }
@@ -2360,7 +2372,7 @@ function closeSettings() {
 function saveSettings() {
     const newInterval = parseInt(document.getElementById('pollInterval').value, 10);
     if (!isNaN(newInterval) && newInterval > 0) {
-        localStorage.setItem('sentinel-poll-interval', String(newInterval));
+        localStorage.setItem('dsremo-poll-interval', String(newInterval));
         clearInterval(state.pollIntervals.anomaly);
         state.pollIntervals.anomaly = setInterval(pollNewAnomalies, newInterval);
     }
@@ -2462,9 +2474,9 @@ document.querySelectorAll('.theme-option').forEach(btn => {
     });
 });
 
-// Sentinel tenant switcher
-document.getElementById('sentinelTenantSwitch').addEventListener('change', e => {
-    handleSentinelTenantSwitch(e.target.value);
+// Dsremo tenant switcher
+document.getElementById('dsremoTenantSwitch').addEventListener('change', e => {
+    handleDsremoTenantSwitch(e.target.value);
 });
 
 // Logout / Sign-In (ddLogout is reused for both actions)
@@ -2544,7 +2556,7 @@ function switchTab(tab) {
     document.querySelectorAll('.tab-content').forEach(el => {
         el.style.display = el.id === `tab-${tab}` ? '' : 'none';
     });
-    localStorage.setItem('sentinel-active-tab', tab);
+    localStorage.setItem('dsremo-active-tab', tab);
 
     if (tab === 'analysis') {
         setTimeout(initCharts, 50);
@@ -2571,7 +2583,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // Role-Based UI Gating
 // ============================================================
 
-// Tier mapping: 0=report_only … 4=admin; 5=sentinel (any sentinel role)
+// Tier mapping: 0=report_only … 4=admin; 5=dsremo (any dsremo role)
 const ROLE_TIER = {
     report_only:    0,
     viewer:         1,
@@ -2579,29 +2591,29 @@ const ROLE_TIER = {
     tenant_manager: 3,
     admin:          4,
     developer:      5,
-    sentinel_admin: 5,
+    dsremo_admin: 5,
     superuser:      5,
 };
 
 function applyRoleGating(role, scope) {
-    const tier = scope === 'sentinel' ? 5 : (ROLE_TIER[role] ?? 0);
-    const isSentinel = scope === 'sentinel';
+    const tier = scope === 'dsremo' ? 5 : (ROLE_TIER[role] ?? 0);
+    const isDsremo = scope === 'dsremo';
 
-    // Admin tab: visible for tier ≥ 3 (tenant_manager, admin) or sentinel
+    // Admin tab: visible for tier ≥ 3 (tenant_manager, admin) or dsremo
     const adminTab = document.getElementById('adminTabBtn');
-    if (adminTab) adminTab.style.display = (tier >= 3 || isSentinel) ? '' : 'none';
+    if (adminTab) adminTab.style.display = (tier >= 3 || isDsremo) ? '' : 'none';
 
-    // Sentinel-only sections inside Admin tab
-    document.getElementById('adminTenants')?.style.setProperty('display', isSentinel ? '' : 'none');
-    document.getElementById('adminSimulator')?.style.setProperty('display', isSentinel ? '' : 'none');
+    // Dsremo-only sections inside Admin tab
+    document.getElementById('adminTenants')?.style.setProperty('display', isDsremo ? '' : 'none');
+    document.getElementById('adminSimulator')?.style.setProperty('display', isDsremo ? '' : 'none');
 
-    // Sentinel tenant switcher — only shown for sentinel scope users
-    const switcher = document.getElementById('sentinelTenantSwitch');
+    // Dsremo tenant switcher — only shown for dsremo scope users
+    const switcher = document.getElementById('dsremoTenantSwitch');
     if (switcher) {
-        switcher.style.display = isSentinel ? '' : 'none';
-        if (isSentinel) {
+        switcher.style.display = isDsremo ? '' : 'none';
+        if (isDsremo) {
             // Populate switcher with known tenants (load if needed)
-            _populateSentinelTenantSwitcher();
+            _populateDsremoTenantSwitcher();
         }
     }
 
@@ -2612,11 +2624,11 @@ function applyRoleGating(role, scope) {
     _gateButtons(['xtceUploadBtn', 'csvUploadBtn'], tier >= 2);
 
     // Alerts tab: alert config save — admin+ (tier ≥ 4)
-    _gateButtons(['saveAlertConfigBtn'], tier >= 4 || isSentinel);
+    _gateButtons(['saveAlertConfigBtn'], tier >= 4 || isDsremo);
 
     // Delete alert config button — find by text if no id
     document.querySelectorAll('[data-min-role="admin"]').forEach(el => {
-        el.classList.toggle('role-hidden', tier < 4 && !isSentinel);
+        el.classList.toggle('role-hidden', tier < 4 && !isDsremo);
     });
 }
 
@@ -2641,16 +2653,16 @@ function _gateClass(attr, allowed) {
 }
 
 // ============================================================
-// Sentinel Tenant Switcher
+// Dsremo Tenant Switcher
 // ============================================================
 
 /**
- * Populates the sentinel tenant switcher dropdown.
- * Fetches /tenants (sentinel_admin can always call this).
+ * Populates the dsremo tenant switcher dropdown.
+ * Fetches /tenants (dsremo_admin can always call this).
  * Preserves any currently-selected tenant context.
  */
-async function _populateSentinelTenantSwitcher() {
-    const switcher = document.getElementById('sentinelTenantSwitch');
+async function _populateDsremoTenantSwitcher() {
+    const switcher = document.getElementById('dsremoTenantSwitch');
     if (!switcher) return;
     try {
         const resp = await fetch(`${API_BASE}/tenants`, { headers: authHeaders() });
@@ -2664,17 +2676,17 @@ async function _populateSentinelTenantSwitcher() {
 }
 
 /**
- * Called when sentinel user picks a tenant from the topbar switcher.
+ * Called when dsremo user picks a tenant from the topbar switcher.
  * Updates tenantContext and re-fetches all data so the dashboard
  * shows that tenant's anomalies, satellites, stats, and channels.
  */
-async function handleSentinelTenantSwitch(tenantId) {
+async function handleDsremoTenantSwitch(tenantId) {
     state.auth.tenantContext = tenantId || null;
     // Persist for session
     if (tenantId) {
-        localStorage.setItem('sentinel-tenant-ctx', tenantId);
+        localStorage.setItem('dsremo-tenant-ctx', tenantId);
     } else {
-        localStorage.removeItem('sentinel-tenant-ctx');
+        localStorage.removeItem('dsremo-tenant-ctx');
     }
     // Re-fetch all data scoped to new tenant
     fetchAnomalies();
@@ -2970,7 +2982,7 @@ async function handleGenerateKey() {
 }
 
 // ============================================================
-// Admin Tab — Tenant Management (sentinel_admin only)
+// Admin Tab — Tenant Management (dsremo_admin only)
 // ============================================================
 async function loadTenants() {
     try {
@@ -3203,7 +3215,7 @@ async function loadAdminTab() {
     const scope = user?.scope || '';
     await loadUsers();
     await loadApiKeys();
-    if (scope === 'sentinel') await loadTenants();
+    if (scope === 'dsremo') await loadTenants();
 }
 
 // ============================================================
@@ -3221,7 +3233,7 @@ initAuth().then(() => {
     fetchSatellites();
     fetchStats();
     // Restore last active tab (must be after auth so role-gated tabs are visible)
-    const savedTab = localStorage.getItem('sentinel-active-tab');
+    const savedTab = localStorage.getItem('dsremo-active-tab');
     if (savedTab && document.querySelector(`.tab-btn[data-tab="${savedTab}"]`)) {
         switchTab(savedTab);
     }
@@ -3239,7 +3251,7 @@ setupDropZone('csvDropZone',  'csvFileInput',  'csvFile',  'csvUploadBtn',  'csv
 renderSubsystems();
 
 // 6. Periodic refresh — stored IDs so poll interval can be changed in Settings
-const _storedPollMs = parseInt(localStorage.getItem('sentinel-poll-interval') || '10000', 10);
+const _storedPollMs = parseInt(localStorage.getItem('dsremo-poll-interval') || '10000', 10);
 state.pollIntervals.health     = setInterval(fetchHealth,     15000);
 state.pollIntervals.anomaly    = setInterval(pollNewAnomalies, _storedPollMs);
 state.pollIntervals.satellites = setInterval(fetchSatellites, 30000);

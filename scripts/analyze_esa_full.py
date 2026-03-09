@@ -10,7 +10,7 @@ Run:
 
 Requires:
     Sentinel DB running (postgres).  Server does NOT need to be up.
-    Configure via SENTINEL_DB_* env vars or configs/sentinel.yaml.
+    Configure via DSREMO_DB_* env vars or configs/dsremo.yaml.
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from sentinel.core.tenant import set_tenant
-from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
-from sentinel.ingest.esa_loader import ESADataLoader
-from sentinel.ingest.pipeline import db_context, phase, print_run_header
+from dsremo.core.tenant import set_tenant
+from dsremo.ingest.bulk_loader import print_detection_report, run_bulk_detection
+from dsremo.ingest.esa_loader import ESADataLoader
+from dsremo.ingest.pipeline import db_context, phase, print_run_header
 
 _SATELLITE_ID = "ESA-MISSION1"
 _DEFAULT_RESAMPLE_MINUTES = 60

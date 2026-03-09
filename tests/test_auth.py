@@ -12,13 +12,13 @@ import jwt
 import pytest
 from pydantic import ValidationError
 
-from sentinel.core.security import (
+from dsremo.core.security import (
     create_access_token,
     decode_access_token,
     hash_password,
     verify_password,
 )
-from sentinel.api.schemas import LoginRequest, RefreshRequest, TokenResponse, UserOut
+from dsremo.api.schemas import LoginRequest, RefreshRequest, TokenResponse, UserOut
 
 
 _SECRET = "test-secret-key-that-is-long-enough-for-hs256"

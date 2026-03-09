@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from sentinel.core.models import Severity
-from sentinel.detection.statistical import StatisticalDetector
-from sentinel.features.engine import FeatureEngine
+from dsremo.core.models import Severity
+from dsremo.detection.statistical import StatisticalDetector
+from dsremo.features.engine import FeatureEngine
 
 
 class TestStatisticalDetector:
@@ -71,7 +71,7 @@ class TestStatisticalDetector:
         # Z ~ 3.5 → WATCH
         fv_watch = engine.compute("v", 7.4 + 3.5 * 0.02, 100.0)
         # For controlled test, create features manually
-        from sentinel.features.engine import FeatureVector
+        from dsremo.features.engine import FeatureVector
         fv = FeatureVector(
             parameter="v", timestamp_epoch=100.0, raw_value=10.0,
             rolling_mean=7.4, rolling_std=0.5, z_score=3.5,

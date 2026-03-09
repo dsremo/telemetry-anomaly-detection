@@ -35,7 +35,7 @@ def _make_anomaly(
     detectors: tuple[str, ...] = ("cusum", "ewma"),
     ts: datetime | None = None,
 ):
-    from sentinel.core.models import Anomaly, Severity
+    from dsremo.core.models import Anomaly, Severity
     sev_map = {
         "nominal": Severity.NOMINAL,
         "watch":   Severity.WATCH,
@@ -61,28 +61,28 @@ class TestIncidentModel:
     """Incident frozen dataclass."""
 
     def test_incident_is_frozen(self):
-        from sentinel.core.models import Incident
+        from dsremo.core.models import Incident
         inc = Incident()
         with pytest.raises((AttributeError, TypeError)):
             inc.status = "resolved"  # type: ignore[misc]
 
     def test_incident_default_status_open(self):
-        from sentinel.core.models import Incident
+        from dsremo.core.models import Incident
         inc = Incident()
         assert inc.status == "open"
 
     def test_incident_default_severity_watch(self):
-        from sentinel.core.models import Incident, Severity
+        from dsremo.core.models import Incident, Severity
         inc = Incident()
         assert inc.severity == Severity.WATCH
 
     def test_incident_has_id(self):
-        from sentinel.core.models import Incident
+        from dsremo.core.models import Incident
         inc = Incident()
         assert len(inc.id) >= 8
 
     def test_incident_channels_is_tuple(self):
-        from sentinel.core.models import Incident
+        from dsremo.core.models import Incident
         inc = Incident(channels=("voltage", "current"))
         assert isinstance(inc.channels, tuple)
         assert "voltage" in inc.channels
@@ -94,7 +94,7 @@ class TestIncidentGrouper:
     """IncidentGrouper core logic — NASA GSFC event correlation pattern."""
 
     def test_first_anomaly_creates_incident(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         a = _make_anomaly()
         inc = g.process(a)
@@ -103,7 +103,7 @@ class TestIncidentGrouper:
         assert inc.anomaly_count == 1
 
     def test_second_anomaly_within_window_joins_incident(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper(window_s=300)
         t0 = datetime.now(timezone.utc)
         a1 = _make_anomaly(ts=t0)
@@ -115,7 +115,7 @@ class TestIncidentGrouper:
         assert "current" in inc.channels
 
     def test_anomaly_outside_window_creates_new_incident(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper(window_s=300)
         t0 = datetime.now(timezone.utc)
         a1 = _make_anomaly(ts=t0)
@@ -125,7 +125,7 @@ class TestIncidentGrouper:
         assert inc1.id != inc2.id
 
     def test_incident_id_stable_for_members(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper(window_s=300)
         t0 = datetime.now(timezone.utc)
         a1 = _make_anomaly(ts=t0)
@@ -137,8 +137,8 @@ class TestIncidentGrouper:
         assert inc1.id == inc2.id == inc3.id
 
     def test_severity_escalates_to_max(self):
-        from sentinel.core.models import Severity
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.core.models import Severity
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         t0 = datetime.now(timezone.utc)
         g.process(_make_anomaly(severity="watch", ts=t0))
@@ -146,8 +146,8 @@ class TestIncidentGrouper:
         assert inc.severity == Severity.CRITICAL
 
     def test_severity_never_downgrade(self):
-        from sentinel.core.models import Severity
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.core.models import Severity
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         t0 = datetime.now(timezone.utc)
         g.process(_make_anomaly(severity="critical", ts=t0))
@@ -155,7 +155,7 @@ class TestIncidentGrouper:
         assert inc.severity == Severity.CRITICAL
 
     def test_confidence_is_average(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         t0 = datetime.now(timezone.utc)
         g.process(_make_anomaly(confidence=0.6, ts=t0))
@@ -163,7 +163,7 @@ class TestIncidentGrouper:
         assert abs(inc.confidence - 0.7) < 0.01
 
     def test_channels_deduplicated(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         t0 = datetime.now(timezone.utc)
         g.process(_make_anomaly(parameter="voltage", ts=t0))
@@ -171,7 +171,7 @@ class TestIncidentGrouper:
         assert inc.channels.count("voltage") == 1
 
     def test_different_satellites_get_separate_incidents(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         t0 = datetime.now(timezone.utc)
         inc1 = g.process(_make_anomaly(satellite_id="SAT-1", ts=t0))
@@ -179,18 +179,18 @@ class TestIncidentGrouper:
         assert inc1.id != inc2.id
 
     def test_get_incident_id_returns_current(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         inc = g.process(_make_anomaly(satellite_id="SAT-X"))
         assert g.get_incident_id("SAT-X") == inc.id
 
     def test_get_incident_id_none_for_unknown_satellite(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         assert g.get_incident_id("NONEXISTENT") is None
 
     def test_close_stale_returns_closed_incidents(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper(close_after_s=0)   # instant close
         g.process(_make_anomaly(satellite_id="SAT-STALE"))
         closed = g.close_stale()
@@ -199,14 +199,14 @@ class TestIncidentGrouper:
         assert closed[0].satellite_id == "SAT-STALE"
 
     def test_close_stale_removes_from_open(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper(close_after_s=0)
         g.process(_make_anomaly(satellite_id="SAT-OLD"))
         g.close_stale()
         assert g.get_incident_id("SAT-OLD") is None
 
     def test_reset_clears_all_open(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         g.process(_make_anomaly(satellite_id="SAT-A"))
         g.process(_make_anomaly(satellite_id="SAT-B"))
@@ -214,7 +214,7 @@ class TestIncidentGrouper:
         assert g.open_count() == 0
 
     def test_root_cause_derived_from_detectors(self):
-        from sentinel.detection.incident_grouper import IncidentGrouper
+        from dsremo.detection.incident_grouper import IncidentGrouper
         g = IncidentGrouper()
         a = _make_anomaly(detectors=("cusum", "ewma", "changepoint"))
         inc = g.process(a)
@@ -227,8 +227,8 @@ class TestIncidentGrouper:
 def _make_incidents_app():
     """Minimal FastAPI app with only the incidents router — no DB, no demo mode."""
     from fastapi import FastAPI
-    from sentinel.api.dependencies import get_current_user
-    from sentinel.api.routes_incidents import incidents_router
+    from dsremo.api.dependencies import get_current_user
+    from dsremo.api.routes_incidents import incidents_router
 
     app = FastAPI()
     app.include_router(incidents_router, prefix="/api/v1")
@@ -243,7 +243,7 @@ def _make_incidents_app():
 
 def _mock_queries(*, incidents=None, update_ok=False):
     """Return a MagicMock that satisfies the incidents route's queries calls."""
-    import sentinel.api.routes_incidents as inc_mod
+    import dsremo.api.routes_incidents as inc_mod
     m = MagicMock()
     m.get_incidents_v2 = AsyncMock(return_value=incidents or [])
     m.update_incident_status = AsyncMock(return_value=update_ok)
@@ -365,17 +365,17 @@ class TestIncidentSchemas:
     """Pydantic schema validation."""
 
     def test_incident_status_in_allows_resolved(self):
-        from sentinel.api.schemas import IncidentStatusIn
+        from dsremo.api.schemas import IncidentStatusIn
         s = IncidentStatusIn(status="resolved")
         assert s.status == "resolved"
 
     def test_incident_status_in_allows_false_positive(self):
-        from sentinel.api.schemas import IncidentStatusIn
+        from dsremo.api.schemas import IncidentStatusIn
         s = IncidentStatusIn(status="false_positive")
         assert s.status == "false_positive"
 
     def test_incident_status_in_rejects_open(self):
         from pydantic import ValidationError
-        from sentinel.api.schemas import IncidentStatusIn
+        from dsremo.api.schemas import IncidentStatusIn
         with pytest.raises(ValidationError):
             IncidentStatusIn(status="open")

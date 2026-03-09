@@ -45,9 +45,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))
 
-from sentinel.ingest.bulk_loader import print_detection_report, run_bulk_detection
-from sentinel.ingest.pipeline import db_context, phase, print_run_header
-from sentinel.ingest.yamcs_connector import YAMCSConnector
+from dsremo.ingest.bulk_loader import print_detection_report, run_bulk_detection
+from dsremo.ingest.pipeline import db_context, phase, print_run_header
+from dsremo.ingest.yamcs_connector import YAMCSConnector
 
 
 async def main(

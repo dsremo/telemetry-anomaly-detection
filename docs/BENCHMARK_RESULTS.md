@@ -1,4 +1,4 @@
-# Sentinel — Benchmark Results
+# Dsremo — Benchmark Results
 
 ## Dataset 1: NASA SMAP / MSL Telemetry (Primary Validation)
 
@@ -40,22 +40,22 @@ to an out-of-domain dataset with labeled ground truth.
 
 | Satellite ID | Dataset | Points | GT Events |
 |---|---|---|---|
-| SENTINEL-NAB-1 | Machine Temperature System Failure | 22,695 | 4 |
-| SENTINEL-NAB-2 | Ambient Temperature System Failure | 7,267 | 2 |
-| SENTINEL-NAB-3 | CPU Utilization ASG Misconfiguration | 18,050 | 1 |
-| SENTINEL-NAB-4 | EC2 Request Latency System Failure | 4,032 | 3 |
-| SENTINEL-NAB-5 | NYC Taxi Demand Anomalies | 10,320 | 5 |
+| DSREMO-NAB-1 | Machine Temperature System Failure | 22,695 | 4 |
+| DSREMO-NAB-2 | Ambient Temperature System Failure | 7,267 | 2 |
+| DSREMO-NAB-3 | CPU Utilization ASG Misconfiguration | 18,050 | 1 |
+| DSREMO-NAB-4 | EC2 Request Latency System Failure | 4,032 | 3 |
+| DSREMO-NAB-5 | NYC Taxi Demand Anomalies | 10,320 | 5 |
 | **Total** | | **62,364** | **15** |
 
 ### Results: Strict NAB Scoring (±3 hour tolerance)
 
 | Satellite | GT Events | Detections | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
-| SENTINEL-NAB-1 | 4 | 5 | 1 | 4 | 3 | 20.0% | 25.0% | 22.2% |
-| SENTINEL-NAB-2 | 2 | 13 | 2 | 11 | 0 | 15.4% | **100.0%** | 26.7% |
-| SENTINEL-NAB-3 | 1 | 4 | 0 | 4 | 1 | 0.0% | 0.0% | 0.0% |
-| SENTINEL-NAB-4 | 3 | 1 | 0 | 1 | 3 | 0.0% | 0.0% | 0.0% |
-| SENTINEL-NAB-5 | 5 | 9 | 3 | 6 | 2 | 33.3% | 60.0% | 42.9% |
+| DSREMO-NAB-1 | 4 | 5 | 1 | 4 | 3 | 20.0% | 25.0% | 22.2% |
+| DSREMO-NAB-2 | 2 | 13 | 2 | 11 | 0 | 15.4% | **100.0%** | 26.7% |
+| DSREMO-NAB-3 | 1 | 4 | 0 | 4 | 1 | 0.0% | 0.0% | 0.0% |
+| DSREMO-NAB-4 | 3 | 1 | 0 | 1 | 3 | 0.0% | 0.0% | 0.0% |
+| DSREMO-NAB-5 | 5 | 9 | 3 | 6 | 2 | 33.3% | 60.0% | 42.9% |
 | **TOTAL** | **15** | **32** | **6** | **26** | **9** | **18.8%** | **40.0%** | **25.5%** |
 
 ### Results: Operational Scoring (±7-day early-warning credit)
@@ -65,11 +65,11 @@ detecting the precursor drift 2–7 days before failure is the most valuable out
 
 | Satellite | GT Events | Detections | TP | FP | FN | Precision | Recall | F1 |
 |---|---|---|---|---|---|---|---|---|
-| SENTINEL-NAB-1 | 4 | 5 | 3 | 2 | 1 | 60.0% | 75.0% | 66.7% |
-| SENTINEL-NAB-2 | 2 | 13 | 2 | 11 | 0 | 15.4% | 100.0% | 26.7% |
-| SENTINEL-NAB-3 | 1 | 4 | 0 | 4 | 1 | 0.0% | 0.0% | 0.0% |
-| SENTINEL-NAB-4 | 3 | 1 | 1 | 0 | 2 | 100.0% | 33.3% | 50.0% |
-| SENTINEL-NAB-5 | 5 | 9 | 3 | 6 | 2 | 33.3% | 60.0% | 42.9% |
+| DSREMO-NAB-1 | 4 | 5 | 3 | 2 | 1 | 60.0% | 75.0% | 66.7% |
+| DSREMO-NAB-2 | 2 | 13 | 2 | 11 | 0 | 15.4% | 100.0% | 26.7% |
+| DSREMO-NAB-3 | 1 | 4 | 0 | 4 | 1 | 0.0% | 0.0% | 0.0% |
+| DSREMO-NAB-4 | 3 | 1 | 1 | 0 | 2 | 100.0% | 33.3% | 50.0% |
+| DSREMO-NAB-5 | 5 | 9 | 3 | 6 | 2 | 33.3% | 60.0% | 42.9% |
 | **TOTAL** | **15** | **32** | **9** | **23** | **6** | **28.1%** | **60.0%** | **38.3%** |
 
 ### Root Cause Analysis
@@ -527,11 +527,11 @@ the raw signal rather than the residual after seasonal/trend removal.
 
 | Component | Status | Impact |
 |---|---|---|
-| `sentinel.eval.scoring` — cluster_events, score() | ✅ Added | DRY benchmark scoring, O(n log m) |
+| `dsremo.eval.scoring` — cluster_events, score() | ✅ Added | DRY benchmark scoring, O(n log m) |
 | `STLDecomposer._fft_period()` | ✅ Added | FFT-based dominant period detection (threshold: 4× median) |
 | `_estimate_period()` FFT-first strategy | ✅ Updated | Orbital hint becomes fallback; FFT detects actual signal periods |
 | `VarianceDetector` (6th ensemble member) | ✅ Added | Fires on σ-ratio > 2.5× baseline; weight=0.12 |
-| `detect_data_frequency()` / `adaptive_cooldown_hours()` in `sentinel.ingest.utils` | ✅ Added | Shared across all CSV/YAMCS/InfluxDB scripts |
+| `detect_data_frequency()` / `adaptive_cooldown_hours()` in `dsremo.ingest.utils` | ✅ Added | Shared across all CSV/YAMCS/InfluxDB scripts |
 | Auto-cooldown as default | ✅ Changed | Was opt-in flag; now default behavior (no `--auto-cooldown` needed) |
 | `variance_z_threshold` in channel_config | ✅ Added | Per-channel variance threshold override |
 | DB migration v16 | ✅ Applied | `ALTER TABLE channel_config ADD COLUMN variance_z_threshold REAL` |

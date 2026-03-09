@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from sentinel.core.models import Severity
-from sentinel.detection.isolation import IsolationForestDetector
+from dsremo.core.models import Severity
+from dsremo.detection.isolation import IsolationForestDetector
 
 
 class TestIsolationForestDetector:

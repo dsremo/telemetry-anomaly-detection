@@ -24,7 +24,7 @@ import httpx
 import pandas as pd
 from tqdm import tqdm
 
-from sentinel.ingest.esa_loader import ESADataLoader
+from dsremo.ingest.esa_loader import ESADataLoader
 
 API_BASE = "http://localhost:8400"
 BATCH_SIZE = 500            # API hard limit is 500 per batch

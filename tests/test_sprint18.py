@@ -39,7 +39,7 @@ class TestMADZScore:
     """StatisticalDetector now uses MAD-based z-score (spike-robust)."""
 
     def _detector(self):
-        from sentinel.detection.statistical import StatisticalDetector
+        from dsremo.detection.statistical import StatisticalDetector
         return StatisticalDetector(z_threshold=3.0, min_window=10)
 
     def test_mad_z_static_method_exists(self):
@@ -84,8 +84,8 @@ class TestMADZScore:
 
     def test_detect_uses_mad_when_window_available(self):
         """Detect returns is_anomaly=True for a clear spike using MAD path."""
-        from sentinel.detection.statistical import StatisticalDetector
-        from sentinel.features.engine import FeatureEngine
+        from dsremo.detection.statistical import StatisticalDetector
+        from dsremo.features.engine import FeatureEngine
 
         det = StatisticalDetector(z_threshold=3.0, min_window=10)
         engine = FeatureEngine()
@@ -105,8 +105,8 @@ class TestMADZScore:
 
     def test_detect_falls_back_to_std_z_when_no_window(self):
         """Without window_values, falls back to rolling-std z-score."""
-        from sentinel.detection.statistical import StatisticalDetector
-        from sentinel.features.engine import FeatureEngine
+        from dsremo.detection.statistical import StatisticalDetector
+        from dsremo.features.engine import FeatureEngine
 
         det = StatisticalDetector(z_threshold=3.0, min_window=10)
         engine = FeatureEngine()
@@ -121,8 +121,8 @@ class TestMADZScore:
         assert result.is_anomaly
 
     def test_detect_nominal_for_small_deviation(self):
-        from sentinel.detection.statistical import StatisticalDetector
-        from sentinel.features.engine import FeatureEngine
+        from dsremo.detection.statistical import StatisticalDetector
+        from dsremo.features.engine import FeatureEngine
 
         det = StatisticalDetector(z_threshold=3.0, min_window=10)
         engine = FeatureEngine()
@@ -133,8 +133,8 @@ class TestMADZScore:
         assert not result.is_anomaly
 
     def test_detect_constant_residual_guard_unchanged(self):
-        from sentinel.detection.statistical import StatisticalDetector
-        from sentinel.features.engine import FeatureEngine
+        from dsremo.detection.statistical import StatisticalDetector
+        from dsremo.features.engine import FeatureEngine
 
         det = StatisticalDetector()
         engine = FeatureEngine()
@@ -150,45 +150,45 @@ class TestStaleDataDetector:
     """Stale data detection in run_detection_cycle() — NASA ASIST pattern."""
 
     def _init(self, **kwargs):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors(_make_settings(**kwargs))
 
     def test_channel_last_seen_dict_exists_in_detector(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         assert hasattr(det_mod, "_channel_last_seen")
         assert isinstance(det_mod._channel_last_seen, dict)
 
     def test_stale_threshold_s_configurable(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         assert hasattr(det_mod, "_stale_threshold_s")
         assert det_mod._stale_threshold_s > 0
 
     def test_ttl_warn_min_configurable(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         assert hasattr(det_mod, "_ttl_warn_min")
         assert det_mod._ttl_warn_min > 0
 
     def test_init_detectors_clears_channel_last_seen(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         # Pollute the dict, then re-init
         det_mod._channel_last_seen["TEST:PARAM"] = 12345.0
         self._init()
         assert "TEST:PARAM" not in det_mod._channel_last_seen
 
     def test_init_detectors_reads_stale_threshold_from_config(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         self._init(stale_threshold_s=300.0)
         # Config sets stale_threshold_s: 300 — detector should pick it up
         assert det_mod._stale_threshold_s == 300.0
 
     def test_init_detectors_reads_ttl_warn_min_from_config(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         self._init(ttl_warn_min=60.0)
         assert det_mod._ttl_warn_min == 60.0
 
     def test_stale_anomaly_uses_stale_data_detector_name(self):
         """Stale anomaly fires with detector_name='stale_data'."""
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         from datetime import timedelta
 
         # Manually set a channel as last seen > threshold ago
@@ -204,14 +204,14 @@ class TestStaleDataDetector:
         assert gap_s > det_mod._stale_threshold_s, f"Expected gap {gap_s:.0f}s > threshold"
 
     def test_get_effective_thresholds_includes_hard_limits(self):
-        from sentinel.detection.detector import get_effective_thresholds, init_detectors
+        from dsremo.detection.detector import get_effective_thresholds, init_detectors
         init_detectors(_make_settings())
         eff = get_effective_thresholds("SAT-1", "TEMP")
         assert "hard_limit_high" in eff
         assert "hard_limit_low" in eff
 
     def test_hard_limit_defaults_are_none(self):
-        from sentinel.detection.detector import get_effective_thresholds, init_detectors
+        from dsremo.detection.detector import get_effective_thresholds, init_detectors
         init_detectors(_make_settings())
         eff = get_effective_thresholds("SAT-1", "TEMP")
         assert eff["hard_limit_high"] is None
@@ -224,7 +224,7 @@ class TestTTLPrediction:
     """Time-to-limit computation in run_detection_cycle()."""
 
     def _init(self, **kwargs):
-        from sentinel.detection.detector import init_detectors
+        from dsremo.detection.detector import init_detectors
         init_detectors(_make_settings(**kwargs))
 
     def test_ttl_computation_positive_velocity_high_limit(self):
@@ -263,7 +263,7 @@ class TestTTLPrediction:
 
     def test_ttl_warn_min_threshold_triggers_escalation(self):
         """If ttl_min < ttl_warn_min, severity should escalate."""
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         self._init(ttl_warn_min=60.0)
         ttl_warn = det_mod._ttl_warn_min   # 60
         ttl_imminent = ttl_warn / 4       # 15 min → CRITICAL
@@ -273,14 +273,14 @@ class TestTTLPrediction:
 
     def test_ttl_warn_fires_warning_for_moderate_ttl(self):
         """ttl between ttl_warn/3 and ttl_warn → WARNING (not CRITICAL)."""
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         self._init(ttl_warn_min=60.0)
         ttl_moderate = det_mod._ttl_warn_min * 0.6  # 36 min (> 20, < 60)
         assert ttl_moderate < det_mod._ttl_warn_min
         assert ttl_moderate > det_mod._ttl_warn_min / 3
 
     def test_channel_config_has_velocity_threshold_key(self):
-        from sentinel.detection.detector import get_effective_thresholds, init_detectors
+        from dsremo.detection.detector import get_effective_thresholds, init_detectors
         init_detectors(_make_settings())
         eff = get_effective_thresholds("SAT-1", "PARAM")
         assert "velocity_threshold" in eff
@@ -291,8 +291,8 @@ class TestTTLPrediction:
 def _make_health_app():
     """Minimal FastAPI app with only the health router — no DB."""
     from fastapi import FastAPI
-    from sentinel.api.dependencies import get_current_user
-    from sentinel.api.routes_health import health_router
+    from dsremo.api.dependencies import get_current_user
+    from dsremo.api.routes_health import health_router
 
     app = FastAPI()
     app.include_router(health_router, prefix="/api/v1")
@@ -306,7 +306,7 @@ def _make_health_app():
 
 
 def _mock_health_queries(rows=None):
-    import sentinel.api.routes_health as health_mod
+    import dsremo.api.routes_health as health_mod
     m = MagicMock()
     m.get_subsystem_health = AsyncMock(return_value=rows or [])
     return patch.object(health_mod, "queries", m)
@@ -371,7 +371,7 @@ class TestSubsystemHealthAPI:
         assert len(resp.json()) == 2
 
     def test_health_schema_fields_present(self):
-        from sentinel.api.schemas import SubsystemHealth
+        from dsremo.api.schemas import SubsystemHealth
         sh = SubsystemHealth(
             subsystem="eps",
             total_channels=4,
@@ -384,7 +384,7 @@ class TestSubsystemHealthAPI:
         assert sh.health == pytest.approx(0.75)
 
     def test_health_schema_health_is_float(self):
-        from sentinel.api.schemas import SubsystemHealth
+        from dsremo.api.schemas import SubsystemHealth
         sh = SubsystemHealth(subsystem="comms", total_channels=2,
                              anomalous_channels=0, health=1.0)
         assert isinstance(sh.health, float)
@@ -396,21 +396,21 @@ class TestSubsystemHealthQuery:
     """Unit tests for the DB query logic (pure logic, no DB needed)."""
 
     def test_memory_store_get_subsystem_health_exists(self):
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
         assert hasattr(memory_store, "get_subsystem_health")
 
     @pytest.mark.asyncio
     async def test_memory_store_returns_empty_list(self):
-        from sentinel.db.memory_store import get_subsystem_health
+        from dsremo.db.memory_store import get_subsystem_health
         result = await get_subsystem_health("ANY-SAT")
         assert result == []
 
     def test_migrations_schema_version_is_at_least_18(self):
-        from sentinel.db.migrations import SCHEMA_VERSION
+        from dsremo.db.migrations import SCHEMA_VERSION
         assert SCHEMA_VERSION >= 18
 
     def test_migrations_have_hard_limit_columns(self):
-        from sentinel.db.migrations import _MIGRATIONS
+        from dsremo.db.migrations import _MIGRATIONS
         sql_all = " ".join(_MIGRATIONS)
         assert "hard_limit_high" in sql_all
         assert "hard_limit_low" in sql_all

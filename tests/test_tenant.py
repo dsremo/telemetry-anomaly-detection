@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from sentinel.core.tenant import get_tenant, set_tenant
+from dsremo.core.tenant import get_tenant, set_tenant
 
 
 class TestGetTenant:

@@ -19,10 +19,10 @@ from unittest.mock import AsyncMock, patch
 import pandas as pd
 import pytest
 
-from sentinel.ingest.connector import DataConnector
-from sentinel.ingest.csv_connector import CSVConnector
-from sentinel.ingest.esa_loader import ESADataLoader
-from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
+from dsremo.ingest.connector import DataConnector
+from dsremo.ingest.csv_connector import CSVConnector
+from dsremo.ingest.esa_loader import ESADataLoader
+from dsremo.ingest.satnogs_fetcher import SatNOGSFetcher
 
 
 # ---------------------------------------------------------------------------
@@ -161,9 +161,9 @@ class TestCSVConnectorBulkLoad:
     @pytest.fixture(autouse=True)
     def _mock_upserts(self):
         with (
-            patch("sentinel.ingest.csv_connector.queries.upsert_satellite_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_satellite_seen",
                   new_callable=AsyncMock),
-            patch("sentinel.ingest.csv_connector.queries.upsert_channel_seen",
+            patch("dsremo.ingest.csv_connector.queries.upsert_channel_seen",
                   new_callable=AsyncMock),
         ):
             yield
@@ -175,8 +175,8 @@ class TestCSVConnectorBulkLoad:
             2024-01-01T00:01:00Z,3.4,1.3
         """)
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock) as mock_insert,
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock) as mock_insert,
         ):
             mock_check.return_value = 0
             mock_insert.return_value = 2
@@ -193,8 +193,8 @@ class TestCSVConnectorBulkLoad:
             2024-01-01T00:00:00Z,3.3,1.2
         """)
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock) as mock_insert,
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock) as mock_insert,
         ):
             mock_check.return_value = 60_000   # above default 50_000
             totals = await CSVConnector(f, "SAT-1").bulk_load_to_db()
@@ -213,9 +213,9 @@ class TestCSVConnectorBulkLoad:
             return 60_000 if param == "voltage" else 0
 
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count",
+            patch("dsremo.ingest.csv_connector.check_channel_row_count",
                   side_effect=check_side_effect),
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel",
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel",
                   new_callable=AsyncMock) as mock_insert,
         ):
             mock_insert.return_value = 1
@@ -239,8 +239,8 @@ class TestCSVConnectorBulkLoad:
             return len(kwargs["series"])
 
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
         ):
             mock_check.return_value = 0
             totals = await CSVConnector(f, "SAT-1").bulk_load_to_db()
@@ -262,8 +262,8 @@ class TestCSVConnectorBulkLoad:
             return len(kwargs["series"])
 
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
         ):
             mock_check.return_value = 0
             await CSVConnector(f, "SAT-1").bulk_load_to_db()
@@ -285,8 +285,8 @@ class TestCSVConnectorBulkLoad:
             return len(kwargs["series"])
 
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
         ):
             mock_check.return_value = 0
             # 120 1-min rows → 24 rows at 5-min resolution
@@ -298,8 +298,8 @@ class TestCSVConnectorBulkLoad:
     async def test_empty_csv_returns_empty_dict(self, tmp_path):
         f = _make_csv(tmp_path, "timestamp,voltage\n")
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock),
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock),
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock),
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock),
         ):
             totals = await CSVConnector(f, "SAT-1").bulk_load_to_db()
         assert totals == {}
@@ -310,8 +310,8 @@ class TestCSVConnectorBulkLoad:
             2024-01-01T00:00:00Z,3.3
         """)
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock) as mock_insert,
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", new_callable=AsyncMock) as mock_insert,
         ):
             mock_check.return_value = 0
             mock_insert.return_value = 1
@@ -332,8 +332,8 @@ class TestCSVConnectorBulkLoad:
             return 1
 
         with (
-            patch("sentinel.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
-            patch("sentinel.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
+            patch("dsremo.ingest.csv_connector.check_channel_row_count", new_callable=AsyncMock) as mock_check,
+            patch("dsremo.ingest.csv_connector.bulk_insert_channel", side_effect=fake_insert),
         ):
             mock_check.return_value = 0
             await CSVConnector(f, "SAT-1", subsystem="eps").bulk_load_to_db()

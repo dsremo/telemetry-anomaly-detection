@@ -1,4 +1,4 @@
-# Resources Needed for Sentinel
+# Resources Needed for Dsremo
 
 Paste paths, links, or credentials below. Items marked with 🔴 are BLOCKING — the project needs them to run.
 
@@ -49,7 +49,7 @@ https://phm-datasets.s3.amazonaws.com/NASA/5.+Battery+Data+Set.zip
 | Item | Value |
 |------|-------|
 | How to run | `docker-compose up db` (included in project) |
-| Manual setup | Install PostgreSQL 15+, create database `sentinel` |
+| Manual setup | Install PostgreSQL 15+, create database `dsremo` |
 
 > Docker handles this automatically. No action needed unless deploying to bare metal.
 

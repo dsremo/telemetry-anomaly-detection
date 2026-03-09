@@ -50,8 +50,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 async def _run(xml_path: Path, satellite_id: str, dry_run: bool) -> None:
-    from sentinel.ingest.xtce_parser import parse_xtce
-    from sentinel.ingest.pipeline import db_context, phase, print_run_header
+    from dsremo.ingest.xtce_parser import parse_xtce
+    from dsremo.ingest.pipeline import db_context, phase, print_run_header
 
     print_run_header(
         "XTCE Parameter Import",
@@ -90,7 +90,7 @@ async def _run(xml_path: Path, satellite_id: str, dry_run: bool) -> None:
 
     # --- Write to DB ---
     from datetime import datetime, timezone
-    from sentinel.db import queries
+    from dsremo.db import queries
 
     async with db_context():
         with phase("Registering channels"):

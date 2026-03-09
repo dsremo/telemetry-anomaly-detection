@@ -28,7 +28,7 @@ class TestV13Migration:
 
     @pytest.fixture(autouse=True)
     def _load(self):
-        from sentinel.db.migrations import _MIGRATIONS, SCHEMA_VERSION
+        from dsremo.db.migrations import _MIGRATIONS, SCHEMA_VERSION
         self.migrations = _MIGRATIONS
         self.schema_version = SCHEMA_VERSION
         # v13 is the last migration (index 12 in a 0-based list)
@@ -75,19 +75,19 @@ class TestChannelQuerySignatures:
     """Verify function signatures match the spec — catches API breakage."""
 
     def test_get_channel_stats_accepts_none(self):
-        from sentinel.db.queries import get_channel_stats
+        from dsremo.db.queries import get_channel_stats
         sig = inspect.signature(get_channel_stats)
         assert "satellite_id" in sig.parameters
         # Default must be None (optional filter)
         assert sig.parameters["satellite_id"].default is None
 
     def test_get_channel_config_has_two_positional_params(self):
-        from sentinel.db.queries import get_channel_config
+        from dsremo.db.queries import get_channel_config
         sig = inspect.signature(get_channel_config)
         assert set(sig.parameters) >= {"satellite_id", "parameter"}
 
     def test_upsert_channel_config_kwonly_fields(self):
-        from sentinel.db.queries import upsert_channel_config
+        from dsremo.db.queries import upsert_channel_config
         sig = inspect.signature(upsert_channel_config)
         kwonly = {
             name for name, p in sig.parameters.items()
@@ -99,14 +99,14 @@ class TestChannelQuerySignatures:
         assert expected.issubset(kwonly)
 
     def test_delete_channel_config_returns_bool_annotation(self):
-        from sentinel.db.queries import delete_channel_config
+        from dsremo.db.queries import delete_channel_config
         # Just check it exists with the right params
         sig = inspect.signature(delete_channel_config)
         assert "satellite_id" in sig.parameters
         assert "parameter" in sig.parameters
 
     def test_load_all_channel_configs_optional_satellite_id(self):
-        from sentinel.db.queries import load_all_channel_configs
+        from dsremo.db.queries import load_all_channel_configs
         sig = inspect.signature(load_all_channel_configs)
         assert "satellite_id" in sig.parameters
         assert sig.parameters["satellite_id"].default is None
@@ -122,12 +122,12 @@ class TestGetEffectiveThresholds:
     @pytest.fixture(autouse=True)
     def _setup(self):
         """Ensure detectors are initialized (sets _stat_detector.z_threshold)."""
-        from sentinel.detection.detector import init_detectors, load_channel_configs
+        from dsremo.detection.detector import init_detectors, load_channel_configs
         init_detectors({"detection": {"z_score_threshold": 3.0, "alert_cooldown_hours": 72.0}})
         load_channel_configs([])  # clear cache
 
     def test_returns_globals_when_no_override(self):
-        from sentinel.detection.detector import get_effective_thresholds
+        from dsremo.detection.detector import get_effective_thresholds
         eff = get_effective_thresholds("SAT-1", "voltage")
         assert eff["z_threshold"] == 3.0
         assert eff["min_confidence"] == 0.0
@@ -135,7 +135,7 @@ class TestGetEffectiveThresholds:
         assert eff["cusum_k"] is None
 
     def test_z_threshold_override_applied(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([{
             "satellite_id": "SAT-1", "parameter": "voltage", "z_threshold": 4.5,
             "cusum_h": None, "cusum_k": None,
@@ -146,7 +146,7 @@ class TestGetEffectiveThresholds:
         assert eff["z_threshold"] == 4.5
 
     def test_null_cusum_h_stays_none(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([{
             "satellite_id": "SAT-1", "parameter": "voltage", "z_threshold": 3.0,
             "cusum_h": None, "cusum_k": None,
@@ -157,7 +157,7 @@ class TestGetEffectiveThresholds:
         assert eff["cusum_h"] is None
 
     def test_cusum_h_override_applied(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([{
             "satellite_id": "SAT-1", "parameter": "voltage",
             "z_threshold": None, "cusum_h": 8.0, "cusum_k": None,
@@ -168,7 +168,7 @@ class TestGetEffectiveThresholds:
         assert eff["cusum_h"] == 8.0
 
     def test_alert_cooldown_override_applied(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([{
             "satellite_id": "SAT-1", "parameter": "voltage",
             "z_threshold": None, "cusum_h": None, "cusum_k": None,
@@ -179,7 +179,7 @@ class TestGetEffectiveThresholds:
         assert eff["alert_cooldown_s"] == 600
 
     def test_min_confidence_override_applied(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([{
             "satellite_id": "SAT-1", "parameter": "voltage",
             "z_threshold": None, "cusum_h": None, "cusum_k": None,
@@ -190,7 +190,7 @@ class TestGetEffectiveThresholds:
         assert eff["min_confidence"] == 0.6
 
     def test_unknown_channel_returns_globals(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([])
         eff = get_effective_thresholds("NOTEXIST", "notexist")
         assert eff["z_threshold"] == 3.0
@@ -198,7 +198,7 @@ class TestGetEffectiveThresholds:
         assert eff["cusum_h"] is None
 
     def test_different_channels_return_different_overrides(self):
-        from sentinel.detection.detector import load_channel_configs, get_effective_thresholds
+        from dsremo.detection.detector import load_channel_configs, get_effective_thresholds
         load_channel_configs([
             {"satellite_id": "SAT-A", "parameter": "v1", "z_threshold": 2.0,
              "cusum_h": None, "cusum_k": None, "ewma_lambda": None,
@@ -223,7 +223,7 @@ class TestApplyCalibrationOverrides:
     @pytest.fixture
     def calibrated_state(self):
         """A CalibrationState that has completed calibration."""
-        from sentinel.detection.calibration import CalibrationState
+        from dsremo.detection.calibration import CalibrationState
         state = CalibrationState()
         state.state = "calibrated"
         state.ref_std = 0.5
@@ -234,26 +234,26 @@ class TestApplyCalibrationOverrides:
         return state
 
     def test_cusum_h_applied_in_place(self, calibrated_state):
-        from sentinel.detection.detector import _apply_calibration_overrides
+        from dsremo.detection.detector import _apply_calibration_overrides
         eff = {"cusum_h": 10.0, "cusum_k": None, "ewma_lambda": None, "ewma_sigma_mult": None}
         _apply_calibration_overrides(calibrated_state, eff)
         assert calibrated_state.cusum_h == 10.0
 
     def test_cusum_k_applied_in_place(self, calibrated_state):
-        from sentinel.detection.detector import _apply_calibration_overrides
+        from dsremo.detection.detector import _apply_calibration_overrides
         eff = {"cusum_h": None, "cusum_k": 1.0, "ewma_lambda": None, "ewma_sigma_mult": None}
         _apply_calibration_overrides(calibrated_state, eff)
         assert calibrated_state.cusum_k == 1.0
 
     def test_none_cusum_h_not_applied(self, calibrated_state):
-        from sentinel.detection.detector import _apply_calibration_overrides
+        from dsremo.detection.detector import _apply_calibration_overrides
         original_h = calibrated_state.cusum_h
         eff = {"cusum_h": None, "cusum_k": None, "ewma_lambda": None, "ewma_sigma_mult": None}
         _apply_calibration_overrides(calibrated_state, eff)
         assert calibrated_state.cusum_h == original_h
 
     def test_none_cusum_k_not_applied(self, calibrated_state):
-        from sentinel.detection.detector import _apply_calibration_overrides
+        from dsremo.detection.detector import _apply_calibration_overrides
         original_k = calibrated_state.cusum_k
         eff = {"cusum_h": None, "cusum_k": None, "ewma_lambda": None, "ewma_sigma_mult": None}
         _apply_calibration_overrides(calibrated_state, eff)
@@ -262,18 +262,18 @@ class TestApplyCalibrationOverrides:
     def test_ewma_lambda_override_recomputes_ucl_lcl(self, calibrated_state):
         """Overriding ewma_lambda should recompute UCL/LCL from σ_ref."""
         import math
-        from sentinel.detection.detector import _apply_calibration_overrides
+        from dsremo.detection.detector import _apply_calibration_overrides
         eff = {"cusum_h": None, "cusum_k": None, "ewma_lambda": 0.1, "ewma_sigma_mult": None}
         _apply_calibration_overrides(calibrated_state, eff)
-        import sentinel.detection.calibration as cal_mod
+        import dsremo.detection.calibration as cal_mod
         expected_spread = math.sqrt(0.1 / (2.0 - 0.1))
         expected_ucl = cal_mod.EWMA_SIGMA_FACTOR * 0.5 * expected_spread
         assert abs(calibrated_state.ewma_ucl - expected_ucl) < 1e-9
 
     def test_ewma_not_applied_when_ref_std_zero(self):
         """When ref_std is 0 (uncalibrated), EWMA overrides are silently ignored."""
-        from sentinel.detection.calibration import CalibrationState
-        from sentinel.detection.detector import _apply_calibration_overrides
+        from dsremo.detection.calibration import CalibrationState
+        from dsremo.detection.detector import _apply_calibration_overrides
         state = CalibrationState()
         state.state = "warming_up"
         state.ref_std = 0.0
@@ -293,11 +293,11 @@ class TestLoadChannelConfigs:
 
     @pytest.fixture(autouse=True)
     def _clear(self):
-        from sentinel.detection.detector import load_channel_configs
+        from dsremo.detection.detector import load_channel_configs
         load_channel_configs([])  # start with empty cache
 
     def test_populates_cache_keyed_by_sat_param(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.load_channel_configs([{
             "satellite_id": "S1", "parameter": "p1",
             "z_threshold": 3.5, "cusum_h": None, "cusum_k": None,
@@ -307,7 +307,7 @@ class TestLoadChannelConfigs:
         assert ("S1", "p1") in det_mod._channel_config_cache
 
     def test_cache_has_correct_values(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.load_channel_configs([{
             "satellite_id": "S1", "parameter": "p1",
             "z_threshold": 4.2, "cusum_h": None, "cusum_k": None,
@@ -319,7 +319,7 @@ class TestLoadChannelConfigs:
         assert cfg["alert_cooldown_s"] == 300
 
     def test_replaces_cache_on_second_call(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.load_channel_configs([{
             "satellite_id": "S1", "parameter": "p1",
             "z_threshold": 1.0, "cusum_h": None, "cusum_k": None,
@@ -337,7 +337,7 @@ class TestLoadChannelConfigs:
         assert ("S2", "p2") in det_mod._channel_config_cache
 
     def test_empty_list_clears_cache(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.load_channel_configs([{
             "satellite_id": "S1", "parameter": "p1",
             "z_threshold": 1.0, "cusum_h": None, "cusum_k": None,
@@ -348,7 +348,7 @@ class TestLoadChannelConfigs:
         assert len(det_mod._channel_config_cache) == 0
 
     def test_multiple_channels_all_loaded(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         configs = [
             {"satellite_id": "S1", "parameter": f"p{i}",
              "z_threshold": float(i), "cusum_h": None, "cusum_k": None,
@@ -368,13 +368,13 @@ class TestChannelConfigInSchema:
     """Pydantic validation tests for the ChannelConfigIn input schema."""
 
     def test_all_none_is_valid(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn()
         assert cfg.z_threshold is None
         assert cfg.alert_cooldown_s is None
 
     def test_valid_override_accepted(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn(z_threshold=3.5, min_confidence=0.5, alert_cooldown_s=600)
         assert cfg.z_threshold == 3.5
         assert cfg.min_confidence == 0.5
@@ -382,32 +382,32 @@ class TestChannelConfigInSchema:
 
     def test_z_threshold_must_be_positive(self):
         from pydantic import ValidationError
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         with pytest.raises(ValidationError):
             ChannelConfigIn(z_threshold=0.0)
 
     def test_z_threshold_negative_rejected(self):
         from pydantic import ValidationError
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         with pytest.raises(ValidationError):
             ChannelConfigIn(z_threshold=-1.0)
 
     def test_ewma_lambda_must_be_in_range(self):
         from pydantic import ValidationError
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         with pytest.raises(ValidationError):
             ChannelConfigIn(ewma_lambda=0.0)
         with pytest.raises(ValidationError):
             ChannelConfigIn(ewma_lambda=1.1)
 
     def test_ewma_lambda_exactly_1_is_valid(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn(ewma_lambda=1.0)
         assert cfg.ewma_lambda == 1.0
 
     def test_min_confidence_must_be_0_to_1(self):
         from pydantic import ValidationError
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         with pytest.raises(ValidationError):
             ChannelConfigIn(min_confidence=-0.1)
         with pytest.raises(ValidationError):
@@ -415,12 +415,12 @@ class TestChannelConfigInSchema:
 
     def test_alert_cooldown_s_must_be_nonneg(self):
         from pydantic import ValidationError
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         with pytest.raises(ValidationError):
             ChannelConfigIn(alert_cooldown_s=-1)
 
     def test_alert_cooldown_zero_is_valid(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn(alert_cooldown_s=0)
         assert cfg.alert_cooldown_s == 0
 
@@ -432,7 +432,7 @@ class TestChannelConfigInSchema:
 @pytest.fixture(scope="module")
 def demo_client():
     """Demo-mode TestClient — no DB, memory_store used for all queries."""
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -562,7 +562,7 @@ class TestChannelsAPI:
 
     def test_put_config_refreshes_detector_cache(self, demo_client):
         """After PUT, get_effective_thresholds() should reflect the new value."""
-        from sentinel.detection.detector import get_effective_thresholds
+        from dsremo.detection.detector import get_effective_thresholds
         demo_client.put(
             "/api/v1/channels/SAT-CACHE/wheel_speed_x/config",
             json={"z_threshold": 7.7},
@@ -572,7 +572,7 @@ class TestChannelsAPI:
 
     def test_delete_config_refreshes_detector_cache(self, demo_client):
         """After DELETE, get_effective_thresholds() should fall back to global."""
-        from sentinel.detection.detector import get_effective_thresholds, init_detectors
+        from dsremo.detection.detector import get_effective_thresholds, init_detectors
         # Set known global default
         init_detectors({"detection": {"z_score_threshold": 3.0, "alert_cooldown_hours": 72.0}})
         demo_client.put(

@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sentinel.core.models import Anomaly, Severity
-from sentinel.explain.explainer import AnomalyExplainer
+from dsremo.core.models import Anomaly, Severity
+from dsremo.explain.explainer import AnomalyExplainer
 
 
 class TestAnomalyExplainer:

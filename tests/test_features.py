@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sentinel.features.engine import FeatureEngine, FeatureVector
+from dsremo.features.engine import FeatureEngine, FeatureVector
 
 
 class TestFeatureEngine:

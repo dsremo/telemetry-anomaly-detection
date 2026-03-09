@@ -22,7 +22,7 @@ import asyncpg
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from sentinel.eval.scoring import cluster_events, score
+from dsremo.eval.scoring import cluster_events, score
 
 
 DB_CONFIG = dict(

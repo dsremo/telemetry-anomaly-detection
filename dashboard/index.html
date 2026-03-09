@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sentinel — Anomaly Detection</title>
+    <title>Dsremo — Anomaly Detection</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -13,13 +13,13 @@
         <div class="topbar-left">
             <div class="logo">
                 <span class="logo-icon">◈</span>
-                <span class="logo-text">SENTINEL</span>
+                <span class="logo-text">DSREMO</span>
             </div>
             <span class="topbar-subtitle">Telemetry Anomaly Detection</span>
         </div>
         <div class="topbar-center">
-            <!-- Sentinel-only tenant context switcher (hidden for tenant users) -->
-            <select id="sentinelTenantSwitch" class="topbar-filter" style="display:none" title="View as tenant">
+            <!-- Dsremo-only tenant context switcher (hidden for tenant users) -->
+            <select id="dsremoTenantSwitch" class="topbar-filter" style="display:none" title="View as tenant">
                 <option value="">— Select Tenant —</option>
             </select>
             <select id="globalSatFilter" class="topbar-filter" title="Filter by satellite">
@@ -181,8 +181,8 @@
                 <div class="timeline-list" id="timelineList">
                     <div class="empty-state">No anomalies detected yet. Ingest telemetry to start.</div>
                 </div>
-                <!-- Infinite scroll sentinel — IntersectionObserver watches this -->
-                <div id="timelineScrollSentinel" style="height:1px"></div>
+                <!-- Infinite scroll dsremo — IntersectionObserver watches this -->
+                <div id="timelineScrollDsremo" style="height:1px"></div>
                 <div id="timelineLoadingSpinner" style="display:none;text-align:center;padding:12px;color:var(--text-muted);font-size:13px">
                     Loading older anomalies…
                 </div>
@@ -527,7 +527,7 @@
 
                     <!-- REST API Panel -->
                     <div id="connectorPanelApi">
-                        <p class="import-desc">Push telemetry directly from your ground station or middleware to Sentinel. Detection runs automatically after every batch.</p>
+                        <p class="import-desc">Push telemetry directly from your ground station or middleware to Dsremo. Detection runs automatically after every batch.</p>
                         <div class="editor-field">
                             <div class="editor-label"><span>Endpoint</span></div>
                             <div style="display:flex;gap:8px;align-items:center">
@@ -756,7 +756,7 @@
                 </div>
             </section>
 
-            <!-- ── Section 3: Tenants (sentinel_admin only) ─────────── -->
+            <!-- ── Section 3: Tenants (dsremo_admin only) ─────────── -->
             <section class="admin-section" id="adminTenants" style="display:none">
                 <div class="admin-section-header">
                     <h2>Tenants</h2>
@@ -786,7 +786,7 @@
                 </div>
             </section>
 
-            <!-- ── Section 4: Simulator (sentinel scope) ────────────── -->
+            <!-- ── Section 4: Simulator (dsremo scope) ────────────── -->
             <section class="admin-section" id="adminSimulator" style="display:none">
                 <div class="admin-section-header">
                     <h2>Spacecraft Simulator</h2>
@@ -930,7 +930,7 @@
         <div class="login-box">
             <div class="login-logo">
                 <span class="logo-icon">◈</span>
-                <span class="logo-text">SENTINEL</span>
+                <span class="logo-text">DSREMO</span>
             </div>
             <p class="login-subtitle">Telemetry Anomaly Detection Engine</p>
             <div class="login-error" id="loginError"></div>
@@ -965,7 +965,7 @@
                 </div>
                 <div class="login-field">
                     <label class="login-label" for="loginTenantId">
-                        Tenant ID <span style="color:var(--text-muted);font-weight:400">(leave blank for Sentinel staff)</span>
+                        Tenant ID <span style="color:var(--text-muted);font-weight:400">(leave blank for Dsremo staff)</span>
                     </label>
                     <input class="login-input" id="loginTenantId" type="text"
                         name="tenant_id" placeholder="e.g. esa-mission1"

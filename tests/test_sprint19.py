@@ -38,7 +38,7 @@ def _make_settings(**overrides):
 
 
 def _init(**kwargs):
-    from sentinel.detection.detector import init_detectors
+    from dsremo.detection.detector import init_detectors
     init_detectors(_make_settings(**kwargs))
 
 
@@ -48,7 +48,7 @@ class TestCorrelationGraphDetector:
     """CorrelationGraphDetector — STGLR-inspired cross-channel anomaly detection."""
 
     def _det(self, window=30, min_cal=20, sigma=3.0):
-        from sentinel.detection.correlation_detector import CorrelationGraphDetector
+        from dsremo.detection.correlation_detector import CorrelationGraphDetector
         return CorrelationGraphDetector(window=window, min_calibration=min_cal,
                                         threshold_sigma=sigma)
 
@@ -157,14 +157,14 @@ class TestCorrelationGraphDetector:
         assert 0.0 <= result.score <= 1.0
 
     def test_init_detectors_creates_correlation_detector_singleton(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         _init()
         assert hasattr(det_mod, "_correlation_detector")
-        from sentinel.detection.correlation_detector import CorrelationGraphDetector
+        from dsremo.detection.correlation_detector import CorrelationGraphDetector
         assert isinstance(det_mod._correlation_detector, CorrelationGraphDetector)
 
     def test_init_detectors_reads_corr_graph_config(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         _init(corr_graph_window=45, corr_graph_min_calibration=80,
               corr_graph_threshold_sigma=2.5)
         assert det_mod._corr_graph_window == 45
@@ -172,13 +172,13 @@ class TestCorrelationGraphDetector:
         assert det_mod._corr_graph_threshold_sigma == pytest.approx(2.5)
 
     def test_correlation_graph_in_weights(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         _init()
         assert "correlation_graph" in det_mod.WEIGHTS
         assert det_mod.WEIGHTS["correlation_graph"] > 0
 
     def test_eleven_detector_names_in_weights(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         _init()
         expected = {"cusum", "ewma", "statistical", "changepoint", "isolation_forest",
                     "variance", "lstm", "tcn", "trend_velocity", "matrix_profile",
@@ -186,7 +186,7 @@ class TestCorrelationGraphDetector:
         assert expected.issubset(det_mod.WEIGHTS.keys())
 
     def test_weights_sum_to_one(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         _init()
         total = sum(det_mod.WEIGHTS.values())
         assert total == pytest.approx(1.0, abs=0.01)
@@ -198,28 +198,28 @@ class TestHardLimitOverride:
     """Hard limit override bypasses ensemble for absolute redline breaches."""
 
     def test_hard_limit_high_field_in_channel_config_in(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn(hard_limit_high=100.0)
         assert cfg.hard_limit_high == pytest.approx(100.0)
 
     def test_hard_limit_low_field_in_channel_config_in(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn(hard_limit_low=-10.0)
         assert cfg.hard_limit_low == pytest.approx(-10.0)
 
     def test_velocity_threshold_field_in_channel_config_in(self):
-        from sentinel.api.schemas import ChannelConfigIn
+        from dsremo.api.schemas import ChannelConfigIn
         cfg = ChannelConfigIn(velocity_threshold=0.5)
         assert cfg.velocity_threshold == pytest.approx(0.5)
 
     def test_hard_limit_fields_in_override_fields(self):
-        from sentinel.api.routes_channels import _OVERRIDE_FIELDS
+        from dsremo.api.routes_channels import _OVERRIDE_FIELDS
         assert "hard_limit_high" in _OVERRIDE_FIELDS
         assert "hard_limit_low" in _OVERRIDE_FIELDS
         assert "velocity_threshold" in _OVERRIDE_FIELDS
 
     def test_hard_limit_in_effective_thresholds(self):
-        from sentinel.detection.detector import get_effective_thresholds, init_detectors
+        from dsremo.detection.detector import get_effective_thresholds, init_detectors
         init_detectors(_make_settings())
         eff = get_effective_thresholds("SAT", "PARAM")
         assert "hard_limit_high" in eff
@@ -244,7 +244,7 @@ class TestHardLimitOverride:
         assert not (value > 100.0 or value < 0.0)
 
     def test_hard_limit_defaults_none_in_effective(self):
-        from sentinel.detection.detector import get_effective_thresholds, init_detectors
+        from dsremo.detection.detector import get_effective_thresholds, init_detectors
         init_detectors(_make_settings())
         eff = get_effective_thresholds("SAT", "UNSET_PARAM")
         assert eff["hard_limit_high"] is None
@@ -252,7 +252,7 @@ class TestHardLimitOverride:
 
     def test_hard_limit_detector_name_in_explanation(self):
         """Suppression router and schema both importable (integration check)."""
-        from sentinel.api.routes_suppress import suppress_router
+        from dsremo.api.routes_suppress import suppress_router
         assert suppress_router is not None
 
 
@@ -260,8 +260,8 @@ class TestHardLimitOverride:
 
 def _make_suppress_app():
     from fastapi import FastAPI
-    from sentinel.api.dependencies import get_current_user
-    from sentinel.api.routes_suppress import suppress_router
+    from dsremo.api.dependencies import get_current_user
+    from dsremo.api.routes_suppress import suppress_router
 
     app = FastAPI()
     app.include_router(suppress_router, prefix="/api/v1")
@@ -276,52 +276,52 @@ class TestSuppressionWindows:
     """Alert suppression window API — maintenance mode muting."""
 
     def test_suppression_schemas_importable(self):
-        from sentinel.api.schemas import SuppressionIn, SuppressionOut
+        from dsremo.api.schemas import SuppressionIn, SuppressionOut
         assert SuppressionIn is not None
         assert SuppressionOut is not None
 
     def test_suppression_in_fields(self):
-        from sentinel.api.schemas import SuppressionIn
+        from dsremo.api.schemas import SuppressionIn
         s = SuppressionIn(parameter="TEMP_A", duration_min=30.0, reason="momentum dump")
         assert s.parameter == "TEMP_A"
         assert s.duration_min == pytest.approx(30.0)
         assert s.reason == "momentum dump"
 
     def test_suppression_out_fields(self):
-        from sentinel.api.schemas import SuppressionOut
+        from dsremo.api.schemas import SuppressionOut
         s = SuppressionOut(satellite_id="SAT", parameter="VOLT", duration_min=10.0,
                            reason=None, until_epoch=9999999.0)
         assert s.satellite_id == "SAT"
         assert s.until_epoch == pytest.approx(9999999.0)
 
     def test_suppress_channel_function_exists(self):
-        from sentinel.detection.detector import suppress_channel
+        from dsremo.detection.detector import suppress_channel
         assert callable(suppress_channel)
 
     def test_suppress_channel_returns_future_epoch(self):
-        from sentinel.detection.detector import suppress_channel
+        from dsremo.detection.detector import suppress_channel
         now = datetime.now(timezone.utc).timestamp()
         until = suppress_channel("SAT", "TEMP", 30.0)
         assert until > now + 29 * 60   # at least 29 min from now
 
     def test_lift_suppression_returns_true_when_active(self):
-        from sentinel.detection.detector import lift_suppression, suppress_channel
+        from dsremo.detection.detector import lift_suppression, suppress_channel
         suppress_channel("SAT-LIFT", "PARAM", 10.0)
         assert lift_suppression("SAT-LIFT", "PARAM") is True
 
     def test_lift_suppression_returns_false_when_not_active(self):
-        from sentinel.detection.detector import lift_suppression
+        from dsremo.detection.detector import lift_suppression
         assert lift_suppression("SAT-NONE", "GHOST") is False
 
     def test_list_suppressions_returns_active(self):
-        from sentinel.detection.detector import list_suppressions, suppress_channel
+        from dsremo.detection.detector import list_suppressions, suppress_channel
         suppress_channel("SAT-LIST", "VOLT", 60.0)
         items = list_suppressions("SAT-LIST")
         params = [i["parameter"] for i in items]
         assert "VOLT" in params
 
     def test_list_suppressions_excludes_other_satellites(self):
-        from sentinel.detection.detector import list_suppressions, suppress_channel
+        from dsremo.detection.detector import list_suppressions, suppress_channel
         suppress_channel("SAT-OTHER", "TEMP", 60.0)
         items = list_suppressions("SAT-DIFF")
         assert all(i["parameter"] != "TEMP" for i in items)
@@ -367,13 +367,13 @@ class TestSuppressionWindows:
         assert resp.status_code == 404
 
     def test_is_suppressed_helper(self):
-        from sentinel.detection.detector import _is_suppressed, suppress_channel
+        from dsremo.detection.detector import _is_suppressed, suppress_channel
         suppress_channel("SAT-IS", "PARAM_IS", 10.0)
         assert _is_suppressed("SAT-IS:PARAM_IS") is True
         assert _is_suppressed("SAT-IS:UNKNOWN") is False
 
     def test_suppressed_dict_cleared_by_init_detectors(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod._suppressed["DUMMY:PARAM"] = 9_999_999_999.0
         _init()
         assert "DUMMY:PARAM" not in det_mod._suppressed

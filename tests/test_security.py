@@ -2,7 +2,7 @@
 
 import pytest
 
-from sentinel.core.security import (
+from dsremo.core.security import (
     RateLimiter,
     generate_api_key,
     sanitize_identifier,

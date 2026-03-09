@@ -16,8 +16,8 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from sentinel.api.schemas import AnomalyOut, FeedbackIn
-from sentinel.core.models import Anomaly, Severity
+from dsremo.api.schemas import AnomalyOut, FeedbackIn
+from dsremo.core.models import Anomaly, Severity
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ def _make_anomaly_row(
 @pytest.fixture(scope="module")
 def demo_client():
     """Demo-mode TestClient — no DB, memory_store used for all queries."""
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -66,49 +66,49 @@ class TestAnomalyOutExtended:
 
     # 1 — ml_only=True when detectors_triggered=["lstm"]
     def test_ml_only_true_for_lstm_sole_detector(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=["lstm"])
         out = _row_to_anomaly(row)
         assert out.ml_only is True
 
     # 2 — ml_only=False when detectors_triggered=["cusum", "lstm"]
     def test_ml_only_false_when_stats_also_triggered(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=["cusum", "lstm"])
         out = _row_to_anomaly(row)
         assert out.ml_only is False
 
     # 3 — ml_only=False when only stats triggered (no lstm)
     def test_ml_only_false_for_stats_only(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=["cusum", "ewma", "variance"])
         out = _row_to_anomaly(row)
         assert out.ml_only is False
 
     # 4 — ml_only=False when detectors_triggered=[]
     def test_ml_only_false_for_empty_detectors(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=[])
         out = _row_to_anomaly(row)
         assert out.ml_only is False
 
     # 5 — reviewed field present with default False
     def test_reviewed_field_defaults_false(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row()
         out = _row_to_anomaly(row)
         assert out.reviewed is False
 
     # 6 — false_positive field present with default False
     def test_false_positive_field_defaults_false(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row()
         out = _row_to_anomaly(row)
         assert out.false_positive is False
 
     # 7 — _row_to_anomaly maps reviewed=True correctly
     def test_row_to_anomaly_maps_reviewed_true(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(reviewed=True, false_positive=False)
         out = _row_to_anomaly(row)
         assert out.reviewed is True
@@ -131,7 +131,7 @@ class TestFeedbackEndpoint:
     @pytest.fixture(autouse=True)
     def _seed_anomaly(self, demo_client):
         """Insert one anomaly via telemetry + run_detection, or directly via memory_store."""
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
         import asyncio
         # Insert anomaly directly into memory_store
         anomaly = Anomaly(
@@ -275,7 +275,7 @@ class TestMLOnlyFilter:
     @pytest.fixture(autouse=True)
     def _seed_mixed_anomalies(self, demo_client):
         """Seed stats-only, ml-only, and mixed anomalies."""
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
         import asyncio
 
         loop = asyncio.get_event_loop()
@@ -351,19 +351,19 @@ class TestMLOnlyFilter:
 
     # 5 — ml_only field computed correctly: ["lstm"] → True
     def test_ml_only_computed_for_lstm_list(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=["lstm"])
         assert _row_to_anomaly(row).ml_only is True
 
     # 6 — ml_only field computed correctly: ["cusum", "lstm"] → False
     def test_ml_only_computed_for_mixed_list(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=["cusum", "lstm"])
         assert _row_to_anomaly(row).ml_only is False
 
     # 7 — ml_only field computed correctly: [] → False
     def test_ml_only_computed_for_empty_list(self):
-        from sentinel.api.routes import _row_to_anomaly
+        from dsremo.api.routes import _row_to_anomaly
         row = _make_anomaly_row(detectors=[])
         assert _row_to_anomaly(row).ml_only is False
 
@@ -389,7 +389,7 @@ class TestMemoryStoreFeedback:
     def _seed(self):
         """Insert a fresh anomaly into memory_store before each test."""
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         self._anomaly_id = "mem-fb-001"
@@ -409,7 +409,7 @@ class TestMemoryStoreFeedback:
     # 1 — update_anomaly_review(id, fp=True) sets reviewed=True, fp=True
     def test_update_review_marks_false_positive(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         result = loop.run_until_complete(
@@ -423,7 +423,7 @@ class TestMemoryStoreFeedback:
     # 2 — update_anomaly_review(id, fp=False) sets reviewed=True, fp=False
     def test_update_review_marks_true_positive(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         result = loop.run_until_complete(
@@ -437,7 +437,7 @@ class TestMemoryStoreFeedback:
     # 3 — update_anomaly_review non-existent id → returns False
     def test_update_review_nonexistent_returns_false(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         result = loop.run_until_complete(
@@ -448,7 +448,7 @@ class TestMemoryStoreFeedback:
     # 4 — update_anomaly_review existing → returns True
     def test_update_review_existing_returns_true(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         result = loop.run_until_complete(
@@ -459,7 +459,7 @@ class TestMemoryStoreFeedback:
     # 5 — _anomaly_to_dict includes reviewed=False by default (fresh insert)
     def test_anomaly_to_dict_reviewed_default_false(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         # Insert a brand-new anomaly to avoid interference from prior test modifications
@@ -482,7 +482,7 @@ class TestMemoryStoreFeedback:
     # 6 — _anomaly_to_dict includes false_positive=False by default (fresh insert)
     def test_anomaly_to_dict_false_positive_default_false(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         fresh = Anomaly(
@@ -504,7 +504,7 @@ class TestMemoryStoreFeedback:
     # 7 — get_anomaly_by_id returns updated values after review
     def test_get_anomaly_by_id_reflects_update(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         loop.run_until_complete(
@@ -517,7 +517,7 @@ class TestMemoryStoreFeedback:
     # 8 — mark_false_positive shim still works (backward compat)
     def test_mark_false_positive_still_works(self):
         import asyncio
-        from sentinel.db import memory_store
+        from dsremo.db import memory_store
 
         loop = asyncio.get_event_loop()
         result = loop.run_until_complete(

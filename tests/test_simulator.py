@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from sentinel.simulate.spacecraft import SpacecraftSimulator
-from sentinel.simulate.injector import SCENARIOS, apply_scenario, list_scenarios
+from dsremo.simulate.spacecraft import SpacecraftSimulator
+from dsremo.simulate.injector import SCENARIOS, apply_scenario, list_scenarios
 
 
 class TestSpacecraftSimulator:

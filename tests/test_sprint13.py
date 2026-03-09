@@ -46,7 +46,7 @@ class TestTCNDetector:
     # ── Construction ─────────────────────────────────────────────────────────
 
     def test_construction_defaults(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector()
         assert det.seq_length == 32
         assert det.n_channels == 16
@@ -58,7 +58,7 @@ class TestTCNDetector:
         assert det.threshold_sigma == 3.0
 
     def test_construction_custom_params(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, n_channels=8, n_blocks=2, epochs=10, min_train_samples=32)
         assert det.seq_length == 16
         assert det.n_channels == 8
@@ -69,7 +69,7 @@ class TestTCNDetector:
     # ── add_sample / sample_count ─────────────────────────────────────────────
 
     def test_add_sample_increments_count(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16)
         assert det.sample_count == 0
         det.add_sample(1.0)
@@ -79,7 +79,7 @@ class TestTCNDetector:
     # ── Fit behaviour ─────────────────────────────────────────────────────────
 
     def test_fit_with_sufficient_data_sets_is_fitted(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, epochs=3)
         normal = _sine_wave(100, period=8, noise=0.02)
         for v in normal:
@@ -88,7 +88,7 @@ class TestTCNDetector:
         assert det.is_fitted is True
 
     def test_fit_with_insufficient_data_stays_unfitted(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=64, epochs=3)
         for v in _sine_wave(30, period=8, noise=0.02):
             det.add_sample(v)
@@ -96,7 +96,7 @@ class TestTCNDetector:
         assert det.is_fitted is False
 
     def test_fit_sets_threshold_positive(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, epochs=5)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -104,7 +104,7 @@ class TestTCNDetector:
         assert det._threshold > 0.0
 
     def test_fit_resets_samples_since_fit(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, epochs=3)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -114,7 +114,7 @@ class TestTCNDetector:
     # ── needs_refit ──────────────────────────────────────────────────────────
 
     def test_needs_refit_false_before_interval(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, retrain_interval=50, epochs=3)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -124,7 +124,7 @@ class TestTCNDetector:
         assert det.needs_refit() is False
 
     def test_needs_refit_true_after_interval(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, retrain_interval=10, epochs=3)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -136,8 +136,8 @@ class TestTCNDetector:
     # ── detect: no-fit / insufficient data ───────────────────────────────────
 
     def test_detect_without_fit_returns_nominal(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16)
         result = det.detect([0.1] * 20)
         assert result.is_anomaly is False
@@ -145,8 +145,8 @@ class TestTCNDetector:
         assert result.details.get("reason") == "model_not_fitted"
 
     def test_detect_insufficient_residuals_returns_nominal(self) -> None:
-        from sentinel.core.models import Severity
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.core.models import Severity
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, min_train_samples=32, epochs=3)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -159,7 +159,7 @@ class TestTCNDetector:
     # ── detect: in-distribution vs anomaly ───────────────────────────────────
 
     def test_detect_normal_sequence_low_score(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, min_train_samples=32, epochs=10)
         normal = _sine_wave(200, period=16, noise=0.02)
         for v in normal:
@@ -170,7 +170,7 @@ class TestTCNDetector:
         assert result.is_anomaly is False
 
     def test_detect_anomalous_sequence_fires(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, min_train_samples=32, epochs=10)
         normal = _sine_wave(200, period=16, noise=0.02)
         for v in normal:
@@ -182,7 +182,7 @@ class TestTCNDetector:
     # ── Score clamping ────────────────────────────────────────────────────────
 
     def test_score_clamped_to_unit_interval(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, min_train_samples=32, epochs=5)
         normal = _sine_wave(200, period=16, noise=0.02)
         for v in normal:
@@ -195,7 +195,7 @@ class TestTCNDetector:
     # ── Model size ────────────────────────────────────────────────────────────
 
     def test_model_parameter_count_under_10k(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, min_train_samples=32, n_channels=16, n_blocks=4, epochs=3)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -207,7 +207,7 @@ class TestTCNDetector:
     # ── details dict keys ─────────────────────────────────────────────────────
 
     def test_detect_anomaly_details_keys(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=16, min_train_samples=32, epochs=5)
         normal = _sine_wave(200, period=16, noise=0.02)
         for v in normal:
@@ -229,20 +229,20 @@ class TestEnsembleWith8Detectors:
     """Ensemble-level tests after adding TCN as 8th detector."""
 
     def test_weights_sum_to_one(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         total = sum(WEIGHTS.values())
         assert abs(total - 1.0) < 1e-9, f"WEIGHTS sum = {total}"
 
     def test_tcn_key_present_in_weights(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert "tcn" in WEIGHTS
 
     def test_lstm_key_still_present(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert "lstm" in WEIGHTS
 
     def test_eight_detector_names_in_weights(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         # Sprint 13 added tcn — subsequent sprints may add more detectors, so
         # check all Sprint-13 keys are present (subset), not exact equality.
         expected = {"cusum", "ewma", "statistical", "changepoint",
@@ -250,8 +250,8 @@ class TestEnsembleWith8Detectors:
         assert expected.issubset(set(WEIGHTS.keys()))
 
     def test_build_explanation_handles_tcn(self) -> None:
-        from sentinel.core.models import DetectorResult, Severity
-        from sentinel.detection.detector import _build_explanation
+        from dsremo.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _build_explanation
 
         tcn_result = DetectorResult(
             detector_name="tcn",
@@ -277,15 +277,15 @@ class TestEnsembleWith8Detectors:
         assert "TCN" in explanation
 
     def test_tcn_weight_less_than_cusum(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert WEIGHTS["tcn"] < WEIGHTS["cusum"]
 
     def test_cusum_still_highest_weight(self) -> None:
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert WEIGHTS["cusum"] == max(WEIGHTS.values())
 
     def test_init_detectors_reads_tcn_seq_length(self) -> None:
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
         fake_settings = {
             "detection": {"tcn_seq_length": 48, "tcn_epochs": 20},
             "features":  {},
@@ -303,25 +303,25 @@ class TestTCNIntegration:
     """Test that TCN is wired correctly into the ensemble orchestrator."""
 
     def test_get_tcn_model_returns_tcn_detector(self) -> None:
-        from sentinel.detection.detector import _get_tcn_model
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.detector import _get_tcn_model
+        from dsremo.detection.tcn_detector import TCNDetector
         model = _get_tcn_model("sat-A", "pressure")
         assert isinstance(model, TCNDetector)
 
     def test_same_key_returns_same_instance(self) -> None:
-        from sentinel.detection.detector import _get_tcn_model
+        from dsremo.detection.detector import _get_tcn_model
         m1 = _get_tcn_model("sat-B", "temperature")
         m2 = _get_tcn_model("sat-B", "temperature")
         assert m1 is m2
 
     def test_different_key_returns_different_instance(self) -> None:
-        from sentinel.detection.detector import _get_tcn_model
+        from dsremo.detection.detector import _get_tcn_model
         m1 = _get_tcn_model("sat-C", "param1")
         m2 = _get_tcn_model("sat-C", "param2")
         assert m1 is not m2
 
     def test_after_enough_samples_becomes_fitted(self) -> None:
-        from sentinel.detection.detector import _get_tcn_model
+        from dsremo.detection.detector import _get_tcn_model
         import random; random.seed(7)
         det = _get_tcn_model("sat-D", "voltage_test_fit")
         det.__class__.__init__(det, seq_length=8, min_train_samples=16, epochs=3)
@@ -333,7 +333,7 @@ class TestTCNIntegration:
         assert det.is_fitted is True
 
     def test_detect_on_trained_model_returns_tcn_result(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, epochs=3)
         normal = _sine_wave(80, period=8, noise=0.02)
         for v in normal:
@@ -343,7 +343,7 @@ class TestTCNIntegration:
         assert result.detector_name == "tcn"
 
     def test_retrain_triggered_after_interval(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, retrain_interval=10, epochs=3)
         for v in _sine_wave(80, period=8, noise=0.02):
             det.add_sample(v)
@@ -353,7 +353,7 @@ class TestTCNIntegration:
         assert det.needs_refit() is True
 
     def test_torch_not_available_path_returns_nominal(self) -> None:
-        from sentinel.detection.tcn_detector import TCNDetector
+        from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=8, min_train_samples=16, epochs=3)
         # Manually mark as fitted so detect() tries to run inference
         det._is_fitted = True

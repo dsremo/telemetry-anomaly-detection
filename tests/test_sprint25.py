@@ -2,7 +2,7 @@
 
 All tests are pure unit tests — no database required.
 Tests cover:
-  - create_sentinel_token() — scope, claims, encoding
+  - create_dsremo_token() — scope, claims, encoding
   - Permission hierarchy — require_* role checks, escalation guard
   - Schema validation — TenantIn, UserCreateRequest, UpdateRoleRequest,
     ChangePasswordRequest, ApiKeyCreateRequest
@@ -13,12 +13,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from sentinel.core.security import (
+from dsremo.core.security import (
     create_access_token,
-    create_sentinel_token,
+    create_dsremo_token,
     decode_access_token,
 )
-from sentinel.api.schemas import (
+from dsremo.api.schemas import (
     ApiKeyCreateRequest,
     ChangePasswordRequest,
     TenantIn,
@@ -35,46 +35,46 @@ _SECRET = "test-secret-key-that-is-long-enough-for-hs256"
 # ---------------------------------------------------------------------------
 
 class TestSentinelToken:
-    def test_scope_is_sentinel(self):
-        token = create_sentinel_token("uid-1", "superuser", _SECRET)
+    def test_scope_is_dsremo(self):
+        token = create_dsremo_token("uid-1", "superuser", _SECRET)
         payload = decode_access_token(token, _SECRET)
-        assert payload["scope"] == "sentinel"
+        assert payload["scope"] == "dsremo"
 
     def test_no_tid_claim(self):
-        token = create_sentinel_token("uid-1", "sentinel_admin", _SECRET)
+        token = create_dsremo_token("uid-1", "dsremo_admin", _SECRET)
         payload = decode_access_token(token, _SECRET)
         assert "tid" not in payload
 
     def test_sub_and_role_present(self):
-        token = create_sentinel_token("uid-xyz", "developer", _SECRET)
+        token = create_dsremo_token("uid-xyz", "developer", _SECRET)
         payload = decode_access_token(token, _SECRET)
         assert payload["sub"] == "uid-xyz"
         assert payload["role"] == "developer"
 
-    def test_all_sentinel_roles_encodable(self):
-        for role in ("superuser", "sentinel_admin", "developer"):
-            token = create_sentinel_token("u", role, _SECRET)
+    def test_all_dsremo_roles_encodable(self):
+        for role in ("superuser", "dsremo_admin", "developer"):
+            token = create_dsremo_token("u", role, _SECRET)
             payload = decode_access_token(token, _SECRET)
             assert payload["role"] == role
 
-    def test_sentinel_and_tenant_tokens_differ_by_scope(self):
-        st = create_sentinel_token("u", "superuser", _SECRET)
+    def test_dsremo_and_tenant_tokens_differ_by_scope(self):
+        st = create_dsremo_token("u", "superuser", _SECRET)
         tt = create_access_token("u", "acme", "admin", _SECRET)
         sp = decode_access_token(st, _SECRET)
         tp = decode_access_token(tt, _SECRET)
-        assert sp.get("scope") == "sentinel"
+        assert sp.get("scope") == "dsremo"
         assert "scope" not in tp  # tenant tokens have no scope claim
 
     def test_ttl_honoured(self):
         import time
-        token = create_sentinel_token("u", "superuser", _SECRET, ttl_seconds=3600)
+        token = create_dsremo_token("u", "superuser", _SECRET, ttl_seconds=3600)
         payload = decode_access_token(token, _SECRET)
         remaining = payload["exp"] - int(time.time())
         assert 3595 <= remaining <= 3605
 
-    def test_expired_sentinel_token_raises(self):
+    def test_expired_dsremo_token_raises(self):
         import jwt
-        token = create_sentinel_token("u", "superuser", _SECRET, ttl_seconds=-1)
+        token = create_dsremo_token("u", "superuser", _SECRET, ttl_seconds=-1)
         with pytest.raises(jwt.ExpiredSignatureError):
             decode_access_token(token, _SECRET)
 
@@ -89,43 +89,43 @@ class TestPermissionHierarchy:
     def _check(self, user_role: str, allowed_roles: tuple[str, ...]) -> bool:
         return user_role in allowed_roles
 
-    # Sentinel roles should pass sentinel-level checks
-    def test_superuser_passes_sentinel_admin_check(self):
-        allowed = ("superuser", "sentinel_admin")
+    # Dsremo roles should pass dsremo-level checks
+    def test_superuser_passes_dsremo_admin_check(self):
+        allowed = ("superuser", "dsremo_admin")
         assert self._check("superuser", allowed)
 
-    def test_sentinel_admin_passes_tenant_admin_check(self):
-        allowed = ("admin", "superuser", "sentinel_admin")
-        assert self._check("sentinel_admin", allowed)
+    def test_dsremo_admin_passes_tenant_admin_check(self):
+        allowed = ("admin", "superuser", "dsremo_admin")
+        assert self._check("dsremo_admin", allowed)
 
     def test_developer_passes_viewer_check(self):
         allowed = (
             "admin", "tenant_manager", "operator", "viewer", "report_only",
-            "superuser", "sentinel_admin", "developer",
+            "superuser", "dsremo_admin", "developer",
         )
         assert self._check("developer", allowed)
 
     def test_developer_blocked_from_tenant_admin(self):
-        allowed = ("admin", "superuser", "sentinel_admin")
+        allowed = ("admin", "superuser", "dsremo_admin")
         assert not self._check("developer", allowed)
 
     def test_tenant_manager_passes_operator_check(self):
-        allowed = ("admin", "tenant_manager", "operator", "superuser", "sentinel_admin")
+        allowed = ("admin", "tenant_manager", "operator", "superuser", "dsremo_admin")
         assert self._check("tenant_manager", allowed)
 
     def test_tenant_manager_blocked_from_tenant_admin(self):
-        allowed = ("admin", "superuser", "sentinel_admin")
+        allowed = ("admin", "superuser", "dsremo_admin")
         assert not self._check("tenant_manager", allowed)
 
     def test_operator_blocked_from_admin_check(self):
-        allowed = ("admin", "superuser", "sentinel_admin")
+        allowed = ("admin", "superuser", "dsremo_admin")
         assert not self._check("operator", allowed)
 
     def test_unknown_role_blocked_everywhere(self):
         for allowed in [
             ("admin",),
-            ("admin", "superuser", "sentinel_admin"),
-            ("superuser", "sentinel_admin", "developer"),
+            ("admin", "superuser", "dsremo_admin"),
+            ("superuser", "dsremo_admin", "developer"),
         ]:
             assert not self._check("hackerole", allowed)
 
@@ -145,19 +145,19 @@ class TestRoleEscalationGuard:
         "tenant_manager": 3,
         "admin":          4,
     }
-    _SENTINEL_ROLES = frozenset({"developer", "sentinel_admin", "superuser"})
+    _DSREMO_ROLES = frozenset({"developer", "dsremo_admin", "superuser"})
 
     def _max_tier(self, role: str) -> int:
-        if role in self._SENTINEL_ROLES:
+        if role in self._DSREMO_ROLES:
             return 4
         return self._TENANT_ROLE_TIER.get(role, -1)
 
     def _can_assign(self, requester: str, target: str) -> bool:
         return self._TENANT_ROLE_TIER.get(target, -1) <= self._max_tier(requester)
 
-    def test_sentinel_admin_can_assign_any_tenant_role(self):
+    def test_dsremo_admin_can_assign_any_tenant_role(self):
         for role in ("report_only", "viewer", "operator", "tenant_manager", "admin"):
-            assert self._can_assign("sentinel_admin", role)
+            assert self._can_assign("dsremo_admin", role)
 
     def test_superuser_can_assign_any_tenant_role(self):
         for role in ("report_only", "viewer", "operator", "tenant_manager", "admin"):
@@ -288,7 +288,7 @@ class TestUpdateRoleRequestSchema:
 
     def test_invalid_role_rejected(self):
         with pytest.raises(ValidationError):
-            UpdateRoleRequest(role="sentinel_admin")
+            UpdateRoleRequest(role="dsremo_admin")
 
     def test_empty_role_rejected(self):
         with pytest.raises(ValidationError):

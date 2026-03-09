@@ -36,7 +36,7 @@ class TestV14Migration:
 
     @pytest.fixture(autouse=True)
     def _load(self):
-        from sentinel.db.migrations import _MIGRATIONS, SCHEMA_VERSION
+        from dsremo.db.migrations import _MIGRATIONS, SCHEMA_VERSION
         self.schema_version = SCHEMA_VERSION
         self.all_migrations = _MIGRATIONS
         # v14 is at index 13 (0-based); v15 display_name/phone migration is at index 14
@@ -83,7 +83,7 @@ class TestAlertRouters:
     """Tests for WebhookRouter and EmailRouter send() methods."""
 
     def _make_anomaly(self, severity="warning"):
-        from sentinel.core.models import Anomaly, Severity
+        from dsremo.core.models import Anomaly, Severity
         sev_map = {
             "warning": Severity.WARNING,
             "critical": Severity.CRITICAL,
@@ -101,7 +101,7 @@ class TestAlertRouters:
 
     @pytest.mark.asyncio
     async def test_webhook_send_success(self):
-        from sentinel.alerts.service import WebhookRouter
+        from dsremo.alerts.service import WebhookRouter
         router = WebhookRouter(url="http://example.com/hook")
         anomaly = self._make_anomaly()
 
@@ -121,7 +121,7 @@ class TestAlertRouters:
 
     @pytest.mark.asyncio
     async def test_webhook_send_429_retries(self):
-        from sentinel.alerts.service import WebhookRouter
+        from dsremo.alerts.service import WebhookRouter
         router = WebhookRouter(url="http://example.com/hook")
         anomaly = self._make_anomaly()
 
@@ -146,7 +146,7 @@ class TestAlertRouters:
 
     @pytest.mark.asyncio
     async def test_webhook_hmac_header_present_when_secret_set(self):
-        from sentinel.alerts.service import WebhookRouter
+        from dsremo.alerts.service import WebhookRouter
         router = WebhookRouter(url="http://example.com/hook", secret="mysecret")
         anomaly = self._make_anomaly()
 
@@ -173,7 +173,7 @@ class TestAlertRouters:
 
     @pytest.mark.asyncio
     async def test_webhook_transport_error_returns_false(self):
-        from sentinel.alerts.service import WebhookRouter
+        from dsremo.alerts.service import WebhookRouter
         router = WebhookRouter(url="http://example.com/hook")
         anomaly = self._make_anomaly()
 
@@ -192,7 +192,7 @@ class TestAlertRouters:
 
     @pytest.mark.asyncio
     async def test_email_send_success(self):
-        from sentinel.alerts.service import EmailRouter
+        from dsremo.alerts.service import EmailRouter
         router = EmailRouter(
             host="smtp.example.com",
             port=587,
@@ -215,7 +215,7 @@ class TestAlertRouters:
 
     @pytest.mark.asyncio
     async def test_email_smtp_exception_returns_false(self):
-        from sentinel.alerts.service import EmailRouter
+        from dsremo.alerts.service import EmailRouter
         router = EmailRouter(
             host="smtp.example.com",
             port=587,
@@ -232,7 +232,7 @@ class TestAlertRouters:
         assert result is False
 
     def test_build_routers_webhook_only(self):
-        from sentinel.alerts.service import WebhookRouter, _build_routers
+        from dsremo.alerts.service import WebhookRouter, _build_routers
         config = {
             "enabled": True,
             "webhook_url": "http://example.com/hook",
@@ -245,7 +245,7 @@ class TestAlertRouters:
         assert isinstance(routers[0], WebhookRouter)
 
     def test_build_routers_empty_when_disabled(self):
-        from sentinel.alerts.service import _build_routers
+        from dsremo.alerts.service import _build_routers
         config = {
             "enabled": False,
             "webhook_url": "http://example.com/hook",
@@ -264,7 +264,7 @@ class TestAlertServiceDispatch:
     @pytest.fixture(autouse=True)
     def _reset_service(self):
         """Reset AlertService class-level state before each test."""
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         AlertService._config_cache = {}
         AlertService._dedup = {}
         AlertService._escalation = {}
@@ -274,7 +274,7 @@ class TestAlertServiceDispatch:
         AlertService._escalation = {}
 
     def _make_anomaly(self, severity="warning"):
-        from sentinel.core.models import Anomaly, Severity
+        from dsremo.core.models import Anomaly, Severity
         sev_map = {"warning": Severity.WARNING, "critical": Severity.CRITICAL}
         return Anomaly(
             satellite_id="SAT-1",
@@ -287,7 +287,7 @@ class TestAlertServiceDispatch:
         )
 
     def test_load_configs_populates_cache(self):
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         AlertService.load_configs([
             {"tenant_id": "t1", "enabled": True, "min_severity": "warning",
              "webhook_url": "http://x.com", "webhook_secret": None,
@@ -298,7 +298,7 @@ class TestAlertServiceDispatch:
         assert "t1" in AlertService._config_cache
 
     def test_load_configs_replaces_previous_cache(self):
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         AlertService.load_configs([
             {"tenant_id": "old", "enabled": True, "min_severity": "warning",
              "webhook_url": None, "webhook_secret": None, "email_to": None,
@@ -316,14 +316,14 @@ class TestAlertServiceDispatch:
 
     @pytest.mark.asyncio
     async def test_dispatch_skips_when_no_config(self):
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         # No config loaded → dispatch returns False immediately
         result = await AlertService.dispatch(self._make_anomaly(), "nonexistent-tenant")
         assert result is False
 
     @pytest.mark.asyncio
     async def test_dispatch_skips_when_disabled(self):
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         AlertService.load_configs([
             {"tenant_id": "t1", "enabled": False, "min_severity": "warning",
              "webhook_url": "http://x.com", "webhook_secret": None, "email_to": None,
@@ -335,7 +335,7 @@ class TestAlertServiceDispatch:
 
     @pytest.mark.asyncio
     async def test_dispatch_skips_below_min_severity(self):
-        from sentinel.alerts.service import AlertService, Anomaly, Severity
+        from dsremo.alerts.service import AlertService, Anomaly, Severity
         AlertService.load_configs([
             {"tenant_id": "t1", "enabled": True, "min_severity": "critical",
              "webhook_url": None, "webhook_secret": None, "email_to": None,
@@ -350,7 +350,7 @@ class TestAlertServiceDispatch:
     @pytest.mark.asyncio
     async def test_dedup_key_includes_tenant_id(self):
         """Verify dedup key is f'{tenant_id}::{sat}::{param}' — no cross-tenant collision."""
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         config = {
             "tenant_id": "t1", "enabled": True, "min_severity": "warning",
             "webhook_url": None, "webhook_secret": None, "email_to": None,
@@ -359,7 +359,7 @@ class TestAlertServiceDispatch:
         }
         AlertService.load_configs([config])
 
-        with patch("sentinel.db.queries.insert_alert", new_callable=AsyncMock):
+        with patch("dsremo.db.queries.insert_alert", new_callable=AsyncMock):
             await AlertService.dispatch(self._make_anomaly(), "t1")
 
         # Key must include tenant_id
@@ -370,7 +370,7 @@ class TestAlertServiceDispatch:
     @pytest.mark.asyncio
     async def test_insert_alert_called_on_dispatch(self):
         """Fixes the bug: alerts must be persisted even if routers are empty."""
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         AlertService.load_configs([
             {"tenant_id": "t1", "enabled": True, "min_severity": "warning",
              "webhook_url": None, "webhook_secret": None, "email_to": None,
@@ -378,13 +378,13 @@ class TestAlertServiceDispatch:
              "dedup_window_s": 300, "escalation_delay_s": 600},
         ])
 
-        with patch("sentinel.db.queries.insert_alert", new_callable=AsyncMock) as mock_insert:
+        with patch("dsremo.db.queries.insert_alert", new_callable=AsyncMock) as mock_insert:
             await AlertService.dispatch(self._make_anomaly(), "t1")
             mock_insert.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_dedup_suppresses_repeat_within_window(self):
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         AlertService.load_configs([
             {"tenant_id": "t1", "enabled": True, "min_severity": "warning",
              "webhook_url": None, "webhook_secret": None, "email_to": None,
@@ -392,7 +392,7 @@ class TestAlertServiceDispatch:
              "dedup_window_s": 3600, "escalation_delay_s": 600},
         ])
 
-        with patch("sentinel.db.queries.insert_alert", new_callable=AsyncMock):
+        with patch("dsremo.db.queries.insert_alert", new_callable=AsyncMock):
             result1 = await AlertService.dispatch(self._make_anomaly(), "t1")
             result2 = await AlertService.dispatch(self._make_anomaly(), "t1")
 
@@ -402,7 +402,7 @@ class TestAlertServiceDispatch:
     @pytest.mark.asyncio
     async def test_two_tenants_same_satellite_independent_dedup(self):
         """t1 and t2 with the same satellite/param must NOT share dedup state."""
-        from sentinel.alerts.service import AlertService
+        from dsremo.alerts.service import AlertService
         shared_config = lambda tid: {
             "tenant_id": tid, "enabled": True, "min_severity": "warning",
             "webhook_url": None, "webhook_secret": None, "email_to": None,
@@ -411,7 +411,7 @@ class TestAlertServiceDispatch:
         }
         AlertService.load_configs([shared_config("t1"), shared_config("t2")])
 
-        with patch("sentinel.db.queries.insert_alert", new_callable=AsyncMock):
+        with patch("dsremo.db.queries.insert_alert", new_callable=AsyncMock):
             r1 = await AlertService.dispatch(self._make_anomaly(), "t1")
             r2 = await AlertService.dispatch(self._make_anomaly(), "t2")
 
@@ -429,7 +429,7 @@ class TestHTTPConnector:
 
     def _make_connector(self):
         """Build a concrete HTTPConnector subclass for testing."""
-        from sentinel.ingest.connector import HTTPConnector
+        from dsremo.ingest.connector import HTTPConnector
 
         class _TestConnector(HTTPConnector):
             source_name = "test"
@@ -450,7 +450,7 @@ class TestHTTPConnector:
             client = AsyncMock()
             client.__aenter__ = AsyncMock(return_value=client)
             client.__aexit__ = AsyncMock(return_value=False)
-            client.get = AsyncMock(return_value=mock_resp)
+            client.request = AsyncMock(return_value=mock_resp)
             mock_cls.return_value = client
 
             resp = await conn._get("/test")
@@ -473,7 +473,7 @@ class TestHTTPConnector:
             client = AsyncMock()
             client.__aenter__ = AsyncMock(return_value=client)
             client.__aexit__ = AsyncMock(return_value=False)
-            client.get = AsyncMock(side_effect=[resp_429, resp_200])
+            client.request = AsyncMock(side_effect=[resp_429, resp_200])
             mock_cls.return_value = client
 
             with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
@@ -490,7 +490,7 @@ class TestHTTPConnector:
             client = AsyncMock()
             client.__aenter__ = AsyncMock(return_value=client)
             client.__aexit__ = AsyncMock(return_value=False)
-            client.get = AsyncMock(
+            client.request = AsyncMock(
                 side_effect=httpx.TransportError("connection refused")
             )
             mock_cls.return_value = client
@@ -500,11 +500,11 @@ class TestHTTPConnector:
                     await conn._get("/test")
 
         # Called 3 times (max attempts)
-        assert client.get.call_count == 3
+        assert client.request.call_count == 3
 
     @pytest.mark.asyncio
     async def test_get_headers_passed_to_client(self):
-        from sentinel.ingest.connector import HTTPConnector
+        from dsremo.ingest.connector import HTTPConnector
 
         class _HdrConnector(HTTPConnector):
             source_name = "hdr"
@@ -527,7 +527,7 @@ class TestHTTPConnector:
             client = AsyncMock()
             client.__aenter__ = AsyncMock(return_value=client)
             client.__aexit__ = AsyncMock(return_value=False)
-            client.get = AsyncMock(return_value=mock_resp)
+            client.request = AsyncMock(return_value=mock_resp)
             mock_cls.return_value = client
 
             def capture(**kwargs):
@@ -549,7 +549,7 @@ class TestYAMCSConnector:
     """Tests for YAMCSConnector with mocked HTTP responses."""
 
     def _make_connector(self, **kw):
-        from sentinel.ingest.yamcs_connector import YAMCSConnector
+        from dsremo.ingest.yamcs_connector import YAMCSConnector
         return YAMCSConnector(
             base_url="http://yamcs.local:8090",
             instance="simulator",
@@ -571,22 +571,22 @@ class TestYAMCSConnector:
         assert "Authorization" not in conn._headers
 
     def test_parse_yamcs_time_valid(self):
-        from sentinel.ingest.yamcs_connector import _parse_yamcs_time
+        from dsremo.ingest.yamcs_connector import _parse_yamcs_time
         result = _parse_yamcs_time("2024-01-15T12:00:00.000Z")
         assert result is not None
         assert result.tzinfo is not None
 
     def test_parse_yamcs_time_invalid_returns_none(self):
-        from sentinel.ingest.yamcs_connector import _parse_yamcs_time
+        from dsremo.ingest.yamcs_connector import _parse_yamcs_time
         assert _parse_yamcs_time("") is None
         assert _parse_yamcs_time("not-a-date") is None
 
     def test_extract_eng_value_float(self):
-        from sentinel.ingest.yamcs_connector import _extract_eng_value
+        from dsremo.ingest.yamcs_connector import _extract_eng_value
         assert _extract_eng_value({"floatValue": 3.14}) == pytest.approx(3.14)
 
     def test_extract_eng_value_sint64(self):
-        from sentinel.ingest.yamcs_connector import _extract_eng_value
+        from dsremo.ingest.yamcs_connector import _extract_eng_value
         assert _extract_eng_value({"sint64Value": 42}) == 42.0
 
     @pytest.mark.asyncio
@@ -616,7 +616,7 @@ class TestYAMCSConnector:
 
         with patch.object(conn, "_get", side_effect=[mock_page, mock_mdb]):
             with patch(
-                "sentinel.ingest.yamcs_connector.load_channels_from_series",
+                "dsremo.ingest.yamcs_connector.load_channels_from_series",
                 new_callable=AsyncMock,
                 return_value={"BatteryVoltage": 1},
             ) as mock_load:
@@ -635,7 +635,7 @@ class TestInfluxDBConnector:
     """Tests for InfluxDBConnector with mocked HTTP responses."""
 
     def _make_connector(self):
-        from sentinel.ingest.influxdb_connector import InfluxDBConnector
+        from dsremo.ingest.influxdb_connector import InfluxDBConnector
         return InfluxDBConnector(
             base_url="http://influxdb.local:8086",
             org="testorg",
@@ -656,7 +656,7 @@ class TestInfluxDBConnector:
         assert conn._headers.get("Authorization") == "Token mytoken"
 
     def test_parse_influx_csv_valid_rows(self):
-        from sentinel.ingest.influxdb_connector import _parse_influx_csv
+        from dsremo.ingest.influxdb_connector import _parse_influx_csv
         csv_text = (
             "#group,false,false,true,true,false,false,true,true\n"
             "#datatype,string,long,dateTime:RFC3339,dateTime:RFC3339,dateTime:RFC3339,double,string,string\n"
@@ -669,13 +669,13 @@ class TestInfluxDBConnector:
         assert series.iloc[0] == pytest.approx(12.5)
 
     def test_parse_influx_csv_empty_on_no_data(self):
-        from sentinel.ingest.influxdb_connector import _parse_influx_csv
+        from dsremo.ingest.influxdb_connector import _parse_influx_csv
         csv_text = ""
         series = _parse_influx_csv(csv_text, "battery_voltage")
         assert series.empty
 
     def test_parse_influx_csv_multiple_rows(self):
-        from sentinel.ingest.influxdb_connector import _parse_influx_csv
+        from dsremo.ingest.influxdb_connector import _parse_influx_csv
         csv_text = (
             ",result,table,_start,_stop,_time,_value,_field,_measurement\n"
             ",_result,0,2024-01-01T00:00:00Z,2024-01-02T00:00:00Z,2024-01-01T10:00:00Z,10.0,v,sat\n"
@@ -700,7 +700,7 @@ class TestInfluxDBConnector:
 
         with patch.object(conn, "_post", new_callable=AsyncMock, return_value=mock_resp):
             with patch(
-                "sentinel.ingest.influxdb_connector.load_channels_from_series",
+                "dsremo.ingest.influxdb_connector.load_channels_from_series",
                 new_callable=AsyncMock,
                 return_value={"battery_voltage": 1, "solar_current": 1},
             ) as mock_load:
@@ -719,7 +719,7 @@ class TestInfluxDBConnector:
             side_effect=httpx.HTTPError("server error"),
         ):
             with patch(
-                "sentinel.ingest.influxdb_connector.load_channels_from_series",
+                "dsremo.ingest.influxdb_connector.load_channels_from_series",
                 new_callable=AsyncMock,
                 return_value={},
             ):
@@ -742,19 +742,19 @@ class TestLoadChannelsFromSeries:
 
     @pytest.mark.asyncio
     async def test_validates_empty_satellite_id(self):
-        from sentinel.ingest.bulk_loader import load_channels_from_series
+        from dsremo.ingest.bulk_loader import load_channels_from_series
         with pytest.raises(ValueError, match="satellite_id"):
             await load_channels_from_series("", {"v": self._make_series()})
 
     @pytest.mark.asyncio
     async def test_validates_whitespace_satellite_id(self):
-        from sentinel.ingest.bulk_loader import load_channels_from_series
+        from dsremo.ingest.bulk_loader import load_channels_from_series
         with pytest.raises(ValueError):
             await load_channels_from_series("   ", {"v": self._make_series()})
 
     @pytest.mark.asyncio
     async def test_validates_resample_minutes_lt_1(self):
-        from sentinel.ingest.bulk_loader import load_channels_from_series
+        from dsremo.ingest.bulk_loader import load_channels_from_series
         with pytest.raises(ValueError, match="resample_minutes"):
             await load_channels_from_series(
                 "SAT-1", {"v": self._make_series()}, resample_minutes=0
@@ -762,10 +762,10 @@ class TestLoadChannelsFromSeries:
 
     @pytest.mark.asyncio
     async def test_skips_channel_when_row_count_gte_threshold(self):
-        from sentinel.ingest.bulk_loader import load_channels_from_series
+        from dsremo.ingest.bulk_loader import load_channels_from_series
 
         with patch(
-            "sentinel.ingest.bulk_loader.check_channel_row_count",
+            "dsremo.ingest.bulk_loader.check_channel_row_count",
             new_callable=AsyncMock,
             return_value=50_001,
         ):
@@ -779,20 +779,20 @@ class TestLoadChannelsFromSeries:
 
     @pytest.mark.asyncio
     async def test_returns_inserted_count_per_channel(self):
-        from sentinel.ingest.bulk_loader import load_channels_from_series
+        from dsremo.ingest.bulk_loader import load_channels_from_series
 
         with patch(
-            "sentinel.ingest.bulk_loader.check_channel_row_count",
+            "dsremo.ingest.bulk_loader.check_channel_row_count",
             new_callable=AsyncMock,
             return_value=0,
         ), patch(
-            "sentinel.ingest.bulk_loader.queries.upsert_satellite_seen",
+            "dsremo.ingest.bulk_loader.queries.upsert_satellite_seen",
             new_callable=AsyncMock,
         ), patch(
-            "sentinel.ingest.bulk_loader.queries.upsert_channel_seen",
+            "dsremo.ingest.bulk_loader.queries.upsert_channel_seen",
             new_callable=AsyncMock,
         ), patch(
-            "sentinel.ingest.bulk_loader.bulk_insert_channel",
+            "dsremo.ingest.bulk_loader.bulk_insert_channel",
             new_callable=AsyncMock,
             return_value=10,
         ):
@@ -812,7 +812,7 @@ class TestLoadChannelsFromSeries:
 @pytest.fixture(scope="module")
 def demo_client():
     """Demo-mode TestClient — no DB, memory_store used for all queries."""
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -891,7 +891,7 @@ class TestDRYErrorHandling:
 
     @pytest.mark.asyncio
     async def test_handle_unique_constraint_raises_409_on_unique_error(self):
-        from sentinel.api.errors import handle_unique_constraint
+        from dsremo.api.errors import handle_unique_constraint
         from fastapi import HTTPException
 
         async def _coro():
@@ -907,7 +907,7 @@ class TestDRYErrorHandling:
 
     @pytest.mark.asyncio
     async def test_handle_unique_constraint_raises_409_on_duplicate_error(self):
-        from sentinel.api.errors import handle_unique_constraint
+        from dsremo.api.errors import handle_unique_constraint
         from fastapi import HTTPException
 
         async def _coro():
@@ -924,7 +924,7 @@ class TestDRYErrorHandling:
 
     @pytest.mark.asyncio
     async def test_handle_unique_constraint_raises_500_on_other_error(self):
-        from sentinel.api.errors import handle_unique_constraint
+        from dsremo.api.errors import handle_unique_constraint
         from fastapi import HTTPException
 
         async def _coro():
@@ -940,7 +940,7 @@ class TestDRYErrorHandling:
 
     @pytest.mark.asyncio
     async def test_handle_unique_constraint_returns_result_on_success(self):
-        from sentinel.api.errors import handle_unique_constraint
+        from dsremo.api.errors import handle_unique_constraint
 
         async def _coro():
             return {"id": "abc"}
@@ -949,18 +949,18 @@ class TestDRYErrorHandling:
         assert result == {"id": "abc"}
 
     def test_not_found_helper(self):
-        from sentinel.api.errors import not_found
+        from dsremo.api.errors import not_found
         exc = not_found("Not found")
         assert exc.status_code == 404
         assert "Not found" in exc.detail
 
     def test_conflict_helper(self):
-        from sentinel.api.errors import conflict
+        from dsremo.api.errors import conflict
         exc = conflict("Already exists")
         assert exc.status_code == 409
 
     def test_bad_request_helper(self):
-        from sentinel.api.errors import bad_request
+        from dsremo.api.errors import bad_request
         exc = bad_request("Invalid input")
         assert exc.status_code == 400
 
@@ -973,17 +973,17 @@ class TestAlertQuerySignatures:
     """Verify new alert query function signatures without running a DB."""
 
     def test_insert_alert_accepts_anomaly(self):
-        from sentinel.db.queries import insert_alert
+        from dsremo.db.queries import insert_alert
         sig = inspect.signature(insert_alert)
         assert "anomaly" in sig.parameters
 
     def test_upsert_alert_config_has_tenant_id(self):
-        from sentinel.db.queries import upsert_alert_config
+        from dsremo.db.queries import upsert_alert_config
         sig = inspect.signature(upsert_alert_config)
         assert "tenant_id" in sig.parameters
 
     def test_upsert_alert_config_keyword_only_fields(self):
-        from sentinel.db.queries import upsert_alert_config
+        from dsremo.db.queries import upsert_alert_config
         sig = inspect.signature(upsert_alert_config)
         kwonly = {
             name for name, p in sig.parameters.items()
@@ -993,17 +993,17 @@ class TestAlertQuerySignatures:
             assert field in kwonly, f"'{field}' not keyword-only in upsert_alert_config"
 
     def test_get_alerts_accepts_severity_filter(self):
-        from sentinel.db.queries import get_alerts
+        from dsremo.db.queries import get_alerts
         sig = inspect.signature(get_alerts)
         assert "severity" in sig.parameters
 
     def test_get_alerts_accepts_since_filter(self):
-        from sentinel.db.queries import get_alerts
+        from dsremo.db.queries import get_alerts
         sig = inspect.signature(get_alerts)
         assert "since" in sig.parameters
 
     def test_load_all_alert_configs_no_required_args(self):
-        from sentinel.db.queries import load_all_alert_configs
+        from dsremo.db.queries import load_all_alert_configs
         sig = inspect.signature(load_all_alert_configs)
         # All parameters must have defaults
         for name, param in sig.parameters.items():

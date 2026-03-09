@@ -6,7 +6,7 @@ Covers:
   - TestAdaptiveWindowLogic    — ctx_limit computation from detected period (10 tests)
   - TestInitDetectorsWindow    — init_detectors wires config → decomposer + globals (8 tests)
   - TestSTLWithLargeWindow     — STL decomposition quality with 3×period window (10 tests)
-  - TestConfigKeys             — sentinel.yaml new keys loaded correctly (6 tests)
+  - TestConfigKeys             — dsremo.yaml new keys loaded correctly (6 tests)
   - TestRegressionSprint9      — Sprint 9 behaviour unchanged for short periods (10 tests)
 """
 
@@ -44,23 +44,23 @@ class TestMaxFftSamples:
     """STLDecomposer stores and exposes max_fft_samples."""
 
     def test_default_max_fft_samples_is_600(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer()
         assert d._max_fft_samples == 600
 
     def test_custom_max_fft_samples_stored(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer(max_fft_samples=5000)
         assert d._max_fft_samples == 5000
 
     def test_max_fft_samples_1000_stored(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer(max_fft_samples=1000)
         assert d._max_fft_samples == 1000
 
     def test_max_fft_samples_limits_fft_input_short_signal(self):
         """When signal is shorter than max_fft_samples, full signal is used."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer(max_fft_samples=5000)
         # Period-50 sinusoid, n=300 — all 300 samples should be used (300 < 5000)
         vals = _sine(300, period=50)
@@ -70,7 +70,7 @@ class TestMaxFftSamples:
 
     def test_max_fft_samples_limits_fft_input_long_signal(self):
         """With max_fft_samples=100, FFT can't see period-200 in 5000-sample array."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer(max_fft_samples=100)
         # Period-200 sinusoid: needs at least 400 samples to detect; we cap at 100
         vals = _sine(5000, period=200)
@@ -80,7 +80,7 @@ class TestMaxFftSamples:
 
     def test_max_fft_5000_detects_period_1440(self):
         """With max_fft_samples=5000, FFT can detect a 1440-sample (24h) period."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=4320 = 3×1440 → FFT bin 3 → exact detection (4320/3 = 1440)
         vals = _sine(4320, period=1440, amplitude=10.0)
         detected = STLDecomposer._fft_period(vals)  # uses all 4320 samples
@@ -88,7 +88,7 @@ class TestMaxFftSamples:
 
     def test_fft_period_600_cap_misses_1440(self):
         """With 600-sample cap (Sprint 9 default), 1440-period cannot be detected."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         vals = _sine(3000, period=1440, amplitude=10.0, noise=0.5)
         # FFT on last 600 samples of a period-1440 signal: 1440 > 600//2=300 → rejected
         detected = STLDecomposer._fft_period(vals[-600:])
@@ -96,7 +96,7 @@ class TestMaxFftSamples:
 
     def test_max_fft_samples_does_not_change_short_period_detection(self):
         """Increasing max_fft_samples doesn't break short-period detection."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer(max_fft_samples=5000)
         vals = _sine(2000, period=90, amplitude=5.0)
         ts = np.arange(2000, dtype=np.float64)
@@ -112,28 +112,28 @@ class TestLongPeriodFFT:
     """_fft_period handles large input correctly."""
 
     def test_period_1440_detected_with_3000_samples(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=2880 = 2×1440 → FFT bin 2 → exact detection (2880/2 = 1440)
         vals = _sine(2880, period=1440, amplitude=10.0)
         p = STLDecomposer._fft_period(vals)
         assert p == 1440, f"Expected 1440, got {p}"
 
     def test_period_1440_detected_with_5000_samples(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=4320 = 3×1440 → FFT bin 3 → exact detection (4320/3 = 1440)
         vals = _sine(4320, period=1440, amplitude=10.0, noise=1.0)
         p = STLDecomposer._fft_period(vals)
         assert 1400 <= p <= 1480, f"Expected ~1440, got {p}"
 
     def test_period_300_detected_with_1000_samples(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=900 = 3×300 → FFT bin 3 → exact detection (900/3 = 300)
         vals = _sine(900, period=300, amplitude=5.0)
         p = STLDecomposer._fft_period(vals)
         assert p == 300, f"Expected 300, got {p}"
 
     def test_period_720_detected_with_2500_samples(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=2160 = 3×720 → FFT bin 3 → exact detection (2160/3 = 720)
         vals = _sine(2160, period=720, amplitude=8.0)
         p = STLDecomposer._fft_period(vals)
@@ -141,14 +141,14 @@ class TestLongPeriodFFT:
 
     def test_period_90_still_works_with_5000_samples(self):
         """Short-period detection is not broken by larger arrays."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         vals = _sine(5000, period=90, amplitude=5.0)
         p = STLDecomposer._fft_period(vals)
         assert 88 <= p <= 92
 
     def test_noise_only_5000_samples_returns_zero(self):
         """Broadband noise with 5000 samples should not produce false period."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         rng = np.random.default_rng(99)
         vals = rng.normal(0, 1, 5000)
         p = STLDecomposer._fft_period(vals)
@@ -156,7 +156,7 @@ class TestLongPeriodFFT:
 
     def test_period_too_large_rejected(self):
         """Period > n//2 is rejected even with large arrays."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=2000, period=1500 > 2000//2=1000 → rejected
         vals = _sine(2000, period=1500, amplitude=10.0)
         p = STLDecomposer._fft_period(vals)
@@ -164,7 +164,7 @@ class TestLongPeriodFFT:
 
     def test_period_exactly_half_n_accepted(self):
         """Period exactly = n//2 is the edge case (just within limit)."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 1000
         period = n // 2  # = 500
         vals = _sine(n, period=period, amplitude=10.0)
@@ -174,14 +174,14 @@ class TestLongPeriodFFT:
 
     def test_short_array_returns_zero_for_long_period(self):
         """n=100, period=1440 → rejected (period > n//2=50)."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         vals = _sine(100, period=1440, amplitude=10.0)
         p = STLDecomposer._fft_period(vals)
         assert p == 0
 
     def test_period_1440_with_noise_still_detected(self):
         """1440-period signal with SNR ~5 should still be detected."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=4320 = 3×1440 → exact detection even with noise
         vals = _sine(4320, period=1440, amplitude=5.0, noise=1.0)
         p = STLDecomposer._fft_period(vals)
@@ -189,7 +189,7 @@ class TestLongPeriodFFT:
 
     def test_dual_period_strongest_detected(self):
         """With two periodicities, the dominant (higher amplitude) one is returned."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=4320 = 3×1440 → FFT bin 3 → exact detection for period=1440
         n = 4320
         t = np.arange(n, dtype=np.float64)
@@ -200,7 +200,7 @@ class TestLongPeriodFFT:
 
     def test_period_120_detectable_with_old_600_window(self):
         """Periods ≤300 samples are detectable even with 600-sample cap (Sprint 9 compat)."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         vals = _sine(3000, period=120, amplitude=5.0)
         p = STLDecomposer._fft_period(vals[-600:])
         assert 118 <= p <= 122
@@ -285,40 +285,40 @@ class TestInitDetectorsWindow:
         return base
 
     def test_default_window_factor_is_3(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         cfg = {"detection": {}, "features": {}}
         det_mod.init_detectors(cfg)
         assert det_mod._stl_window_factor == 3
 
     def test_default_max_window_is_10000(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         cfg = {"detection": {}, "features": {}}
         det_mod.init_detectors(cfg)
         assert det_mod._stl_max_window == 10000
 
     def test_config_sets_window_factor(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors(self._make_cfg(stl_window_factor=4))
         assert det_mod._stl_window_factor == 4
 
     def test_config_sets_max_window(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors(self._make_cfg(stl_max_window=8000))
         assert det_mod._stl_max_window == 8000
 
     def test_config_sets_max_fft_samples_on_decomposer(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors(self._make_cfg(stl_max_fft_samples=3000))
         assert det_mod._stl_decomposer._max_fft_samples == 3000
 
     def test_default_max_fft_samples_on_decomposer_is_600(self):
         """Without config, decomposer defaults to 600 (Sprint 9 compat)."""
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors({"detection": {}, "features": {}})
         assert det_mod._stl_decomposer._max_fft_samples == 600
 
     def test_stl_decomposer_recreated_on_reinit(self):
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors(self._make_cfg(stl_max_fft_samples=2000))
         d1 = det_mod._stl_decomposer
         det_mod.init_detectors(self._make_cfg(stl_max_fft_samples=4000))
@@ -328,7 +328,7 @@ class TestInitDetectorsWindow:
 
     def test_window_factor_0_treated_as_zero_period_scaled(self):
         """Factor=0 effectively disables scaling (0×period=0 < 600 → stays 600)."""
-        import sentinel.detection.detector as det_mod
+        import dsremo.detection.detector as det_mod
         det_mod.init_detectors(self._make_cfg(stl_window_factor=0))
         assert det_mod._stl_window_factor == 0
 
@@ -342,7 +342,7 @@ class TestSTLWithLargeWindow:
 
     def test_stl_removes_24h_seasonal_with_4320_window(self):
         """STL on 4320-sample window (3×1440) correctly decomposes a 1440-period signal."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 4320
         period = 1440
         t = np.arange(n, dtype=np.float64)
@@ -364,7 +364,7 @@ class TestSTLWithLargeWindow:
 
     def test_stl_with_600_window_fails_to_remove_24h_seasonal(self):
         """With 600-sample window, STL cannot remove 1440-period seasonal (period > 600//2)."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 600
         period = 1440
         t = np.arange(n, dtype=np.float64)
@@ -378,7 +378,7 @@ class TestSTLWithLargeWindow:
 
     def test_stl_detects_correct_period_1440(self):
         """STL decomposer with 5000-sample FFT detects period 1440 correctly."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 4320
         period = 1440
         vals = _sine(n, period=period, amplitude=5.0, noise=0.5)
@@ -390,7 +390,7 @@ class TestSTLWithLargeWindow:
 
     def test_stl_decomposition_result_shapes_match(self):
         """All arrays in DecompositionResult have same length as input."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 4320
         vals = _sine(n, period=1440, amplitude=5.0)
         ts = np.arange(n, dtype=np.float64)
@@ -402,7 +402,7 @@ class TestSTLWithLargeWindow:
 
     def test_stl_residual_variance_lower_than_raw(self):
         """After removing a strong seasonal, residual variance < raw variance."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 4320
         vals = _sine(n, period=1440, amplitude=10.0, noise=0.5)
         ts = np.arange(n, dtype=np.float64)
@@ -413,7 +413,7 @@ class TestSTLWithLargeWindow:
 
     def test_small_period_decomposer_unchanged(self):
         """Short-period STL (period=90) still works with large max_fft_samples."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=720 = 8×90 → FFT bin 8 → exact detection (720/8 = 90)
         n = 720
         vals = _sine(n, period=90, amplitude=5.0)
@@ -426,7 +426,7 @@ class TestSTLWithLargeWindow:
 
     def test_cold_start_still_works_with_small_n(self):
         """Very few samples → cold_start still returns a valid result."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 10
         vals = np.random.default_rng(1).normal(0, 1, n)
         ts = np.arange(n, dtype=np.float64)
@@ -437,7 +437,7 @@ class TestSTLWithLargeWindow:
 
     def test_cache_resets_correctly_with_new_key(self):
         """Cache is per-key; different keys don't share period detection."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer(max_fft_samples=5000)
         # n=720 = 8×90 → exact detection; n=4320 = 3×1440 → exact detection
         v1 = _sine(720, period=90, amplitude=5.0)
@@ -451,7 +451,7 @@ class TestSTLWithLargeWindow:
 
     def test_orbital_fallback_still_used_when_fft_fails(self):
         """When FFT finds nothing and orbital hint applies, fallback returns period."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=400, orbital_period_s=100, timestamps at 1s intervals → period_samples=100
         d = STLDecomposer(orbital_period_s=100, max_fft_samples=5000)
         ts = np.arange(400, dtype=np.float64)  # 400 seconds at 1s/sample
@@ -462,7 +462,7 @@ class TestSTLWithLargeWindow:
 
     def test_stl_window_4320_detects_anomaly_in_residual(self):
         """STL with 4320-window runs on spike-contaminated signal and removes seasonal."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         n = 4320
         period = 1440
         t = np.arange(n, dtype=np.float64)
@@ -488,16 +488,16 @@ class TestSTLWithLargeWindow:
 
 
 # ---------------------------------------------------------------------------
-# 6. TestConfigKeys — sentinel.yaml new keys present and correct type
+# 6. TestConfigKeys — dsremo.yaml new keys present and correct type
 # ---------------------------------------------------------------------------
 
 class TestConfigKeys:
-    """Sprint 10 config keys exist in sentinel.yaml and have correct values."""
+    """Sprint 10 config keys exist in dsremo.yaml and have correct values."""
 
     @pytest.fixture(scope="class")
     def cfg(self):
         from dynaconf import Dynaconf
-        cfg_path = Path(__file__).parent.parent / "configs" / "sentinel.yaml"
+        cfg_path = Path(__file__).parent.parent / "configs" / "dsremo.yaml"
         settings = Dynaconf(settings_file=str(cfg_path), envvar_prefix="SENTINEL")
         return settings.get("detection", {})
 
@@ -528,7 +528,7 @@ class TestRegressionSprint9:
     """Ensure Sprint 10 doesn't break Sprint 9 functionality."""
 
     def test_fft_period_90_still_detected_in_600_window(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # n=630 = 7×90 → FFT bin 7 → exact detection (630/7 = 90)
         # (n=600: 600/90=6.67→k=7→period=600/7≈86 due to quantization)
         vals = _sine(630, period=90, amplitude=5.0)
@@ -536,14 +536,14 @@ class TestRegressionSprint9:
         assert p == 90, f"Expected 90, got {p}"
 
     def test_broadband_noise_returns_zero_unchanged(self):
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         rng = np.random.default_rng(42)
         vals = rng.normal(0, 1, 600)
         assert STLDecomposer._fft_period(vals) == 0
 
     def test_variance_detector_still_fires_on_sigma_ratio(self):
-        from sentinel.detection.variance_detector import VarianceDetector
-        from sentinel.detection.calibration import CalibrationState
+        from dsremo.detection.variance_detector import VarianceDetector
+        from dsremo.detection.calibration import CalibrationState
         vd = VarianceDetector(variance_z_threshold=2.5, window=30)
         cal = CalibrationState()
         cal.state = "calibrated"
@@ -555,16 +555,16 @@ class TestRegressionSprint9:
         assert result.is_anomaly
 
     def test_weights_still_sum_to_one(self):
-        import sentinel.detection.detector as det_mod
-        from sentinel.core.config import load_config
+        import dsremo.detection.detector as det_mod
+        from dsremo.core.config import load_config
         cfg = load_config()
         det_mod.init_detectors(cfg)
         total = sum(det_mod.WEIGHTS.values())
         assert abs(total - 1.0) < 1e-6
 
     def test_ensemble_6_detectors_in_weights(self):
-        import sentinel.detection.detector as det_mod
-        from sentinel.core.config import load_config
+        import dsremo.detection.detector as det_mod
+        from dsremo.core.config import load_config
         cfg = load_config()
         det_mod.init_detectors(cfg)
         assert "variance" in det_mod.WEIGHTS
@@ -572,7 +572,7 @@ class TestRegressionSprint9:
 
     def test_fft_4x_median_threshold_unchanged(self):
         """The 4× median noise-rejection threshold from Sprint 9 is still in effect."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         # Construct a signal where peak/median = 3.9× (below 4× threshold → return 0)
         n = 600
         # Use a sine with very low amplitude so noise floor is relatively high
@@ -587,7 +587,7 @@ class TestRegressionSprint9:
 
     def test_stl_decomposer_default_backwards_compatible(self):
         """STLDecomposer() with no args still works identically to Sprint 9."""
-        from sentinel.detection.stl_decomposer import STLDecomposer
+        from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer()  # no max_fft_samples
         assert d._max_fft_samples == 600
         assert d._orbital_period_s == 5400
@@ -595,7 +595,7 @@ class TestRegressionSprint9:
     def test_detect_data_frequency_unchanged(self):
         """detect_data_frequency still works after Sprint 10 changes."""
         import tempfile, csv as csv_mod
-        from sentinel.ingest.utils import detect_data_frequency
+        from dsremo.ingest.utils import detect_data_frequency
         rows = [{"timestamp": f"2024-01-01T00:{i:02d}:00Z"} for i in range(5)]
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False, newline="") as f:
             w = csv_mod.DictWriter(f, fieldnames=["timestamp"])
@@ -606,7 +606,7 @@ class TestRegressionSprint9:
         assert abs(freq - 60.0) < 1.0
 
     def test_scoring_module_unchanged(self):
-        from sentinel.eval.scoring import cluster_events, score
+        from dsremo.eval.scoring import cluster_events, score
         from datetime import timedelta
         t0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
         ts = [t0, t0 + timedelta(minutes=1)]
@@ -615,6 +615,6 @@ class TestRegressionSprint9:
         assert r.recall == 0.0
 
     def test_adaptive_cooldown_hours_unchanged(self):
-        from sentinel.ingest.utils import adaptive_cooldown_hours
+        from dsremo.ingest.utils import adaptive_cooldown_hours
         # 5-min data (300s interval) → 500 × 300 = 150000s = 41.667h
         assert adaptive_cooldown_hours(300.0) == pytest.approx(150000.0 / 3600.0, rel=1e-3)

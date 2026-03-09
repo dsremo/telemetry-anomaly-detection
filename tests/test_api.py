@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 
-from sentinel.api.schemas import (
+from dsremo.api.schemas import (
     TelemetryIn,
     TelemetryBatchIn,
     InjectRequest,

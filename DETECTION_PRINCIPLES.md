@@ -1,4 +1,4 @@
-# Sentinel — Detection Principles
+# Dsremo — Detection Principles
 
 Non-negotiable rules. Read before touching any detector, feature engine, or config.
 
@@ -88,7 +88,7 @@ Alarm when Z_ewma > UCL or Z_ewma < LCL
   - 1 of N triggered: × 0.60
   - 2 of N triggered: × 0.80
   - 3+ of N triggered: × 1.00
-- Severity gates (from sentinel.yaml, never hardcoded):
+- Severity gates (from dsremo.yaml, never hardcoded):
   - watch ≥ 0.50, warning ≥ 0.65, critical ≥ 0.85
 - Below watch threshold: discard, do not store anomaly.
 

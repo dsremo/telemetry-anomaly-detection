@@ -1,4 +1,4 @@
-# Sentinel — AI Telemetry Anomaly Detection Engine
+# Dsremo — AI Telemetry Anomaly Detection Engine
 
 ## What This Is
 Ground-based satellite telemetry anomaly detection. Customers push JSON telemetry → we detect anomalies and explain them.
@@ -23,7 +23,7 @@ Ground-based satellite telemetry anomaly detection. Customers push JSON telemetr
 - Tests: pytest + pytest-asyncio, target >85% coverage
 
 ## Project Layout
-- `src/sentinel/` — main package
+- `src/dsremo/` — main package
 - `configs/` — YAML configuration
 - `tests/` — unit + integration + security tests
 - `dashboard/` — minimal vanilla JS UI

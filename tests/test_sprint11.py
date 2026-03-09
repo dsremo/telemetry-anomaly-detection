@@ -14,8 +14,8 @@ import math
 
 import pytest
 
-from sentinel.detection.autoencoder_detector import AutoencoderDetector
-from sentinel.core.models import Severity
+from dsremo.detection.autoencoder_detector import AutoencoderDetector
+from dsremo.core.models import Severity
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -194,19 +194,19 @@ class TestEnsembleWith7Detectors:
 
     # 1 — WEIGHTS sum to 1.0
     def test_weights_sum_to_one(self):
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         total = sum(WEIGHTS.values())
         assert abs(total - 1.0) < 1e-9, f"WEIGHTS sum={total}"
 
     # 2 — "lstm" key present in WEIGHTS
     def test_lstm_key_in_weights(self):
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         assert "lstm" in WEIGHTS
         assert WEIGHTS["lstm"] > 0.0
 
     # 3 — 7 detector names present (not 6)
     def test_seven_detector_names(self):
-        from sentinel.detection.detector import WEIGHTS
+        from dsremo.detection.detector import WEIGHTS
         # Sprint 13 added "tcn" as 8th detector — assert all Sprint 11 detectors still present
         required = {"cusum", "ewma", "statistical", "changepoint",
                     "isolation_forest", "variance", "lstm"}
@@ -220,8 +220,8 @@ class TestEnsembleWith7Detectors:
         agreement    = 0.60 + 0.40 × (1-1)/(7-1) = 0.60   (base factor, 1/7 triggered)
         confidence   = 1.0 × 0.60 = 0.60
         """
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
 
         def _nom(name):
             return DetectorResult(
@@ -244,9 +244,9 @@ class TestEnsembleWith7Detectors:
 
     # 5 — _build_explanation handles "lstm" case and contains "Autoencoder"
     def test_build_explanation_lstm_case(self):
-        from sentinel.detection.detector import _build_explanation
-        from sentinel.core.models import DetectorResult, Severity
-        from sentinel.features.engine import FeatureEngine
+        from dsremo.detection.detector import _build_explanation
+        from dsremo.core.models import DetectorResult, Severity
+        from dsremo.features.engine import FeatureEngine
 
         fe   = FeatureEngine(window_size=600)
         feat = fe.compute("bv:res", 0.5, 1000.0)
@@ -277,8 +277,8 @@ class TestEnsembleWith7Detectors:
         This is correct behaviour: a single strong ML detector is meaningful signal
         and should produce a WATCH alert — not silence — for human review.
         """
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
 
         def _nom(name):
             return DetectorResult(
@@ -303,8 +303,8 @@ class TestEnsembleWith7Detectors:
 
     # 7 — lstm + variance together give higher confidence than variance alone
     def test_lstm_plus_variance_higher_confidence(self):
-        from sentinel.detection.detector import _ensemble_vote
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.detection.detector import _ensemble_vote
+        from dsremo.core.models import DetectorResult, Severity
 
         def _nom(name):
             return DetectorResult(
@@ -334,7 +334,7 @@ class TestEnsembleWith7Detectors:
 
     # 8 — init_detectors reads lstm config keys from settings dict
     def test_init_detectors_reads_lstm_config(self):
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
 
         class FakeSettings:
             def get(self, key, default=None):
@@ -374,25 +374,25 @@ class TestAutoencoderIntegration:
 
     def setup_method(self):
         """Clear the global lstm_models dict before each test."""
-        from sentinel.detection import detector as det_mod
+        from dsremo.detection import detector as det_mod
         det_mod._lstm_models.clear()
 
     # 1 — _get_lstm_model returns AutoencoderDetector
     def test_get_lstm_model_returns_instance(self):
-        from sentinel.detection.detector import _get_lstm_model
+        from dsremo.detection.detector import _get_lstm_model
         m = _get_lstm_model("SAT-1", "battery_voltage")
         assert isinstance(m, AutoencoderDetector)
 
     # 2 — same key returns same instance (singleton per channel)
     def test_same_key_same_instance(self):
-        from sentinel.detection.detector import _get_lstm_model
+        from dsremo.detection.detector import _get_lstm_model
         m1 = _get_lstm_model("SAT-1", "battery_voltage")
         m2 = _get_lstm_model("SAT-1", "battery_voltage")
         assert m1 is m2
 
     # 3 — different channel key returns different instance
     def test_different_key_different_instance(self):
-        from sentinel.detection.detector import _get_lstm_model
+        from dsremo.detection.detector import _get_lstm_model
         m1 = _get_lstm_model("SAT-1", "battery_voltage")
         m2 = _get_lstm_model("SAT-1", "battery_current")
         assert m1 is not m2
@@ -442,7 +442,7 @@ class TestAutoencoderIntegration:
     # 7 — torch_not_available path: patched detect returns NOMINAL without exception
     def test_graceful_fallback_torch_not_available(self):
         """Verify the torch_not_available fallback branch is reachable and safe."""
-        from sentinel.core.models import DetectorResult, Severity
+        from dsremo.core.models import DetectorResult, Severity
 
         d = AutoencoderDetector(seq_length=10, min_train_samples=20, epochs=3)
         stream = _sine_data(80, period=10)

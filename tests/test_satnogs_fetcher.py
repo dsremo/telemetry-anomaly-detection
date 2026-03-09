@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from sentinel.ingest.satnogs_fetcher import (
+from dsremo.ingest.satnogs_fetcher import (
     SatNOGSFetcher,
     _byte_entropy,
     _guess_subsystem,
@@ -83,7 +83,7 @@ class TestSatNOGSFetcher:
     def test_init_without_token_warns(self, monkeypatch):
         # Should not raise, just warn (clear env so _load_dotenv doesn't find it)
         monkeypatch.delenv("SATNOGS_API_TOKEN", raising=False)
-        monkeypatch.setattr("sentinel.core.config._DOTENV_PATH", type("P", (), {"exists": lambda self: False})())
+        monkeypatch.setattr("dsremo.core.config._DOTENV_PATH", type("P", (), {"exists": lambda self: False})())
         fetcher = SatNOGSFetcher(api_token="")
         assert fetcher.api_token == ""
 
@@ -95,7 +95,7 @@ class TestSatNOGSFetcher:
     @pytest.mark.asyncio
     async def test_fetch_without_token_raises(self, monkeypatch):
         monkeypatch.delenv("SATNOGS_API_TOKEN", raising=False)
-        monkeypatch.setattr("sentinel.core.config._DOTENV_PATH", type("P", (), {"exists": lambda self: False})())
+        monkeypatch.setattr("dsremo.core.config._DOTENV_PATH", type("P", (), {"exists": lambda self: False})())
         fetcher = SatNOGSFetcher(api_token="")
         with pytest.raises(ValueError, match="SATNOGS_API_TOKEN not set"):
             await fetcher.fetch_telemetry("12345")

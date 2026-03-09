@@ -33,7 +33,7 @@ def _run(coro):
 @pytest.fixture(scope="module")
 def demo_client():
     """Demo-mode TestClient — role='admin', no real DB."""
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -42,7 +42,7 @@ def demo_client():
 @pytest.fixture(scope="module")
 def demo_client_with_user(demo_client):
     """Create a test user in memory store and return (client, user_id)."""
-    from sentinel.db import memory_store as ms
+    from dsremo.db import memory_store as ms
 
     user = _run(ms.create_user(
         email="target@test.local",
@@ -98,7 +98,7 @@ class TestAdminPasswordReset:
 
     def test_password_hash_is_updated_in_store(self, demo_client_with_user):
         """After reset, the stored hash must differ from the initial stub hash."""
-        from sentinel.db import memory_store as ms
+        from dsremo.db import memory_store as ms
         client, user_id = demo_client_with_user
         client.post(
             f"/api/v1/users/{user_id}/reset-password",
@@ -117,7 +117,7 @@ class TestAdminPasswordReset:
 @pytest.fixture(autouse=False)
 def fresh_store():
     """Temporarily swap _users and _tenants to isolated dicts for stub tests."""
-    from sentinel.db import memory_store as ms
+    from dsremo.db import memory_store as ms
     import uuid
 
     original_users   = ms._users.copy()
@@ -251,7 +251,7 @@ class TestMemoryStoreAdminStubs:
 @pytest.fixture(scope="module")
 def admin_client():
     """Separate demo client for user API tests (module-scoped, clean per-module state)."""
-    from sentinel.api.app import create_app
+    from dsremo.api.app import create_app
     app = create_app(demo=True)
     with TestClient(app) as client:
         yield client
@@ -347,21 +347,21 @@ class TestAdminUserAPI:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def sentinel_demo_client():
-    """Demo-mode TestClient with sentinel_admin role.
+def dsremo_demo_client():
+    """Demo-mode TestClient with dsremo_admin role.
 
     The default demo dependency returns role='admin', which is NOT in
-    require_sentinel_admin's allowed set.  We use FastAPI's
-    dependency_overrides to inject a sentinel_admin user so all
-    require_sentinel_admin checks pass.
+    require_dsremo_admin's allowed set.  We use FastAPI's
+    dependency_overrides to inject a dsremo_admin user so all
+    require_dsremo_admin checks pass.
     """
-    from sentinel.api.app import create_app
-    from sentinel.api.dependencies import get_current_user
+    from dsremo.api.app import create_app
+    from dsremo.api.dependencies import get_current_user
 
     sentinel_user = {
         "user_id": "sentinel-demo",
         "tenant_id": "default",
-        "role": "sentinel_admin",
+        "role": "dsremo_admin",
         "scope": "sentinel",
     }
 
@@ -377,25 +377,25 @@ def sentinel_demo_client():
 class TestAdminTenantsAPI:
     """HTTP-level tests for /tenants routes (sentinel admin only)."""
 
-    def test_list_tenants_returns_200(self, sentinel_demo_client):
-        resp = sentinel_demo_client.get("/api/v1/tenants")
+    def test_list_tenants_returns_200(self, dsremo_demo_client):
+        resp = dsremo_demo_client.get("/api/v1/tenants")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
-    def test_list_tenants_includes_default(self, sentinel_demo_client):
-        resp = sentinel_demo_client.get("/api/v1/tenants")
+    def test_list_tenants_includes_default(self, dsremo_demo_client):
+        resp = dsremo_demo_client.get("/api/v1/tenants")
         ids = [t["id"] for t in resp.json()]
         assert "default" in ids
 
-    def test_create_tenant_returns_201(self, sentinel_demo_client):
-        resp = sentinel_demo_client.post(
+    def test_create_tenant_returns_201(self, dsremo_demo_client):
+        resp = dsremo_demo_client.post(
             "/api/v1/tenants",
             json={"id": "sprint7-test", "name": "Sprint7 Test Tenant", "plan": "pro"},
         )
         assert resp.status_code == 201
 
-    def test_create_tenant_stores_correct_fields(self, sentinel_demo_client):
-        resp = sentinel_demo_client.post(
+    def test_create_tenant_stores_correct_fields(self, dsremo_demo_client):
+        resp = dsremo_demo_client.post(
             "/api/v1/tenants",
             json={"id": "sprint7-fields", "name": "Fields Tenant", "plan": "free"},
         )
@@ -403,23 +403,23 @@ class TestAdminTenantsAPI:
         assert data["id"] == "sprint7-fields"
         assert data["name"] == "Fields Tenant"
 
-    def test_create_duplicate_tenant_returns_409(self, sentinel_demo_client):
-        sentinel_demo_client.post(
+    def test_create_duplicate_tenant_returns_409(self, dsremo_demo_client):
+        dsremo_demo_client.post(
             "/api/v1/tenants",
             json={"id": "dup-tenant", "name": "Dup", "plan": "free"},
         )
-        resp = sentinel_demo_client.post(
+        resp = dsremo_demo_client.post(
             "/api/v1/tenants",
             json={"id": "dup-tenant", "name": "Dup Again", "plan": "free"},
         )
         assert resp.status_code == 409
 
-    def test_patch_tenant_updates_name(self, sentinel_demo_client):
-        sentinel_demo_client.post(
+    def test_patch_tenant_updates_name(self, dsremo_demo_client):
+        dsremo_demo_client.post(
             "/api/v1/tenants",
             json={"id": "patch-me", "name": "Old Name", "plan": "free"},
         )
-        resp = sentinel_demo_client.patch(
+        resp = dsremo_demo_client.patch(
             "/api/v1/tenants/patch-me",
             json={"name": "New Name"},
         )

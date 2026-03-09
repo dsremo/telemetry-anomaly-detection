@@ -19,7 +19,7 @@ import httpx
 # SatNOGS enforces ~1 req/5s per token — 6s gives comfortable headroom
 INTER_SAT_DELAY_S = 6.0
 
-from sentinel.ingest.satnogs_fetcher import SatNOGSFetcher
+from dsremo.ingest.satnogs_fetcher import SatNOGSFetcher
 
 API_BASE = "http://localhost:8400"
 BATCH_SIZE = 50

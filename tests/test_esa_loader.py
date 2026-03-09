@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sentinel.ingest.esa_loader import (
+from dsremo.ingest.esa_loader import (
     ChannelMeta,
     ESADataLoader,
     LabeledAnomaly,
