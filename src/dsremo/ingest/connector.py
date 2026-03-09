@@ -21,7 +21,7 @@ logger = structlog.get_logger()
 
 
 class DataConnector(ABC):
-    """Abstract base class for Sentinel telemetry ingest connectors."""
+    """Abstract base class for Dsremo telemetry ingest connectors."""
 
     @property
     @abstractmethod

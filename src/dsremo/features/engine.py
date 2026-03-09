@@ -149,7 +149,7 @@ class FeatureEngine:
     ) -> dict[str, float]:
         """Compute cross-parameter correlation features.
 
-        This is the foundation of Sentinel's competitive advantage:
+        This is the foundation of Dsremo's competitive advantage:
         detecting anomalies that only show up in parameter *relationships*,
         not individual values.
         """

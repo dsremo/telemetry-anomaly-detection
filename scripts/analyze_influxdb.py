@@ -1,9 +1,9 @@
-"""InfluxDB — Sentinel Anomaly Detection.
+"""InfluxDB — Dsremo Anomaly Detection.
 
 Thin CLI wrapper.  All pipeline logic lives in production modules:
-  sentinel.ingest.influxdb_connector — InfluxDBConnector.bulk_load_to_db()
-  sentinel.ingest.bulk_loader        — run_bulk_detection(), print_detection_report()
-  sentinel.ingest.pipeline           — db_context, phase, print_run_header
+  dsremo.ingest.influxdb_connector — InfluxDBConnector.bulk_load_to_db()
+  dsremo.ingest.bulk_loader        — run_bulk_detection(), print_detection_report()
+  dsremo.ingest.pipeline           — db_context, phase, print_run_header
 
 InfluxDB v2 Flux API: https://docs.influxdata.com/influxdb/v2/api/
 
@@ -29,7 +29,7 @@ Run:
         --start -90d --stop now()
 
 Requires:
-    Sentinel DB running (postgres).  API server does NOT need to be up.
+    Dsremo DB running (postgres).  API server does NOT need to be up.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ async def main(
         )
 
         print_run_header(
-            "InfluxDB — Sentinel Anomaly Detection",
+            "InfluxDB — Dsremo Anomaly Detection",
             URL=url,
             Org=org,
             Bucket=bucket,
@@ -110,7 +110,7 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Fetch InfluxDB v2 telemetry and run Sentinel anomaly detection"
+        description="Fetch InfluxDB v2 telemetry and run Dsremo anomaly detection"
     )
     parser.add_argument("--url", required=True,
                         help="InfluxDB server URL (e.g. http://localhost:8086)")
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     parser.add_argument("--fields", required=True, nargs="+", metavar="FIELD",
                         help="Field key(s) to fetch and analyse")
     parser.add_argument("--satellite-id", required=True, metavar="SAT_ID",
-                        help="Sentinel satellite identifier")
+                        help="Dsremo satellite identifier")
     parser.add_argument("--start", default="-30d",
                         help="Flux start time: duration ('-30d') or ISO-8601 (default: -30d)")
     parser.add_argument("--stop", default="now()",

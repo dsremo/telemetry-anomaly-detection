@@ -50,7 +50,7 @@ def _ts(offset_s: float) -> datetime:
 def cluster_events(timestamps: list[datetime], gap_s: float) -> list[datetime]:
     """Group timestamps into events; return the start time of each event.
 
-    Sprint 9: delegates to sentinel.eval.scoring.cluster_events and returns
+    Sprint 9: delegates to dsremo.eval.scoring.cluster_events and returns
     the first timestamp of each cluster (for backwards-compat with these tests).
     """
     from dsremo.eval.scoring import cluster_events as _ce

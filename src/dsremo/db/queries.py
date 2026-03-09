@@ -1724,7 +1724,7 @@ async def revoke_api_key_by_prefix(prefix: str) -> bool:
 # ---------------------------------------------------------------------------
 
 async def list_tenants() -> list[dict]:
-    """List all tenants (sentinel admin access — bypasses RLS via direct pool)."""
+    """List all tenants (dsremo admin access — bypasses RLS via direct pool)."""
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -1808,7 +1808,7 @@ async def get_dsremo_user_by_email(email: str) -> dict | None:
 
 
 async def create_dsremo_user(email: str, password_hash: str, role: str) -> dict:
-    """Insert a new Sentinel internal user.
+    """Insert a new Dsremo internal user.
 
     Raises asyncpg.UniqueViolationError if email already exists.
     """
@@ -1836,7 +1836,7 @@ async def update_dsremo_last_login(user_id: str) -> None:
 
 
 async def list_dsremo_users() -> list[dict]:
-    """List all sentinel internal users (direct pool, no RLS)."""
+    """List all dsremo internal users (direct pool, no RLS)."""
     pool = get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -1847,7 +1847,7 @@ async def list_dsremo_users() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Sentinel refresh tokens (pool direct — no RLS)
+# Dsremo refresh tokens (pool direct — no RLS)
 # ---------------------------------------------------------------------------
 
 async def store_dsremo_refresh_token(
@@ -1855,7 +1855,7 @@ async def store_dsremo_refresh_token(
     token_hash: str,
     expires_at: datetime,
 ) -> None:
-    """Persist a hashed sentinel refresh token."""
+    """Persist a hashed dsremo refresh token."""
     pool = get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
@@ -1869,7 +1869,7 @@ async def store_dsremo_refresh_token(
 
 
 async def get_dsremo_refresh_token(token_hash: str) -> dict | None:
-    """Look up a sentinel refresh token by hash (with user info joined)."""
+    """Look up a dsremo refresh token by hash (with user info joined)."""
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -1886,7 +1886,7 @@ async def get_dsremo_refresh_token(token_hash: str) -> dict | None:
 
 
 async def revoke_dsremo_refresh_token(token_hash: str) -> None:
-    """Mark a sentinel refresh token as revoked."""
+    """Mark a dsremo refresh token as revoked."""
     pool = get_pool()
     async with pool.acquire() as conn:
         await conn.execute(

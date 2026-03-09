@@ -66,7 +66,7 @@ async def init_pool(
         # Hot paths (insert_telemetry, get_recent_window) are prepared once
         # and reused — eliminates parse/plan overhead on every call.
         statement_cache_size=200,
-        # Identify Sentinel connections in pg_stat_activity for DBA visibility.
+        # Identify Dsremo connections in pg_stat_activity for DBA visibility.
         server_settings={"application_name": "dsremo"},
         # Per-connection init hook.
         init=_setup_connection,

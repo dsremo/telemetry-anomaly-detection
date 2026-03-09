@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import XTCE parameter definitions into the Sentinel channel registry.
+"""Import XTCE parameter definitions into the Dsremo channel registry.
 
 Usage
 -----
@@ -25,7 +25,7 @@ from pathlib import Path
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Import XTCE parameter definitions into Sentinel.",
+        description="Import XTCE parameter definitions into Dsremo.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(

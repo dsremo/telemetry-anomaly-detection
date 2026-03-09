@@ -1,4 +1,4 @@
-"""Correlation Graph Detector — 11th Sentinel ensemble member.
+"""Correlation Graph Detector — 11th Dsremo ensemble member.
 
 STGLR-inspired (MDPI Sensors Jan 2025, F1 > 0.97).  Full spatio-temporal
 graph learning requires PyTorch Geometric + 500+ training sequences.  This

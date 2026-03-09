@@ -64,8 +64,8 @@ class InfluxDBConnector(HTTPConnector):
         bucket:       Source bucket name.
         token:        InfluxDB v2 API token.
         measurement:  Measurement name to filter on (InfluxDB equivalent of a table).
-        fields:       List of field keys to fetch; each becomes one Sentinel parameter.
-        satellite_id: Sentinel satellite ID written to every DB row.
+        fields:       List of field keys to fetch; each becomes one Dsremo parameter.
+        satellite_id: Dsremo satellite ID written to every DB row.
         start:        Flux time range start. Accepts Flux duration literals ("-30d",
                       "-7d") or ISO-8601 strings. Default: "-30d".
         stop:         Flux time range stop. Default: "now()".

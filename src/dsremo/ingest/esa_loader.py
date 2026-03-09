@@ -6,7 +6,7 @@ Loads the ESA Anomaly Detection Benchmark (Mission1) dataset:
   - 200 labeled anomalies (Anomaly + Rare Event categories)
   - Pandas pickle format, DatetimeIndex
 
-This loader converts ESA's format into Sentinel's TelemetryPoint stream,
+This loader converts ESA's format into Dsremo's TelemetryPoint stream,
 making the real satellite data flow through our detection pipeline
 exactly like simulator data or customer data would.
 
@@ -38,7 +38,7 @@ logger = structlog.get_logger()
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _DEFAULT_DATA_DIR = _PROJECT_ROOT / "Resources" / "ESA-Mission1"
 
-# ESA uses generic subsystem names — map to Sentinel's standard names.
+# ESA uses generic subsystem names — map to Dsremo's standard names.
 # The exact mapping is based on the ESA OPS-SAT documentation and channel groupings.
 _ESA_SUBSYSTEM_MAP: dict[str, str] = {
     "subsystem_1": "eps",       # power/electrical
@@ -75,7 +75,7 @@ class LabeledAnomaly:
 
 
 class ESADataLoader(DataConnector):
-    """Loads and streams ESA OPS-SAT telemetry for Sentinel processing."""
+    """Loads and streams ESA OPS-SAT telemetry for Dsremo processing."""
 
     def __init__(
         self,
@@ -108,7 +108,7 @@ class ESADataLoader(DataConnector):
             for row in reader:
                 name = row["Channel"]
                 raw_subsystem = row["Subsystem"].strip().lower().replace(" ", "_")
-                # Map ESA's generic subsystem names to Sentinel's standard names
+                # Map ESA's generic subsystem names to Dsremo's standard names
                 mapped_subsystem = _ESA_SUBSYSTEM_MAP.get(raw_subsystem, "eps")
                 self._channels_meta[name] = ChannelMeta(
                     name=name,
@@ -362,7 +362,7 @@ class ESADataLoader(DataConnector):
         )
 
     def get_subsystem_map(self) -> dict[str, list[str]]:
-        """Group channels by subsystem — matches Sentinel's subsystem concept."""
+        """Group channels by subsystem — matches Dsremo's subsystem concept."""
         groups: dict[str, list[str]] = {}
         for name, meta in self._channels_meta.items():
             groups.setdefault(meta.subsystem, []).append(name)

@@ -218,7 +218,7 @@ async def logout(
     token_hash = _hash_token(body.refresh_token)
 
     if _user.get("scope") == "dsremo":
-        # Sentinel internal user — tokens stored in dsremo_refresh_tokens (no RLS)
+        # Dsremo internal user — tokens stored in dsremo_refresh_tokens (no RLS)
         await queries.revoke_dsremo_refresh_token(token_hash)
     else:
         # Tenant user — tokens stored in refresh_tokens (RLS-scoped)
@@ -285,12 +285,12 @@ async def me(_user: dict = Depends(get_current_user)) -> UserOut:
 
 
 # ---------------------------------------------------------------------------
-# POST /auth/dsremo-login  (Sentinel internal users)
+# POST /auth/dsremo-login  (Dsremo internal users)
 # ---------------------------------------------------------------------------
 
 @auth_router.post("/dsremo-login", response_model=TokenResponse)
 async def dsremo_login(body: LoginRequest, request: Request) -> TokenResponse:
-    """Authenticate a Sentinel internal user (superuser / dsremo_admin / developer).
+    """Authenticate a Dsremo internal user (superuser / dsremo_admin / developer).
 
     Returns a dsremo-scoped JWT — no tenant_id embedded; use X-Tenant-ID header
     on subsequent requests to scope operations to a specific customer tenant.
@@ -339,7 +339,7 @@ async def dsremo_login(body: LoginRequest, request: Request) -> TokenResponse:
 
 @auth_router.post("/dsremo-refresh", response_model=TokenResponse)
 async def dsremo_refresh(body: RefreshRequest, request: Request) -> TokenResponse:
-    """Exchange a sentinel refresh token for a new sentinel access token (with rotation)."""
+    """Exchange a dsremo refresh token for a new dsremo access token (with rotation)."""
     secret      = _get_jwt_secret(request)
     access_ttl  = _get_access_ttl(request)
     refresh_ttl = _get_refresh_ttl(request)

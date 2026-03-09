@@ -168,8 +168,8 @@ class TestAlertRouters:
 
             await router.send(anomaly, "tenant-1")
 
-        assert "X-Sentinel-Signature" in captured_headers
-        assert captured_headers["X-Sentinel-Signature"].startswith("sha256=")
+        assert "X-Dsremo-Signature" in captured_headers
+        assert captured_headers["X-Dsremo-Signature"].startswith("sha256=")
 
     @pytest.mark.asyncio
     async def test_webhook_transport_error_returns_false(self):

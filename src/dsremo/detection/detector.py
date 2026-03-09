@@ -1,4 +1,4 @@
-"""Detection pipeline orchestrator — the brain of Sentinel.
+"""Detection pipeline orchestrator — the brain of Dsremo.
 
 Detection order per parameter (post-STL architecture):
     1. Fetch recent window from DB (600 pts, oldest → newest)

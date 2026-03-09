@@ -20,8 +20,8 @@ Tables:
   api_keys           — hashed API credentials
   users              — tenant-scoped human users (RLS)
   refresh_tokens     — tenant-scoped refresh tokens (RLS)
-  dsremo_users     — Sentinel internal staff (no RLS, no tenant_id)
-  dsremo_refresh_tokens — Sentinel staff refresh tokens (no RLS)
+  dsremo_users     — Dsremo internal staff (no RLS, no tenant_id)
+  dsremo_refresh_tokens — Dsremo staff refresh tokens (no RLS)
   schema_version     — migration tracking
 """
 
@@ -608,10 +608,10 @@ _MIGRATIONS: list[str] = [
         WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
     """,
 
-    # v12: Sentinel internal users + extended role system.
+    # v12: Dsremo internal users + extended role system.
     #
     # Design:
-    #   - dsremo_users: no tenant_id, no RLS — Sentinel staff are cross-tenant.
+    #   - dsremo_users: no tenant_id, no RLS — Dsremo staff are cross-tenant.
     #     Role hierarchy: superuser > dsremo_admin > developer.
     #   - dsremo_refresh_tokens: mirrors refresh_tokens but references dsremo_users,
     #     no tenant_id, no RLS — same reasoning.

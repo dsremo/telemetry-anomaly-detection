@@ -421,7 +421,7 @@ class TestDiscordIntegration:
         import importlib
         spec = importlib.util.spec_from_file_location(
             "detector_src",
-            str(_ROOT / "src" / "sentinel" / "detection" / "detector.py"),
+            str(_ROOT / "src" / "dsremo" / "detection" / "detector.py"),
         )
         # Just confirm import doesn't crash
         from dsremo.detection.discord_detector import DiscordDetector

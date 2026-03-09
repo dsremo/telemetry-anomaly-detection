@@ -48,7 +48,7 @@ async def get_current_user(
             ) from exc
 
         if payload.get("scope") == "dsremo":
-            # Sentinel internal user — cross-tenant; X-Tenant-ID header sets context.
+            # Dsremo internal user — cross-tenant; X-Tenant-ID header sets context.
             x_tenant = request.headers.get("X-Tenant-ID", "")
             if x_tenant:
                 set_tenant(x_tenant)
@@ -113,7 +113,7 @@ def require_role(*allowed_roles: str):
 # Convenience shortcuts — import directly in route files
 # ---------------------------------------------------------------------------
 
-# Sentinel-internal routes (cross-tenant, no X-Tenant-ID needed)
+# Dsremo-internal routes (cross-tenant, no X-Tenant-ID needed)
 require_dsremo        = require_role("superuser", "dsremo_admin", "developer")
 require_dsremo_admin  = require_role("superuser", "dsremo_admin")
 

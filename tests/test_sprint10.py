@@ -498,7 +498,7 @@ class TestConfigKeys:
     def cfg(self):
         from dynaconf import Dynaconf
         cfg_path = Path(__file__).parent.parent / "configs" / "dsremo.yaml"
-        settings = Dynaconf(settings_file=str(cfg_path), envvar_prefix="SENTINEL")
+        settings = Dynaconf(settings_file=str(cfg_path), envvar_prefix="DSREMO")
         return settings.get("detection", {})
 
     def test_stl_max_fft_samples_present(self, cfg):

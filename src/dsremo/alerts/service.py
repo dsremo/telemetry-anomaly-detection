@@ -74,7 +74,7 @@ class WebhookRouter(AlertRouter):
             sig = hmac.new(
                 self._secret.encode(), body, hashlib.sha256
             ).hexdigest()
-            headers["X-Sentinel-Signature"] = f"sha256={sig}"
+            headers["X-Dsremo-Signature"] = f"sha256={sig}"
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -133,7 +133,7 @@ class EmailRouter(AlertRouter):
 
     async def send(self, anomaly: Anomaly, tenant_id: str) -> bool:
         subject = (
-            f"[Sentinel {anomaly.severity.value.upper()}] "
+            f"[Dsremo {anomaly.severity.value.upper()}] "
             f"{anomaly.satellite_id} — {anomaly.parameter}"
         )
         body = (

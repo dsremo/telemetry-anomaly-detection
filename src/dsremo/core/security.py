@@ -197,7 +197,7 @@ def create_dsremo_token(
     ttl_seconds: int = 900,
     email: str = "",
 ) -> str:
-    """Create a signed HS256 JWT for a Sentinel internal user.
+    """Create a signed HS256 JWT for a Dsremo internal user.
 
     Differs from create_access_token:
       - No 'tid' claim (dsremo users are cross-tenant).

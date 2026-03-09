@@ -1,7 +1,7 @@
 """Seed demo data — generates telemetry with injected faults for demos.
 
 Run: python scripts/seed_demo.py
-Requires: Sentinel API running on localhost:8400
+Requires: Dsremo API running on localhost:8400
 
 Generates 10 minutes of normal telemetry, then injects battery degradation.
 The dashboard should show the anomaly detection in real-time.
@@ -17,7 +17,7 @@ API_URL = "http://localhost:8400"
 
 
 async def main():
-    print("Sentinel Demo Seeder")
+    print("Dsremo Demo Seeder")
     print("=" * 50)
     print(f"API: {API_URL}")
     print()
@@ -31,7 +31,7 @@ async def main():
             print(f"DB: {'connected' if health.get('db_connected') else 'NOT connected'}")
         except httpx.HTTPError as e:
             print(f"Cannot reach API: {e}")
-            print("Start the server first: sentinel serve")
+            print("Start the server first: dsremo serve")
             sys.exit(1)
 
     print()

@@ -242,7 +242,7 @@ class UserOut(BaseModel):
     email: str
     role: str
     tenant_id: str
-    scope: str = ""   # "dsremo" for Sentinel staff users, "" for tenant users
+    scope: str = ""   # "dsremo" for Dsremo staff users, "" for tenant users
     display_name: str = ""
     phone: str = ""
 

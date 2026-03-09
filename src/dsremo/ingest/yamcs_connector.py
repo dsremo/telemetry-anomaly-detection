@@ -60,7 +60,7 @@ class YAMCSConnector(HTTPConnector):
         instance:       YAMCS instance name, e.g. "simulator"
         parameters:     Fully-qualified parameter paths, e.g.
                         ["/YSS/SIMULATOR/BatteryVoltage"]
-        satellite_id:   Sentinel satellite ID written to every DB row.
+        satellite_id:   Dsremo satellite ID written to every DB row.
         start:          Archive start time (UTC-aware). Defaults to 30 days ago.
         stop:           Archive end time (UTC-aware). Defaults to now.
         api_key:        Optional Bearer token for authenticated YAMCS instances.
@@ -105,7 +105,7 @@ class YAMCSConnector(HTTPConnector):
         resample_minutes: int = 1,
         skip_if_rows_gte: int = 50_000,
     ) -> dict[str, int]:
-        """Fetch all configured parameters from YAMCS and load into Sentinel DB.
+        """Fetch all configured parameters from YAMCS and load into Dsremo DB.
 
         For each parameter:
           1. Fetch all pages from the archive endpoint.

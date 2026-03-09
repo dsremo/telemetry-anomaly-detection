@@ -1,4 +1,4 @@
-# Sentinel — Cold Outreach Email Templates
+# Dsremo — Cold Outreach Email Templates
 
 ---
 
@@ -14,9 +14,9 @@ I noticed [Company] is now operating [X] satellites. Congratulations — that's 
 
 Here's the problem that hits every operator at your stage: your telemetry volume just outgrew your team's ability to watch it manually. The anomaly that causes your first in-orbit failure probably won't be dramatic — it'll be a 0.3-sigma voltage drift that nobody flagged because the dashboard looked "normal."
 
-**I built Sentinel to catch exactly that.**
+**I built Dsremo to catch exactly that.**
 
-Sentinel is a multi-tenant anomaly detection engine for satellite telemetry. You push JSON (or connect YAMCS / InfluxDB / SatNOGS), and within 30 minutes you get:
+Dsremo is a multi-tenant anomaly detection engine for satellite telemetry. You push JSON (or connect YAMCS / InfluxDB / SatNOGS), and within 30 minutes you get:
 
 - Real-time anomaly detection across all parameters, all satellites
 - Confidence scores + root-cause explanations (not just alert noise)
@@ -54,7 +54,7 @@ Hi [Name],
 
 Most operators I talk to are still running threshold-based alerting with Excel runbooks. That works until you have a slow battery cell degradation that stays inside nominal bounds for 6 weeks before it becomes a mission risk.
 
-**Sentinel uses a 6-algorithm ensemble** (Z-score, Isolation Forest, CUSUM, changepoint detection, rolling variance, variance spike detection) to find what thresholds miss. Anomalies are flagged only when 2+ detectors agree — meaning your on-call engineer gets paged when something is actually wrong.
+**Dsremo uses a 6-algorithm ensemble** (Z-score, Isolation Forest, CUSUM, changepoint detection, rolling variance, variance spike detection) to find what thresholds miss. Anomalies are flagged only when 2+ detectors agree — meaning your on-call engineer gets paged when something is actually wrong.
 
 Three things that differentiate us from basic monitoring tools:
 
@@ -79,9 +79,9 @@ Do you have 20 minutes this week or next?
 
 Hi [Name / Team],
 
-I'm reaching out because [Agency/Lab] has one of the most interesting telemetry archives in the field. I'd like to propose something: let us run Sentinel against a portion of your historical data and share the results with you — at no cost.
+I'm reaching out because [Agency/Lab] has one of the most interesting telemetry archives in the field. I'd like to propose something: let us run Dsremo against a portion of your historical data and share the results with you — at no cost.
 
-Sentinel is a production anomaly detection platform for satellite telemetry. We use a 6-detector ensemble that recently achieved 100% detection rate on ISS anomaly events (blind test, results cross-referenced with NASA/AMSAT public records).
+Dsremo is a production anomaly detection platform for satellite telemetry. We use a 6-detector ensemble that recently achieved 100% detection rate on ISS anomaly events (blind test, results cross-referenced with NASA/AMSAT public records).
 
 We're validating against NASA SMAP/MSL telemetry right now (the Hundman et al. benchmark) and would welcome the chance to run against a mission with your team's domain knowledge to help interpret results.
 
@@ -99,7 +99,7 @@ Is there someone on your team who handles telemetry data sharing agreements?
 
 ## Template D — VC / Accelerator (If raising)
 
-**Subject:** Sentinel — anomaly detection for the 10,000-satellite decade
+**Subject:** Dsremo — anomaly detection for the 10,000-satellite decade
 
 ---
 
@@ -107,9 +107,9 @@ Hi [Name],
 
 The number of operational satellites doubles every 18 months. The number of satellite engineers grows at roughly the rate of any other technical specialty — maybe 10% per year.
 
-That gap is Sentinel's market.
+That gap is Dsremo's market.
 
-Sentinel is a SaaS anomaly detection engine for satellite telemetry. We sit between the spacecraft and the operations team — ingesting telemetry from any source (YAMCS, InfluxDB, SatNOGS, direct API) and surfacing real anomalies with explanations before they become failures.
+Dsremo is a SaaS anomaly detection engine for satellite telemetry. We sit between the spacecraft and the operations team — ingesting telemetry from any source (YAMCS, InfluxDB, SatNOGS, direct API) and surfacing real anomalies with explanations before they become failures.
 
 **Traction:**
 - Working product, deployed on real ISS and ESA data
@@ -144,9 +144,9 @@ Congratulations on [recent milestone — launch manifest / funding / mission ann
 
 Here's the thing most first-time operators discover too late: the telemetry anomaly that ends the mission is almost never a sudden failure. It's a slow drift that looked normal until it wasn't.
 
-**I built Sentinel specifically for teams at your stage.**
+**I built Dsremo specifically for teams at your stage.**
 
-Sentinel is free for single-satellite operators. No credit card, no time limit. You get:
+Dsremo is free for single-satellite operators. No credit card, no time limit. You get:
 
 - Full 6-detector ensemble (z-score, CUSUM, changepoint, Isolation Forest, rolling variance, variance spike)
 - Upload your CSV from the dashboard — first anomaly report in under 10 minutes
@@ -178,7 +178,7 @@ Quick follow-up — I realize my previous note landed during what was probably a
 
 One specific thing that might be relevant to [Company]: we recently detected a propulsion anomaly pattern on ESA Mission 1 data that standard threshold alerting had been ignoring for months. The signature was in the correlation between two parameters, not in either one individually.
 
-If that's a problem you recognize, Sentinel is worth 20 minutes of your time.
+If that's a problem you recognize, Dsremo is worth 20 minutes of your time.
 
 If the timing is wrong, happy to check back in [month]. Just let me know.
 
@@ -206,4 +206,4 @@ If the timing is wrong, happy to check back in [month]. Just let me know.
 **Direct:**
 - "Anomaly detection for [Company]'s constellation — worth 20 minutes?"
 - "Satellite telemetry AI — pilot offer for [Company]"
-- "Sentinel: real-time anomaly detection, live in 30 minutes"
+- "Dsremo: real-time anomaly detection, live in 30 minutes"

@@ -467,7 +467,7 @@ class TestCsvUploadEndpoint:
             mock_totals = {"voltage": 2, "current": 2}
 
         # CSVConnector is a local import inside the route handler, so patch
-        # at its canonical module path (not sentinel.api.routes.CSVConnector).
+        # at its canonical module path (not dsremo.api.routes.CSVConnector).
         with patch(
             "dsremo.ingest.csv_connector.CSVConnector",
             autospec=True,

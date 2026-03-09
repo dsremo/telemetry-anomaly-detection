@@ -1,7 +1,7 @@
 """User management routes — CRUD for tenant users.
 
 Tenant admins manage users within their own tenant (RLS enforces scoping).
-Sentinel admins can operate on any tenant via X-Tenant-ID header.
+Dsremo admins can operate on any tenant via X-Tenant-ID header.
 
 Routes:
   POST  /users                  — Create a new user

@@ -1,9 +1,9 @@
-"""YAMCS — Sentinel Anomaly Detection.
+"""YAMCS — Dsremo Anomaly Detection.
 
 Thin CLI wrapper.  All pipeline logic lives in production modules:
-  sentinel.ingest.yamcs_connector  — YAMCSConnector.bulk_load_to_db()
-  sentinel.ingest.bulk_loader      — run_bulk_detection(), print_detection_report()
-  sentinel.ingest.pipeline         — db_context, phase, print_run_header
+  dsremo.ingest.yamcs_connector  — YAMCSConnector.bulk_load_to_db()
+  dsremo.ingest.bulk_loader      — run_bulk_detection(), print_detection_report()
+  dsremo.ingest.pipeline         — db_context, phase, print_run_header
 
 YAMCS REST API v2: https://docs.yamcs.org/yamcs-http-api/
 
@@ -31,7 +31,7 @@ Run:
         --start 2024-01-01T00:00:00Z --stop 2024-02-01T00:00:00Z
 
 Requires:
-    Sentinel DB running (postgres).  API server does NOT need to be up.
+    Dsremo DB running (postgres).  API server does NOT need to be up.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ async def main(
         )
 
         print_run_header(
-            "YAMCS — Sentinel Anomaly Detection",
+            "YAMCS — Dsremo Anomaly Detection",
             URL=url,
             Instance=instance,
             Satellite=satellite_id,
@@ -113,7 +113,7 @@ def _parse_dt(s: str) -> datetime:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Fetch YAMCS archive parameters and run Sentinel anomaly detection"
+        description="Fetch YAMCS archive parameters and run Dsremo anomaly detection"
     )
     parser.add_argument("--url", required=True,
                         help="YAMCS server URL (e.g. http://localhost:8090)")
@@ -123,7 +123,7 @@ if __name__ == "__main__":
                         metavar="PARAM",
                         help="Fully-qualified parameter path(s) (e.g. /YSS/SIMULATOR/BatteryVoltage)")
     parser.add_argument("--satellite-id", required=True, metavar="SAT_ID",
-                        help="Sentinel satellite identifier (e.g. YAMCS-SIM)")
+                        help="Dsremo satellite identifier (e.g. YAMCS-SIM)")
     parser.add_argument("--api-key", default="",
                         help="YAMCS Bearer token (optional)")
     parser.add_argument("--start", default=None, metavar="ISO8601",

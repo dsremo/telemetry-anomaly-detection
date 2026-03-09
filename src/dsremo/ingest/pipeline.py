@@ -116,7 +116,7 @@ def print_run_header(title: str, **pairs: str) -> None:
     Example::
 
         print_run_header(
-            "CSV Telemetry — Sentinel",
+            "CSV Telemetry — Dsremo",
             File="telemetry.csv",
             Satellite="MYSAT-1",
             Resolution="5-min",

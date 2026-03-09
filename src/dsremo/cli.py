@@ -1,4 +1,4 @@
-"""Sentinel CLI — the operational interface for the engine.
+"""Dsremo CLI — the operational interface for the engine.
 
 Commands:
   dsremo serve                    — Start the API server
@@ -11,8 +11,8 @@ Commands:
   dsremo users create             — Create a tenant user
   dsremo users list               — List users in a tenant
   dsremo users deactivate         — Deactivate a tenant user
-  dsremo dsremo-users create    — Create a Sentinel internal user (bootstrap)
-  dsremo dsremo-users list      — List all Sentinel internal users
+  dsremo dsremo-users create    — Create a Dsremo internal user (bootstrap)
+  dsremo dsremo-users list      — List all Dsremo internal users
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import typer
 
 app = typer.Typer(
     name="dsremo",
-    help="Sentinel — AI Telemetry Anomaly Detection Engine",
+    help="Dsremo — AI Telemetry Anomaly Detection Engine",
     no_args_is_help=True,
 )
 key_app = typer.Typer(help="API key management")
@@ -35,7 +35,7 @@ users_app = typer.Typer(help="User management (B2B SaaS — tenant admin creates
 app.add_typer(users_app, name="users")
 
 dsremo_users_app = typer.Typer(
-    help="Sentinel internal user management (superuser/dsremo_admin/developer)"
+    help="Dsremo internal user management (superuser/dsremo_admin/developer)"
 )
 app.add_typer(dsremo_users_app, name="dsremo-users")
 
@@ -47,10 +47,10 @@ def serve(
     reload: bool = typer.Option(False, help="Auto-reload on code changes (dev only)"),
     config: Path | None = typer.Option(None, help="Path to dsremo.yaml"),
 ) -> None:
-    """Start the Sentinel API server."""
+    """Start the Dsremo API server."""
     import uvicorn
 
-    typer.echo(f"Starting Sentinel on {host}:{port}")
+    typer.echo(f"Starting Dsremo on {host}:{port}")
     uvicorn.run(
         "dsremo.api.app:create_app",
         host=host,
@@ -68,9 +68,9 @@ def simulate(
     rate: float = typer.Option(1.0, help="Telemetry rate in Hz"),
     inject: str = typer.Option("", help="Fault scenario to inject (e.g., battery_degradation)"),
     inject_after: int = typer.Option(60, help="Seconds before fault injection"),
-    api_url: str = typer.Option("http://localhost:8400", help="Sentinel API URL"),
+    api_url: str = typer.Option("http://localhost:8400", help="Dsremo API URL"),
 ) -> None:
-    """Run the spacecraft simulator and push telemetry to Sentinel API."""
+    """Run the spacecraft simulator and push telemetry to Dsremo API."""
     asyncio.run(_run_simulator(satellite, duration, rate, inject, inject_after, api_url))
 
 
@@ -204,7 +204,7 @@ def scenarios() -> None:
 
 @app.command()
 def health(
-    api_url: str = typer.Option("http://localhost:8400", help="Sentinel API URL"),
+    api_url: str = typer.Option("http://localhost:8400", help="Dsremo API URL"),
 ) -> None:
     """Check system health."""
     import httpx
@@ -393,7 +393,7 @@ async def _revoke_key(hash_prefix: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Sentinel internal users subcommand group
+# Dsremo internal users subcommand group
 # ---------------------------------------------------------------------------
 
 _DSREMO_VALID_ROLES = ("superuser", "dsremo_admin", "developer")
@@ -405,7 +405,7 @@ def dsremo_users_create(
     role: str = typer.Option("developer", help="Role: superuser | dsremo_admin | developer"),
     password: str = typer.Option("", help="Password (prompted if not provided)"),
 ) -> None:
-    """Create a Sentinel internal user (bootstrap the first superuser)."""
+    """Create a Dsremo internal user (bootstrap the first superuser)."""
     import getpass
 
     if role not in _DSREMO_VALID_ROLES:
@@ -431,7 +431,7 @@ def dsremo_users_create(
 
 @dsremo_users_app.command("list")
 def dsremo_users_list() -> None:
-    """List all Sentinel internal users."""
+    """List all Dsremo internal users."""
     asyncio.run(_list_dsremo_users())
 
 
@@ -471,10 +471,10 @@ async def _list_dsremo_users() -> None:
     await close_pool()
 
     if not users:
-        typer.echo("No Sentinel internal users found.")
+        typer.echo("No Dsremo internal users found.")
         return
 
-    typer.echo("\nSentinel Internal Users:")
+    typer.echo("\nDsremo Internal Users:")
     typer.echo(f"  {'Email':<40} {'Role':<16} {'Active':<8} {'Created'}")
     typer.echo("  " + "-" * 80)
     for u in users:

@@ -1,7 +1,7 @@
 """Tenant management routes — create, list, view, update tenants.
 
 All routes require dsremo_admin or superuser role. These are internal
-Sentinel staff endpoints; tenant admins do not have access here.
+Dsremo staff endpoints; tenant admins do not have access here.
 
 Routes:
   POST   /tenants           — Create a new tenant

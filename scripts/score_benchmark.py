@@ -5,8 +5,8 @@ Usage:
     python3 scripts/score_benchmark.py --tenant cats-spacecraft --gt /tmp/bench_isro/cats/gt_windows.json
     python3 scripts/score_benchmark.py --tenant skab-bench --gt /path/to/gt_windows.json
 
-No API server required — queries the DB directly as the sentinel user.
-Uses sentinel.eval.scoring for event-level P/R/F1 with ±window tolerance.
+No API server required — queries the DB directly as the sentinel PostgreSQL user (still named sentinel in DB).
+Uses dsremo.eval.scoring for event-level P/R/F1 with ±window tolerance.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""CSVConnector — load wide-format CSV telemetry into Sentinel DB.
+"""CSVConnector — load wide-format CSV telemetry into Dsremo DB.
 
 CSV format (wide):
     timestamp,param1,param2,...
@@ -42,13 +42,13 @@ _Source = Union[Path, str, io.IOBase]
 
 
 class CSVConnector(DataConnector):
-    """Load wide-format CSV telemetry into the Sentinel DB.
+    """Load wide-format CSV telemetry into the Dsremo DB.
 
     Args:
         source:         File path (``Path`` or ``str``) *or* any file-like
                         object (``io.BytesIO``, ``io.StringIO``, open file).
                         Pandas ``read_csv`` handles both transparently.
-        satellite_id:   Sentinel satellite identifier written to every DB row.
+        satellite_id:   Dsremo satellite identifier written to every DB row.
                         Must not be empty.
         subsystem:      Subsystem label for all parameters in this file.
                         Use a separate connector per subsystem for mixed files.

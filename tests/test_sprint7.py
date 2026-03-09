@@ -5,7 +5,7 @@ Covers:
   - TestAdminPasswordReset    — POST /users/{id}/reset-password (6 tests)
   - TestMemoryStoreAdminStubs — user/tenant/key stubs in memory_store.py (12 tests)
   - TestAdminUserAPI          — full /users + /keys round-trip via demo_client (10 tests)
-  - TestAdminTenantsAPI       — /tenants round-trip (sentinel-scope demo) (6 tests)
+  - TestAdminTenantsAPI       — /tenants round-trip (dsremo-scope demo) (6 tests)
 """
 
 from __future__ import annotations
@@ -343,7 +343,7 @@ class TestAdminUserAPI:
 
 
 # ---------------------------------------------------------------------------
-# 4. TestAdminTenantsAPI — /tenants routes (sentinel scope in demo)
+# 4. TestAdminTenantsAPI — /tenants routes (dsremo scope in demo)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -358,15 +358,15 @@ def dsremo_demo_client():
     from dsremo.api.app import create_app
     from dsremo.api.dependencies import get_current_user
 
-    sentinel_user = {
-        "user_id": "sentinel-demo",
+    dsremo_user = {
+        "user_id": "dsremo-demo",
         "tenant_id": "default",
         "role": "dsremo_admin",
-        "scope": "sentinel",
+        "scope": "dsremo",
     }
 
     app = create_app(demo=True)
-    app.dependency_overrides[get_current_user] = lambda: sentinel_user
+    app.dependency_overrides[get_current_user] = lambda: dsremo_user
 
     with TestClient(app) as client:
         yield client
@@ -375,7 +375,7 @@ def dsremo_demo_client():
 
 
 class TestAdminTenantsAPI:
-    """HTTP-level tests for /tenants routes (sentinel admin only)."""
+    """HTTP-level tests for /tenants routes (dsremo admin only)."""
 
     def test_list_tenants_returns_200(self, dsremo_demo_client):
         resp = dsremo_demo_client.get("/api/v1/tenants")

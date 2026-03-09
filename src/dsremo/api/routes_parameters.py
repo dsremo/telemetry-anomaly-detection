@@ -6,7 +6,7 @@ POST /parameters/import-xtce
     pre-registers each channel in the channels_seen registry.
 
     This lets customers import their YAMCS Mission Database once and have
-    Sentinel automatically classify incoming telemetry with the correct
+    Dsremo automatically classify incoming telemetry with the correct
     subsystem and unit — without manual channel registration.
 
 Requires operator role (same as telemetry upload).
@@ -67,7 +67,7 @@ def _param_to_out(p: ParameterDef) -> ParameterDefOut:
     summary="Import parameter definitions from an XTCE XML file",
     description=(
         "Upload an XTCE (CCSDS 660.1) XML Mission Database file.  "
-        "Sentinel parses the ParameterSet + ParameterTypeSet, pre-registers "
+        "Dsremo parses the ParameterSet + ParameterTypeSet, pre-registers "
         "each telemetry parameter in the channel registry with its correct "
         "unit and subsystem label, and returns the full list of imported "
         "parameter definitions including any alarm ranges.  "

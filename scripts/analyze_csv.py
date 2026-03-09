@@ -1,9 +1,9 @@
 """CSV Telemetry — Full Benchmark Analysis.
 
 Thin CLI wrapper.  All pipeline logic lives in production modules:
-  sentinel.ingest.csv_connector — CSVConnector.bulk_load_to_db()
-  sentinel.ingest.bulk_loader   — run_bulk_detection(), print_detection_report()
-  sentinel.ingest.pipeline      — db_context, phase, print_run_header
+  dsremo.ingest.csv_connector — CSVConnector.bulk_load_to_db()
+  dsremo.ingest.bulk_loader   — run_bulk_detection(), print_detection_report()
+  dsremo.ingest.pipeline      — db_context, phase, print_run_header
 
 CSV format (wide):
     timestamp,param1,param2,...
@@ -23,7 +23,7 @@ Alert cooldown is auto-detected by default (no flag needed):
     Use --cooldown-hours to override this behaviour.
 
 Requires:
-    Sentinel DB running (postgres).  API server does NOT need to be up.
+    Dsremo DB running (postgres).  API server does NOT need to be up.
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ async def main(
             f"{resample_minutes}-min resampling" if resample_minutes > 1 else "raw timestamps"
         )
         print_run_header(
-            "CSV Telemetry — Sentinel Anomaly Detection",
+            "CSV Telemetry — Dsremo Anomaly Detection",
             File=str(file_path),
             Satellite=satellite_id,
             Subsystem=subsystem,

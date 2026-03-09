@@ -31,10 +31,10 @@ _SECRET = "test-secret-key-that-is-long-enough-for-hs256"
 
 
 # ---------------------------------------------------------------------------
-# Sentinel JWT token
+# Dsremo JWT token
 # ---------------------------------------------------------------------------
 
-class TestSentinelToken:
+class TestDsremoToken:
     def test_scope_is_dsremo(self):
         token = create_dsremo_token("uid-1", "superuser", _SECRET)
         payload = decode_access_token(token, _SECRET)

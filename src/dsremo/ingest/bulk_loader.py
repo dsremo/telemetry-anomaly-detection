@@ -395,7 +395,7 @@ async def load_channels_from_series(
       5. Bulk-insert via bulk_insert_channel (UNNEST batches, idempotent).
 
     Args:
-        satellite_id:    Sentinel satellite identifier (must be non-empty).
+        satellite_id:    Dsremo satellite identifier (must be non-empty).
         channels:        {parameter_name: pandas.Series(DatetimeIndex, float)}.
         subsystem_map:   Optional {parameter → subsystem label}. Defaults to source_name.
         unit_map:        Optional {parameter → unit string}.

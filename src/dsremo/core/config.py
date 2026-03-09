@@ -39,7 +39,7 @@ def _load_dotenv() -> None:
 
 def load_config(
     config_path: Path | None = None,
-    env_prefix: str = "SENTINEL",
+    env_prefix: str = "DSREMO",
 ) -> Dynaconf:
     """Load configuration with layered overrides.
 

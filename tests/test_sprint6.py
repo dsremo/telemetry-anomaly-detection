@@ -125,7 +125,7 @@ _NO_NS_XTCE = _xtce("""
 # ---------------------------------------------------------------------------
 
 class TestXTCEParser:
-    """Unit tests for sentinel.ingest.xtce_parser.parse_xtce()."""
+    """Unit tests for dsremo.ingest.xtce_parser.parse_xtce()."""
 
     def _parse(self, xml: bytes):
         from dsremo.ingest.xtce_parser import parse_xtce

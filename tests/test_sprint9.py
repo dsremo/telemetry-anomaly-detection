@@ -1,7 +1,7 @@
 """Sprint 9 tests — Variance Detection + STL FFT + Production Quality.
 
 Covers:
-  - TestScoringModule          — sentinel.eval.scoring (10 tests)
+  - TestScoringModule          — dsremo.eval.scoring (10 tests)
   - TestVarianceDetector       — VarianceDetector (12 tests)
   - TestSTLFFTPeriod           — STLDecomposer._fft_period + _estimate_period (10 tests)
   - TestCooldownUtils          — detect_data_frequency + adaptive_cooldown_hours (8 tests)

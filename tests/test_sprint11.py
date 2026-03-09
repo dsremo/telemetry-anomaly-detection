@@ -451,7 +451,7 @@ class TestAutoencoderIntegration:
         d.fit()
         assert d.is_fitted
 
-        # Patch detect to return the torch_not_available sentinel directly
+        # Patch detect to return the torch_not_available placeholder directly
         def _patched(residuals):
             return DetectorResult(
                 detector_name="lstm",

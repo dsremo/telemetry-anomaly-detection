@@ -1,7 +1,7 @@
 """Explainability engine — turns anomaly scores into operator understanding.
 
-This is Sentinel's competitive moat. Any tool can flag "anomaly detected."
-Only Sentinel says:
+This is Dsremo's competitive moat. Any tool can flag "anomaly detected."
+Only Dsremo says:
   - "Battery voltage dropped because solar panel current decreased 12% during this orbit"
   - "Thermal anomaly likely caused by EPS instability — battery_temp and battery_voltage
     correlated anomalies detected within 30 seconds"

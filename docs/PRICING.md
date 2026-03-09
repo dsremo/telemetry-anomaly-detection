@@ -1,4 +1,4 @@
-# Sentinel — Pricing
+# Dsremo — Pricing
 
 ## SaaS Tiers
 
@@ -79,7 +79,7 @@ Applies to operators with at least one operational or manifested satellite. No r
 ## Frequently Asked Questions
 
 **Do I need labeled training data?**
-No. Sentinel uses unsupervised detection (z-score, Isolation Forest, CUSUM, PELT, rolling variance, variance spike detection). It learns your telemetry baseline automatically in the first 24–48 hours of operation. No labels, no model training.
+No. Dsremo uses unsupervised detection (z-score, Isolation Forest, CUSUM, PELT, rolling variance, variance spike detection). It learns your telemetry baseline automatically in the first 24–48 hours of operation. No labels, no model training.
 
 **How long does onboarding take?**
 - **CSV upload**: Under 15 minutes. Upload your file from the dashboard, click "Run Analysis", get results.
@@ -90,7 +90,7 @@ No. Sentinel uses unsupervised detection (z-score, Isolation Forest, CUSUM, PELT
 No. The dashboard is designed for single-engineer teams. Upload a CSV, see anomalies, set up an email alert. That's the full flow. We've had operators go from zero to first anomaly report in under 10 minutes.
 
 **Can I run it on-premises?**
-Yes, for Enterprise customers. Sentinel is packaged as a single Docker Compose stack. We provide a license key and support contract.
+Yes, for Enterprise customers. Dsremo is packaged as a single Docker Compose stack. We provide a license key and support contract.
 
 **What's your uptime SLA?**
 Pro: 99.5% monthly uptime (planned maintenance excluded).
@@ -118,7 +118,7 @@ We support a telemetry adapter layer — you send us engineering values (not raw
 
 ## ROI Estimate
 
-| Scenario | Without Sentinel | With Sentinel |
+| Scenario | Without Dsremo | With Dsremo |
 |---|---|---|
 | Engineer-hours/month on manual telemetry review | 80 hrs × $150/hr = $12,000 | 10 hrs × $150/hr = $1,500 |
 | False-positive pages per month | 40 (2/day) | 4–8 |

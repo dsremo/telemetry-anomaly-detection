@@ -131,7 +131,7 @@ class TestLSTMSaveLoad:
         pytest.importorskip("torch")
         from dsremo.detection.autoencoder_detector import AutoencoderDetector
         det = AutoencoderDetector(seq_length=20)
-        result = det.load(Path("/tmp/nonexistent_sentinel_test.pt"))
+        result = det.load(Path("/tmp/nonexistent_dsremo_test.pt"))
         assert result is False
 
     def test_load_does_not_raise_on_corrupt_file(self):
@@ -241,7 +241,7 @@ class TestTCNSaveLoad:
         pytest.importorskip("torch")
         from dsremo.detection.tcn_detector import TCNDetector
         det = TCNDetector(seq_length=20)
-        result = det.load(Path("/tmp/nonexistent_sentinel_tcn_test.pt"))
+        result = det.load(Path("/tmp/nonexistent_dsremo_tcn_test.pt"))
         assert result is False
 
     def test_load_does_not_raise_on_corrupt_file(self):
@@ -311,7 +311,7 @@ class TestModelDirWiring:
         import dsremo.detection.detector as det_mod
         original = det_mod._model_dir
         try:
-            det_mod._model_dir = Path("/tmp/sentinel_test_models")
+            det_mod._model_dir = Path("/tmp/dsremo_test_models")
             path = det_mod._lstm_model_path("SAT-1", "voltage")
             assert path is not None
             assert str(path).endswith(".lstm.pt")
@@ -324,7 +324,7 @@ class TestModelDirWiring:
         import dsremo.detection.detector as det_mod
         original = det_mod._model_dir
         try:
-            det_mod._model_dir = Path("/tmp/sentinel_test_models")
+            det_mod._model_dir = Path("/tmp/dsremo_test_models")
             path = det_mod._tcn_model_path("SAT-1", "current")
             assert path is not None
             assert str(path).endswith(".tcn.pt")
@@ -393,7 +393,7 @@ class TestSmartCooldown:
 
     def test_returns_none_for_missing_file(self):
         from dsremo.ingest.utils import smart_cooldown_hours
-        result = smart_cooldown_hours(Path("/tmp/nonexistent_sentinel_csv_test.csv"))
+        result = smart_cooldown_hours(Path("/tmp/nonexistent_dsremo_csv_test.csv"))
         assert result is None
 
     def test_returns_none_for_fewer_than_min_bursts(self):

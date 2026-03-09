@@ -1,9 +1,9 @@
 """SatNOGS Network — Full Benchmark Analysis.
 
 Thin CLI wrapper.  All pipeline logic lives in production modules:
-  sentinel.ingest.satnogs_fetcher — SatNOGSFetcher.bulk_load_to_db()
-  sentinel.ingest.bulk_loader     — run_bulk_detection(), print_detection_report()
-  sentinel.ingest.pipeline        — db_context, phase, print_run_header
+  dsremo.ingest.satnogs_fetcher — SatNOGSFetcher.bulk_load_to_db()
+  dsremo.ingest.bulk_loader     — run_bulk_detection(), print_detection_report()
+  dsremo.ingest.pipeline        — db_context, phase, print_run_header
 
 Run:
     # ISS + two CubeSats (NORAD IDs from celestrak.org)
@@ -17,7 +17,7 @@ Run:
 
 Requires:
     SATNOGS_API_TOKEN in .env
-    Sentinel DB running (postgres).  Server does NOT need to be up.
+    Dsremo DB running (postgres).  Server does NOT need to be up.
 """
 
 from __future__ import annotations

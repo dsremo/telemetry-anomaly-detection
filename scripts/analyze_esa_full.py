@@ -1,15 +1,15 @@
 """ESA OPS-SAT — Full Benchmark Analysis.
 
 Thin CLI wrapper.  All pipeline logic lives in production modules:
-  sentinel.ingest.esa_loader  — ESADataLoader.bulk_load_channels_to_db()
-  sentinel.ingest.bulk_loader — run_bulk_detection(), print_detection_report()
-  sentinel.ingest.pipeline    — db_context, phase, print_run_header
+  dsremo.ingest.esa_loader  — ESADataLoader.bulk_load_channels_to_db()
+  dsremo.ingest.bulk_loader — run_bulk_detection(), print_detection_report()
+  dsremo.ingest.pipeline    — db_context, phase, print_run_header
 
 Run:
     python3 scripts/analyze_esa_full.py [--resample-minutes N] [--channels N]
 
 Requires:
-    Sentinel DB running (postgres).  Server does NOT need to be up.
+    Dsremo DB running (postgres).  Server does NOT need to be up.
     Configure via DSREMO_DB_* env vars or configs/dsremo.yaml.
 """
 

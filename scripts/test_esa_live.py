@@ -2,7 +2,7 @@
 
 Loads ALL 58 target channels from the ESA OPS-SAT mission (2000–2013),
 samples each to ~2000 points spanning the full time range, pushes to
-the Sentinel API, and reports what anomalies the detector finds.
+the Dsremo API, and reports what anomalies the detector finds.
 
 Features:
 - DB-aware: skips channels already loaded (>= 1800 pts in DB)
@@ -10,7 +10,7 @@ Features:
 - tqdm progress bar with live stats
 
 Run:  python3 scripts/test_esa_live.py
-Requires: sentinel serve running on localhost:8400
+Requires: dsremo serve running on localhost:8400
 """
 
 from __future__ import annotations
@@ -151,11 +151,11 @@ async def main() -> None:
             health = resp.json()
             print(f"Server:   {health['status']} (v{health.get('version','?')}, DB={health.get('db_connected',False)})")
             if token:
-                print(f"Auth:     JWT Bearer (admin@sentinel-demo.com)")
+                print(f"Auth:     JWT Bearer (admin@dsremo.io)")
             else:
                 print(f"Auth:     NONE — pushes will be rejected with 401")
         except httpx.ConnectError:
-            print("FAIL: Cannot connect. Run 'sentinel serve' first.")
+            print("FAIL: Cannot connect. Run 'dsremo serve' first.")
             sys.exit(1)
 
         # Check which channels are already in DB

@@ -292,7 +292,7 @@ class SatNOGSFetcher(DataConnector):
         raw_frames: list[dict],
         satellite_id: str | None = None,
     ) -> list[TelemetryPoint]:
-        """Convert SatNOGS raw frames into Sentinel TelemetryPoints.
+        """Convert SatNOGS raw frames into Dsremo TelemetryPoints.
 
         The SatNOGS public API does NOT include decoded telemetry —
         the 'decoded' field is just a flag string, not a data dict.

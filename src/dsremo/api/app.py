@@ -159,7 +159,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     settings = load_config(config_path)
 
     app = FastAPI(
-        title="Sentinel",
+        title="Dsremo",
         description="AI Telemetry Anomaly Detection Engine",
         version=__version__,
         lifespan=lifespan,

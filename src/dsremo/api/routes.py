@@ -1,4 +1,4 @@
-"""API routes — the public contract of the Sentinel engine.
+"""API routes — the public contract of the Dsremo engine.
 
 Every route is thin: validate → delegate → respond.
 Business logic lives in domain modules, never in route handlers.
@@ -145,7 +145,7 @@ async def upload_telemetry_csv(
     file: UploadFile = File(..., description="Wide-format CSV: timestamp + parameter columns"),
     _user: dict = Depends(require_operator),
 ) -> CsvUploadResult:
-    """Upload a wide-format CSV file and bulk-load it into Sentinel.
+    """Upload a wide-format CSV file and bulk-load it into Dsremo.
 
     CSV format::
 

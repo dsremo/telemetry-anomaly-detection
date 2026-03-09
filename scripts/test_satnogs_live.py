@@ -1,11 +1,11 @@
-"""SatNOGS real satellite data → Sentinel API live test.
+"""SatNOGS real satellite data → Dsremo API live test.
 
 Fetches raw frames from the SatNOGS network and extracts signal-level
 metrics (frame length, byte entropy, inter-frame gaps) that flow through
 our anomaly detection pipeline.
 
 Run:  python3 scripts/test_satnogs_live.py
-Requires: sentinel serve running on localhost:8400
+Requires: dsremo serve running on localhost:8400
           SATNOGS_API_TOKEN set in .env
 """
 
@@ -75,7 +75,7 @@ async def main() -> None:
             health = resp.json()
             print(f"Server: {health['status']} (v{health.get('version', '?')})")
         except httpx.ConnectError:
-            print("FAIL: Cannot connect to server. Run 'sentinel serve' first.")
+            print("FAIL: Cannot connect to server. Run 'dsremo serve' first.")
             sys.exit(1)
 
     # --- 3. Fetch and convert from each satellite ---
@@ -127,7 +127,7 @@ async def main() -> None:
         sys.exit(1)
 
     # --- 4. Push to API ---
-    print(f"\nPushing {len(all_points)} points to Sentinel API...")
+    print(f"\nPushing {len(all_points)} points to Dsremo API...")
     async with httpx.AsyncClient(timeout=30.0, headers=auth_headers) as client:
         accepted_total = 0
         rejected_total = 0
