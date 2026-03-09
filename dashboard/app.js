@@ -2040,6 +2040,35 @@ function initTheme() {
     });
 }
 
+// ============================================================
+// Welcome Tutorial Modal
+// ============================================================
+function showWelcomeModal() {
+    document.getElementById('welcomeModal').style.display = 'flex';
+}
+function closeWelcomeModal() {
+    document.getElementById('welcomeModal').style.display = 'none';
+}
+
+// Load a bundled sample dataset into the CSV upload form
+function loadSampleDataset(name, satId, description) {
+    fetch(`/dashboard/samples/${name}`)
+        .then(r => r.blob())
+        .then(blob => {
+            const file = new File([blob], name, { type: 'text/csv' });
+            // Inject into the CSV file state
+            state.csvFile = file;
+            document.getElementById('csv-satellite-id').value = satId;
+            const info = document.getElementById('csvFileInfo');
+            info.style.display = 'block';
+            info.innerHTML = `<span class="file-name">📊 ${name}</span><span class="file-size">${(blob.size/1024).toFixed(1)} KB</span><div class="sample-desc">${description}</div>`;
+            document.getElementById('csvUploadBtn').disabled = false;
+            closeWelcomeModal();
+            toast(`Sample loaded: ${satId} — click "Upload Data" to start detection`, 'success');
+        })
+        .catch(() => toast('Could not load sample file', 'error'));
+}
+
 function applyTheme(theme) {
     localStorage.setItem('dsremo-theme', theme);
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -2109,9 +2138,11 @@ async function initAuth() {
     const fragment = new URLSearchParams(window.location.hash.slice(1));
     const fragAccess  = fragment.get('access_token');
     const fragRefresh = fragment.get('refresh_token');
+    const isNewUser   = fragment.get('new_user') === '1';
     if (fragAccess) {
         localStorage.setItem('dsremo-access-token',  fragAccess);
         localStorage.setItem('dsremo-refresh-token', fragRefresh || '');
+        if (isNewUser) localStorage.setItem('dsremo-new-user', '1');
         // Clean the fragment from the URL so the token doesn't linger in history
         history.replaceState(null, '', window.location.pathname);
     }
@@ -3232,10 +3263,19 @@ initAuth().then(() => {
     fetchAnomalies();
     fetchSatellites();
     fetchStats();
-    // Restore last active tab (must be after auth so role-gated tabs are visible)
-    const savedTab = localStorage.getItem('dsremo-active-tab');
-    if (savedTab && document.querySelector(`.tab-btn[data-tab="${savedTab}"]`)) {
-        switchTab(savedTab);
+
+    // New user — open Import tab and show welcome tutorial
+    const isNewUser = localStorage.getItem('dsremo-new-user') === '1';
+    if (isNewUser) {
+        localStorage.removeItem('dsremo-new-user');
+        switchTab('import');
+        setTimeout(() => showWelcomeModal(), 600);
+    } else {
+        // Restore last active tab (must be after auth so role-gated tabs are visible)
+        const savedTab = localStorage.getItem('dsremo-active-tab');
+        if (savedTab && document.querySelector(`.tab-btn[data-tab="${savedTab}"]`)) {
+            switchTab(savedTab);
+        }
     }
 });
 

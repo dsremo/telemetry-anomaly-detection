@@ -1433,15 +1433,10 @@ async def get_user_by_google_id(google_id: str) -> dict | None:
     """
     pool = get_pool()
     async with pool.acquire() as conn:
+        # Use the security-definer function (v20 migration) so the lookup runs
+        # without tenant context — google_id is globally unique across all tenants.
         row = await conn.fetchrow(
-            """
-            SELECT id::text, tenant_id, email, role::text, active,
-                   COALESCE(display_name, '') AS display_name,
-                   COALESCE(avatar_url, '')   AS avatar_url,
-                   COALESCE(plan, 'free')     AS plan
-            FROM users
-            WHERE google_id = $1
-            """,
+            "SELECT * FROM find_user_by_google_id($1)",
             google_id,
         )
     return dict(row) if row else None
@@ -1464,6 +1459,10 @@ async def upsert_google_user(
     """
     pool = get_pool()
     async with pool.acquire() as conn:
+        # Set tenant context so the FORCE RLS policy allows the INSERT/UPDATE.
+        await conn.execute(
+            "SELECT set_config('app.tenant_id', $1, false)", tenant_id
+        )
         row = await conn.fetchrow(
             """
             INSERT INTO users (tenant_id, email, google_id, display_name, avatar_url, role, plan)

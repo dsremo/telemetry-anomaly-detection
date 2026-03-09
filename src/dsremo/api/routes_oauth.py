@@ -183,7 +183,8 @@ async def google_callback(
     access_ttl  = int(settings.get("auth", {}).get("access_token_ttl_seconds", _DEFAULT_ACCESS_TTL))
     refresh_ttl = int(settings.get("auth", {}).get("refresh_token_ttl_seconds", _DEFAULT_REFRESH_TTL))
 
-    existing = await queries.get_user_by_google_id(google_id)
+    existing    = await queries.get_user_by_google_id(google_id)
+    is_new_user = False
 
     if existing:
         user       = existing
@@ -202,6 +203,7 @@ async def google_callback(
             plan="free",
         )
         logger.info("google_signup", email=email[:3] + "***", tenant_id=tenant_id)
+        is_new_user = True
 
     if not user["active"]:
         return RedirectResponse(url="/?error=account_inactive", status_code=302)
@@ -237,5 +239,6 @@ async def google_callback(
         "access_token":  access_token,
         "refresh_token": refresh_token,
         "plan":          user.get("plan") or "free",
+        "new_user":      "1" if is_new_user else "0",
     })
     return RedirectResponse(url=f"/dashboard/#{fragment}", status_code=302)

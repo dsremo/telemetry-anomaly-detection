@@ -71,6 +71,7 @@
         <button class="tab-btn" data-tab="alerts">Alerts</button>
         <button class="tab-btn" data-tab="import">Import</button>
         <button class="tab-btn" data-tab="admin" id="adminTabBtn" style="display:none">Admin</button>
+        <button class="tab-btn tab-help" onclick="showWelcomeModal()" title="Help & Getting Started">? Help</button>
     </nav>
 
     <!-- ================================================================
@@ -1124,6 +1125,126 @@
             <div class="modal-footer">
                 <button class="btn-secondary" id="resetPwCancel">Cancel</button>
                 <button class="btn-primary" id="resetPwSubmit" style="flex:0;padding:7px 20px">Reset Password</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================
+         WELCOME / HELP MODAL
+         ================================================================ -->
+    <div class="modal-overlay" id="welcomeModal" style="display:none" onclick="if(event.target===this)closeWelcomeModal()">
+        <div class="modal welcome-modal">
+            <div class="modal-header">
+                <div class="welcome-logo">◈ DSREMO</div>
+                <h2 class="welcome-title">Welcome to Dsremo</h2>
+                <p class="welcome-sub">AI-powered telemetry anomaly detection — up and running in 3 steps</p>
+                <button class="modal-close" onclick="closeWelcomeModal()">✕</button>
+            </div>
+            <div class="welcome-body">
+
+                <!-- ── HOW IT WORKS ── -->
+                <div class="welcome-steps">
+                    <div class="welcome-step">
+                        <div class="step-num">1</div>
+                        <div class="step-content">
+                            <div class="step-title">Upload your data</div>
+                            <div class="step-desc">Drop a CSV file with a <code>timestamp</code> column and any sensor/telemetry columns. One row = one time point. Each column becomes a monitored channel.</div>
+                            <div class="step-diagram">
+                                <code class="diagram-code">timestamp, voltage, current, temp<br>2024-01-15 09:00:00, 28.1, 4.5, 17.8<br>2024-01-15 09:00:01, 27.9, 4.6, 18.1<br>...</code>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="welcome-step">
+                        <div class="step-num">2</div>
+                        <div class="step-content">
+                            <div class="step-title">Detection runs automatically</div>
+                            <div class="step-desc">An 11-detector ensemble (CUSUM, EWMA, Z-score, Isolation Forest, GRU, TCN, and more) analyses every channel. Anomalies are flagged when multiple detectors agree.</div>
+                            <div class="step-diagram detectors-grid">
+                                <span class="det-chip">CUSUM</span><span class="det-chip">EWMA</span><span class="det-chip">Z-score</span><span class="det-chip">Changepoint</span><span class="det-chip">Isolation Forest</span><span class="det-chip">Variance</span><span class="det-chip">GRU</span><span class="det-chip">TCN</span><span class="det-chip">TrendVelocity</span><span class="det-chip">MatrixProfile</span><span class="det-chip">CorrelationGraph</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="welcome-step">
+                        <div class="step-num">3</div>
+                        <div class="step-content">
+                            <div class="step-title">Review in Monitor tab</div>
+                            <div class="step-desc">Switch to <strong>Monitor</strong> to see the anomaly timeline, severity counts, and root-cause explanations. Each anomaly shows which detectors fired and why.</div>
+                            <div class="step-diagram severity-legend">
+                                <span class="sev-chip sev-watch">WATCH — 2 detectors agree</span>
+                                <span class="sev-chip sev-warning">WARNING — 3+ detectors agree</span>
+                                <span class="sev-chip sev-critical">CRITICAL — hard limit breached</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── NAVIGATION GUIDE ── -->
+                <div class="welcome-nav-guide">
+                    <h3>Tab Guide</h3>
+                    <div class="nav-guide-grid">
+                        <div class="nav-guide-item">
+                            <span class="nav-guide-tab">Monitor</span>
+                            <span class="nav-guide-desc">Live anomaly feed, incident timeline, subsystem health grid</span>
+                        </div>
+                        <div class="nav-guide-item">
+                            <span class="nav-guide-tab">Analysis</span>
+                            <span class="nav-guide-desc">Severity charts, anomaly rate over time, trend breakdown</span>
+                        </div>
+                        <div class="nav-guide-item">
+                            <span class="nav-guide-tab">Channels</span>
+                            <span class="nav-guide-desc">Per-channel calibration state, detector config, hard limits</span>
+                        </div>
+                        <div class="nav-guide-item">
+                            <span class="nav-guide-tab">Alerts</span>
+                            <span class="nav-guide-desc">Webhook and email alert history, suppression windows</span>
+                        </div>
+                        <div class="nav-guide-item">
+                            <span class="nav-guide-tab">Import</span>
+                            <span class="nav-guide-desc">Upload CSV, import XTCE parameters, configure live connectors</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── SAMPLE DATASETS ── -->
+                <div class="welcome-samples">
+                    <h3>Try a Sample Dataset</h3>
+                    <p class="samples-intro">Pick one below — it loads into the upload form instantly. No data to find, just click and go.</p>
+                    <div class="sample-cards">
+                        <div class="sample-card" onclick="loadSampleDataset('spacecraft_eps.csv','DEMO-EPS','Spacecraft EPS: battery voltage drop at t=200s, solar current anomaly')">
+                            <div class="sample-icon">🛸</div>
+                            <div class="sample-info">
+                                <div class="sample-name">Spacecraft EPS</div>
+                                <div class="sample-meta">480 rows · 5 channels · battery + solar</div>
+                                <div class="sample-anomaly">⚠ Battery voltage drop at ~03:20, bus undervoltage spike</div>
+                            </div>
+                            <div class="sample-load-btn">Load →</div>
+                        </div>
+                        <div class="sample-card" onclick="loadSampleDataset('valve_sensor.csv','DEMO-VALVE','Industrial valve: pressure spike at t=151s, flow drift from t=250s')">
+                            <div class="sample-icon">🔧</div>
+                            <div class="sample-info">
+                                <div class="sample-name">Valve Sensor</div>
+                                <div class="sample-meta">520 rows · 5 channels · pressure + flow</div>
+                                <div class="sample-anomaly">⚠ Pressure spike (2.5→7.9 bar) + flow drift</div>
+                            </div>
+                            <div class="sample-load-btn">Load →</div>
+                        </div>
+                        <div class="sample-card" onclick="loadSampleDataset('satellite_thermal.csv','DEMO-THERMAL','Satellite thermal: panel runaway from t=178s, heater overcurrent')">
+                            <div class="sample-icon">🌡</div>
+                            <div class="sample-info">
+                                <div class="sample-name">Satellite Thermal</div>
+                                <div class="sample-meta">420 rows · 4 channels · temperature + heater</div>
+                                <div class="sample-anomaly">⚠ Thermal runaway: panel_temp +40°C in 2 min</div>
+                            </div>
+                            <div class="sample-load-btn">Load →</div>
+                        </div>
+                    </div>
+                    <p class="samples-note">After loading: enter a Satellite ID, click <strong>Upload Data</strong>. Detection runs on the server. Switch to <strong>Monitor</strong> in ~5 seconds to see results.</p>
+                </div>
+
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeWelcomeModal()">Skip for now</button>
+                <button class="btn-primary" onclick="closeWelcomeModal(); switchTab('import')">Go to Import →</button>
             </div>
         </div>
     </div>

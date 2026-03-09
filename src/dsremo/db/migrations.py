@@ -33,7 +33,7 @@ from dsremo.db.connection import acquire, get_pool
 
 logger = structlog.get_logger()
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +820,47 @@ _MIGRATIONS: list[str] = [
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id
         ON users (google_id)
         WHERE google_id IS NOT NULL;
+    """,
+
+    # v20: Fix Google OAuth RLS — security-definer function for cross-tenant lookup.
+    #
+    # Problem: users table has FORCE ROW LEVEL SECURITY and the sentinel DB user
+    # has no BYPASSRLS. The OAuth callback must find a user by google_id across ALL
+    # tenants (no tenant context available yet). A SECURITY DEFINER function runs
+    # as its owner (the table owner = sentinel) but — crucially — the function
+    # owner itself is the table owner, so SET search_path + SECURITY DEFINER gives
+    # us a trusted, auditable bypass for this one specific cross-tenant operation.
+    #
+    # upsert_google_user: fixed in Python by setting app.tenant_id before INSERT.
+    """
+    CREATE OR REPLACE FUNCTION find_user_by_google_id(p_google_id TEXT)
+    RETURNS TABLE(
+        id           TEXT,
+        tenant_id    TEXT,
+        email        TEXT,
+        role         TEXT,
+        active       BOOLEAN,
+        display_name TEXT,
+        avatar_url   TEXT,
+        plan         TEXT
+    )
+    LANGUAGE sql
+    SECURITY DEFINER
+    SET search_path = public
+    AS $$
+        SELECT
+            id::text,
+            tenant_id,
+            email,
+            role::text,
+            active,
+            COALESCE(display_name, ''),
+            COALESCE(avatar_url, ''),
+            COALESCE(plan, 'free')
+        FROM users
+        WHERE google_id = p_google_id
+        LIMIT 1;
+    $$;
     """,
 ]
 
