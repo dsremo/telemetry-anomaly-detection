@@ -522,7 +522,7 @@ select.filter-input option {
     display: flex;
     gap: 2px;
     position: sticky;
-    top: 46px;
+    top: 48px;
     z-index: 99;
     background: var(--bg-primary);
     padding: 8px 24px 0;

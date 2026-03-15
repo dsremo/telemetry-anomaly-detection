@@ -336,7 +336,7 @@ function renderExplanation(anomaly) {
     const body = document.getElementById('explanationBody');
     const exportBtn = document.getElementById('exportAnomalyBtn');
     if (!anomaly) {
-        body.innerHTML = '<div class="empty-state">Select an anomaly to see its explanation</div>';
+        body.innerHTML = '<div class="empty-state" style="padding:20px;text-align:center">👆 Click any anomaly row in the timeline to see the AI explanation here</div>';
         exportBtn.style.display = 'none';
         return;
     }
@@ -1482,8 +1482,10 @@ function showAnalyzeResult(data) {
             </div>
         </div>
         ${topChannels ? `<div style="margin-top:10px;font-size:11px;color:var(--text-secondary)">${topChannels}</div>` : ''}
-        <div style="margin-top:8px;font-size:11px;color:var(--text-secondary)">
-            Refresh the Monitor tab to view all anomalies.
+        <div style="margin-top:12px">
+            <button class="btn-primary btn-small" onclick="switchTab('monitor')" style="font-size:12px;padding:6px 14px">
+                View Results in Monitor →
+            </button>
         </div>`;
 }
 
@@ -2444,7 +2446,7 @@ document.getElementById('globalSatFilter').addEventListener('change', e => {
 });
 
 document.getElementById('clearAlerts').addEventListener('click', () => {
-    document.getElementById('alertList').innerHTML = '<div class="empty-state">No alerts dispatched</div>';
+    document.getElementById('alertList').innerHTML = '<div class="empty-state" style="color:var(--text-muted);font-size:11px">Live feed — events appear here during real-time ingestion. Batch CSV results show in the timeline above.</div>';
 });
 
 document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
