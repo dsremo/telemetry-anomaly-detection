@@ -5,6 +5,9 @@ RUN groupadd -r sentinel && useradd -r -g sentinel sentinel
 
 WORKDIR /app
 
+# Install torch CPU-only first to avoid 3GB NVIDIA CUDA packages (CPU server)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 # Install deps first (layer caching)
 COPY pyproject.toml .
 RUN pip install --no-cache-dir . 2>/dev/null || pip install --no-cache-dir -e .
