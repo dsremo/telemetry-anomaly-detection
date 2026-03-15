@@ -478,7 +478,47 @@
                 </div>
             </section>
 
-            <!-- CSV Upload -->
+            <!-- Sample Datasets -->
+            <section class="panel import-card" style="grid-column: 1 / -1">
+                <div class="panel-header">
+                    <h2>Try a Sample Dataset</h2>
+                    <span class="import-badge" style="background:rgba(16,185,129,0.15);color:#10b981;border-color:rgba(16,185,129,0.3)">No data needed</span>
+                </div>
+                <div class="import-body">
+                    <p class="import-desc">Load one of these real-anomaly datasets instantly — no CSV to find. Click <strong>Load</strong>, then <strong>Upload Data</strong> to run detection.</p>
+                    <div class="sample-cards">
+                        <div class="sample-card" onclick="loadSampleDataset('spacecraft_eps.csv','DEMO-EPS','Spacecraft EPS: battery voltage drop at t=200s, solar current anomaly')">
+                            <div class="sample-icon">🛸</div>
+                            <div class="sample-info">
+                                <div class="sample-name">Spacecraft EPS</div>
+                                <div class="sample-meta">480 rows · 5 channels · battery + solar</div>
+                                <div class="sample-anomaly">⚠ Battery voltage drop, bus undervoltage spike</div>
+                            </div>
+                            <div class="sample-load-btn">Load →</div>
+                        </div>
+                        <div class="sample-card" onclick="loadSampleDataset('satellite_thermal.csv','DEMO-THERMAL','Satellite thermal: panel runaway from t=178s, heater overcurrent')">
+                            <div class="sample-icon">🌡</div>
+                            <div class="sample-info">
+                                <div class="sample-name">Satellite Thermal</div>
+                                <div class="sample-meta">420 rows · 4 channels · temperature + heater</div>
+                                <div class="sample-anomaly">⚠ Thermal runaway: panel_temp +40°C in 2 min</div>
+                            </div>
+                            <div class="sample-load-btn">Load →</div>
+                        </div>
+                        <div class="sample-card" onclick="loadSampleDataset('valve_sensor.csv','DEMO-VALVE','Industrial valve: pressure spike at t=151s, flow drift from t=250s')">
+                            <div class="sample-icon">🔧</div>
+                            <div class="sample-info">
+                                <div class="sample-name">Valve Sensor</div>
+                                <div class="sample-meta">520 rows · 5 channels · pressure + flow</div>
+                                <div class="sample-anomaly">⚠ Pressure spike (2.5→7.9 bar) + flow drift</div>
+                            </div>
+                            <div class="sample-load-btn">Load →</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+<!-- CSV Upload -->
             <section class="panel import-card">
                 <div class="panel-header">
                     <h2>Telemetry CSV Upload</h2>
