@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir . 2>/dev/null || pip install --no-cache-dir -e .
 COPY src/ src/
 COPY configs/ configs/
 COPY dashboard/ dashboard/
+COPY landing/ landing/
 
 # Install package
 RUN pip install --no-cache-dir -e .
