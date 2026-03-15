@@ -81,6 +81,7 @@ function toast(message, type = 'info') {
 // ============================================================
 let ws = null;
 let reconnectTimer = null;
+let reconnectDelay = 3000;
 let pingInterval = null;
 
 function connectWebSocket() {
@@ -89,6 +90,7 @@ function connectWebSocket() {
 
     ws.onopen = () => {
         state.connected = true;
+        reconnectDelay = 3000;
         updateConnectionStatus(true);
         if (pingInterval) clearInterval(pingInterval);
         pingInterval = setInterval(() => {
@@ -110,7 +112,8 @@ function connectWebSocket() {
         state.connected = false;
         updateConnectionStatus(false);
         clearInterval(pingInterval);
-        reconnectTimer = setTimeout(connectWebSocket, 3000);
+        reconnectDelay = Math.min(reconnectDelay * 1.5, 60000);
+        reconnectTimer = setTimeout(connectWebSocket, reconnectDelay);
     };
 
     ws.onerror = () => ws.close();
@@ -3272,8 +3275,8 @@ initAuth().then(() => {
         setTimeout(() => showWelcomeModal(), 600);
     } else {
         // Restore last active tab (must be after auth so role-gated tabs are visible)
-        const savedTab = localStorage.getItem('dsremo-active-tab');
-        if (savedTab && document.querySelector(`.tab-btn[data-tab="${savedTab}"]`)) {
+        const savedTab = localStorage.getItem('dsremo-active-tab') || 'import';
+        if (document.querySelector(`.tab-btn[data-tab="${savedTab}"]`)) {
             switchTab(savedTab);
         }
     }
