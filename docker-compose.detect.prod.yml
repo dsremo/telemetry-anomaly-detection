@@ -44,6 +44,10 @@ services:
       DSREMO_DATABASE__PASSWORD: ${DETECT_DB_PASSWORD}
       # Secrets
       DSREMO_JWT_SECRET:         ${DETECT_JWT_SECRET}
+      # Google OAuth
+      GOOGLE_CLIENT_ID:          ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET:      ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI:       ${GOOGLE_REDIRECT_URI}
       # Model persistence — write to Docker volume, not ~
       DSREMO_DETECTION__MODEL_DIR: /app/models
     depends_on:
