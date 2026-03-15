@@ -1960,3 +1960,13 @@ select.filter-input option {
     /* Subsystem health grid — 2 cols */
     .subsystem-grid { grid-template-columns: repeat(2, 1fr) !important; gap: 8px; }
 }
+
+/* Satellite ID helper hint */
+.label-hint {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-muted);
+    letter-spacing: 0;
+    text-transform: none;
+    margin-left: 4px;
+}

@@ -3286,6 +3286,19 @@ initAuth().then(() => {
 connectWebSocket();
 fetchHealth();
 
+
+// Auto-fill satellite ID fields with a sensible default on first focus
+(function() {
+    const defaultId = 'SAT-01';
+    ['xtce-satellite-id', 'csv-satellite-id'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('focus', function() {
+            if (!this.value.trim()) this.value = defaultId;
+        }, { once: true });
+    });
+})();
+
 // 4. File drop zones
 setupDropZone('xtceDropZone', 'xtceFileInput', 'xtceFile', 'xtceUploadBtn', 'xtceFileInfo');
 setupDropZone('csvDropZone',  'csvFileInput',  'csvFile',  'csvUploadBtn',  'csvFileInfo');

@@ -8,7 +8,7 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=1773566170">
 </head>
 <body>
     <!-- Topbar -->
@@ -456,9 +456,9 @@
                 <div class="import-body">
                     <p class="import-desc">Import parameter definitions from an XTCE XML file (ESA, NASA, YAMCS format). Populates the channel registry with subsystem, unit, and alarm range metadata.</p>
                     <div class="editor-field">
-                        <div class="editor-label"><span>Satellite ID</span></div>
+                        <div class="editor-label"><span>Satellite ID <span class="label-hint">— any name you choose (e.g. SAT-01, my-mission)</span></span></div>
                         <input class="editor-input" id="xtce-satellite-id" type="text"
-                            placeholder="e.g. ISS-25544">
+                            placeholder="e.g. SAT-01">
                     </div>
                     <div class="drop-zone" id="xtceDropZone">
                         <div class="drop-icon">📡</div>
@@ -487,9 +487,9 @@
                 <div class="import-body">
                     <p class="import-desc">Upload a wide-format CSV for batch anomaly detection. First column must be a timestamp; remaining columns are telemetry parameters. Results appear in the Monitor tab.</p>
                     <div class="editor-field">
-                        <div class="editor-label"><span>Satellite ID</span></div>
+                        <div class="editor-label"><span>Satellite ID <span class="label-hint">— any name you choose (e.g. SAT-01, my-mission)</span></span></div>
                         <input class="editor-input" id="csv-satellite-id" type="text"
-                            placeholder="e.g. NEXUS-43017">
+                            placeholder="e.g. SAT-01">
                     </div>
                     <div class="editor-field">
                         <div class="editor-label"><span>Resample Interval (minutes)</span></div>
@@ -1252,6 +1252,6 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=1773566170"></script>
 </body>
 </html>
