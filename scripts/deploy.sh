@@ -13,6 +13,8 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$REPO_DIR/docker-compose.detect.prod.yml"
+OVERRIDE_FILE="$REPO_DIR/docker-compose.detect.prod.override.yml"
+COMPOSE_ARGS="-f $COMPOSE_FILE -f $OVERRIDE_FILE"
 ENV_FILE="$REPO_DIR/.env.detect"
 MODE="${1:-}"
 
@@ -51,13 +53,13 @@ info "Now at commit: $COMMIT"
 # ── PARTIAL DEPLOY — --api mode ────────────────────────────────────────────
 if [[ "$MODE" == "--api" ]]; then
     step "PARTIAL DEPLOY — API only"
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build detect-api 2>&1
+    docker compose $COMPOSE_ARGS --env-file "$ENV_FILE" build detect-api 2>&1
     ok "API image rebuilt"
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps detect-api 2>&1
+    docker compose $COMPOSE_ARGS --env-file "$ENV_FILE" up -d --no-deps detect-api 2>&1
     ok "API container restarted"
     info "Waiting 20s for API to stabilize..."
     sleep 20
-    docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}" | grep detect-api || true
+    docker compose $COMPOSE_ARGS ps --format "table {{.Name}}\t{{.Status}}" | grep detect-api || true
     echo ""
     info "✓ API partial deploy done at commit $COMMIT"
     exit 0
@@ -65,11 +67,11 @@ fi
 
 # ── 2. Stop all containers gracefully ─────────────────────────────────────
 step "2 · Stop all containers"
-docker compose -f "$COMPOSE_FILE" stop 2>/dev/null && ok "All containers stopped" || ok "No containers were running"
+docker compose $COMPOSE_ARGS stop 2>/dev/null && ok "All containers stopped" || ok "No containers were running"
 
 # ── 3. Remove old containers (keeps volumes — data is safe) ────────────────
 step "3 · Remove old containers"
-docker compose -f "$COMPOSE_FILE" rm -f 2>/dev/null && ok "Containers removed" || ok "Nothing to remove"
+docker compose $COMPOSE_ARGS rm -f 2>/dev/null && ok "Containers removed" || ok "Nothing to remove"
 
 # ── 4. Prune build cache ───────────────────────────────────────────────────
 step "4 · Prune build cache"
@@ -83,17 +85,17 @@ fi
 # ── 5. Build all images ────────────────────────────────────────────────────
 step "5 · Build all images"
 if [[ "$MODE" == "--quick" ]]; then
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build 2>&1
+    docker compose $COMPOSE_ARGS --env-file "$ENV_FILE" build 2>&1
 else
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build --no-cache 2>&1
+    docker compose $COMPOSE_ARGS --env-file "$ENV_FILE" build --no-cache 2>&1
 fi
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d 2>&1
+docker compose $COMPOSE_ARGS --env-file "$ENV_FILE" up -d 2>&1
 ok "All images built and containers started"
 
 # ── 6. Wait for DB ─────────────────────────────────────────────────────────
 step "6 · Wait for database"
 for i in $(seq 1 30); do
-    if docker compose -f "$COMPOSE_FILE" exec -T detect-db \
+    if docker compose $COMPOSE_ARGS exec -T detect-db \
         pg_isready -U "${DETECT_DB_USER:-dsremo}" -d "${DETECT_DB_NAME:-dsremo}" &>/dev/null; then
         ok "Database is healthy"
         break
@@ -128,19 +130,17 @@ for i in $(seq 1 60); do
 done
 
 # ── 9. Nginx reload ────────────────────────────────────────────────────────
-step "9 · Reload nginx"
-for i in $(seq 1 15); do
-    if docker exec detect-nginx nginx -s reload 2>/dev/null; then
-        ok "Nginx reloaded"
-        break
-    fi
-    [[ $i -eq 15 ]] && { warn "Nginx reload timed out — may still be starting"; break; }
-    sleep 2
-done
+# System nginx on host handles SSL for detect.dsremo.com (shared EC2 setup)
+step "9 · Reload system nginx"
+if sudo nginx -t 2>/dev/null && sudo systemctl reload nginx; then
+    ok "System nginx reloaded"
+else
+    warn "Could not reload nginx — check config manually"
+fi
 
 # ── 10. Container status ───────────────────────────────────────────────────
 step "10 · Container status"
-docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
+docker compose $COMPOSE_ARGS ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 
 # ── 11. Smoke tests ────────────────────────────────────────────────────────
 step "11 · Smoke tests"
@@ -150,7 +150,8 @@ PASS=0; FAIL=0; FAILS=()
 smoke() {
     local label="$1" path="$2" expect="${3:-200}"
     local code
-    code=$(curl -sf -o /dev/null -w "%{http_code}" -H "Host: $HOST" "http://localhost$path" 2>/dev/null || echo "000")
+    # Hit API directly on port 8400 (system nginx proxies externally)
+    code=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:8400$path" 2>/dev/null || echo "000")
     if [[ "$code" == "$expect" ]]; then
         ok "$label ($code)"
         PASS=$((PASS+1))
@@ -169,7 +170,7 @@ smoke "Keys endpoint"      "/api/v1/keys"       "401"
 smoke "Channels endpoint"  "/api/v1/channels"   "401"
 
 # Check DB is connected
-API_HEALTH=$(curl -sf -H "Host: $HOST" "http://localhost/api/v1/health" 2>/dev/null || echo "{}")
+API_HEALTH=$(curl -sf "http://localhost:8400/api/v1/health" 2>/dev/null || echo "{}")
 DB_STATUS=$(echo "$API_HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('db','?'))" 2>/dev/null || echo "?")
 [[ "$DB_STATUS" == "ok" ]] && ok "DB connection: ok" || { fail "DB connection: $DB_STATUS"; FAIL=$((FAIL+1)); FAILS+=("DB not ok: $DB_STATUS"); }
 
