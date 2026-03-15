@@ -793,3 +793,30 @@ footer {
   .photo-band-stats { flex-wrap: wrap; }
   .usecase-thumb { height: 110px; }
 }
+
+@media (max-width: 768px) {
+  /* Hero — reduce giant top padding, boost text contrast */
+  .hero { padding: 90px 0 60px; }
+  .hero h1 { font-size: clamp(2.2rem, 8vw, 3rem); color: #ffffff; }
+  .hero-badge { color: #22d3ee; background: rgba(6,182,212,0.12); border-color: rgba(6,182,212,0.3); }
+  .hero-sub { font-size: 1rem; max-width: 100%; }
+  .hero-actions { flex-direction: column; align-items: stretch; }
+  .hero-actions a { text-align: center; }
+
+  /* Section tags — brighter on mobile */
+  .section-tag { color: #22d3ee; background: rgba(6,182,212,0.12); border-color: rgba(6,182,212,0.3); }
+
+  /* Steps — more breathing room */
+  .step { padding: 28px 20px; }
+
+  /* Stats row — 2 columns, reduce gap */
+  .hero-stats { display: grid; grid-template-columns: 1fr 1fr; margin-top: 32px; }
+  .stat-div { display: none; }
+  .stat { padding: 16px 12px; }
+
+  /* Pricing cards — full width padding */
+  .pricing-card { padding: 28px 20px; }
+
+  /* Section spacing — tighter on mobile */
+  .section { padding: 60px 0; }
+}
