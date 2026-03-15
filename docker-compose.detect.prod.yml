@@ -1,0 +1,90 @@
+version: "3.9"
+
+# Dsremo Telemetry Anomaly Detection — Production Compose
+# Usage: docker compose -f docker-compose.detect.prod.yml --env-file .env.detect up -d
+#
+# NEVER use docker-compose.yml (dev only — wrong DB names, no nginx, no SSL)
+# ALWAYS pass --env-file .env.detect explicitly
+# IAM profile for AWS operations: dsremo-detect
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  detect-db:
+    image: postgres:16-alpine
+    container_name: detect-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${DETECT_DB_NAME:-dsremo}
+      POSTGRES_USER:     ${DETECT_DB_USER:-dsremo}
+      POSTGRES_PASSWORD: ${DETECT_DB_PASSWORD}
+    volumes:
+      - detect_pgdata:/var/lib/postgresql/data
+    networks:
+      - detect-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DETECT_DB_USER:-dsremo} -d ${DETECT_DB_NAME:-dsremo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── FastAPI Application ─────────────────────────────────────────────────────
+  detect-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: detect-api
+    restart: unless-stopped
+    environment:
+      # DB — overrides configs/dsremo.yaml via dynaconf DSREMO_ prefix
+      DSREMO_DATABASE__HOST:     detect-db
+      DSREMO_DATABASE__PORT:     "5432"
+      DSREMO_DATABASE__NAME:     ${DETECT_DB_NAME:-dsremo}
+      DSREMO_DATABASE__USER:     ${DETECT_DB_USER:-dsremo}
+      DSREMO_DATABASE__PASSWORD: ${DETECT_DB_PASSWORD}
+      # Secrets
+      DSREMO_JWT_SECRET:         ${DETECT_JWT_SECRET}
+      # Model persistence — write to Docker volume, not ~
+      DSREMO_DETECTION__MODEL_DIR: /app/models
+    depends_on:
+      detect-db:
+        condition: service_healthy
+    volumes:
+      - detect_model_cache:/app/models
+    networks:
+      - detect-net
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import httpx; r=httpx.get('http://localhost:8400/api/v1/health',timeout=3); exit(0 if r.status_code==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  # ── Nginx — SSL termination, rate limiting, reverse proxy ──────────────────
+  detect-nginx:
+    image: nginx:1.27-alpine
+    container_name: detect-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      detect-api:
+        condition: service_healthy
+    volumes:
+      - ./nginx/detect.conf:/etc/nginx/conf.d/detect.conf:ro
+      - detect_certbot_www:/var/www/certbot:ro
+      - detect_certbot_certs:/etc/nginx/ssl:ro
+    networks:
+      - detect-net
+
+volumes:
+  detect_pgdata:
+  detect_model_cache:
+  detect_certbot_www:
+  detect_certbot_certs:
+
+networks:
+  detect-net:
+    driver: bridge

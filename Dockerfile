@@ -25,4 +25,4 @@ EXPOSE 8400
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python -c "import httpx; r=httpx.get('http://localhost:8400/api/v1/health',timeout=3); exit(0 if r.status_code==200 else 1)" || exit 1
 
-CMD ["uvicorn", "sentinel.api.app:create_app", "--host", "0.0.0.0", "--port", "8400", "--factory"]
+CMD ["uvicorn", "dsremo.api.app:create_app", "--host", "0.0.0.0", "--port", "8400", "--factory"]

@@ -166,8 +166,10 @@ code {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 80% 50% at 20% 40%, rgba(6,182,212,0.06) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 80% 60%, rgba(139,92,246,0.05) 0%, transparent 60%);
+    linear-gradient(to bottom, rgba(10,14,26,0.87) 0%, rgba(10,14,26,0.70) 45%, rgba(10,14,26,0.93) 100%),
+    radial-gradient(ellipse 80% 50% at 20% 40%, rgba(6,182,212,0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 60%, rgba(139,92,246,0.08) 0%, transparent 60%),
+    url('https://images-assets.nasa.gov/image/PIA18156/PIA18156~large.jpg') center 30% / cover no-repeat;
   pointer-events: none;
 }
 
@@ -289,6 +291,25 @@ code {
   flex-shrink: 0;
   animation: pulse 1.5s infinite;
 }
+
+/* Hero satellite decoration */
+.hero-visual {
+  position: relative;
+}
+.hero-sat-glow {
+  position: absolute;
+  top: -60px;
+  right: -80px;
+  width: 400px;
+  height: 400px;
+  background: url('https://images-assets.nasa.gov/image/PIA24105/PIA24105~large.jpg') center / cover no-repeat;
+  border-radius: 50%;
+  opacity: 0.12;
+  filter: blur(3px);
+  pointer-events: none;
+  z-index: 0;
+}
+.chart-card { position: relative; z-index: 1; }
 
 /* Hero stats */
 .hero-stats {
@@ -593,6 +614,68 @@ code {
 .usecase-card h4 { margin-bottom: 10px; }
 .usecase-card p  { font-size: 0.82rem; }
 
+/* ─── Photo Band ─────────────────────────────────────────────────────────── */
+
+.photo-band {
+  position: relative;
+  min-height: 420px;
+  overflow: hidden;
+  background:
+    url('https://images-assets.nasa.gov/image/PIA25137/PIA25137~large.jpg') center 40% / cover no-repeat;
+}
+.photo-band-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg,
+    rgba(6,182,212,0.14) 0%,
+    rgba(10,14,26,0.78) 35%,
+    rgba(10,14,26,0.88) 100%
+  );
+  display: flex;
+  align-items: center;
+  padding: 72px 0;
+}
+.photo-band-content { max-width: 780px; }
+.photo-band-content .section-tag { display: inline-block; margin-bottom: 20px; }
+.photo-band-content h2 { margin-bottom: 40px; }
+.photo-band-stats {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+}
+.pbs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 40px;
+}
+.pbs-n { font-size: 2.2rem; font-weight: 800; color: var(--cyan); letter-spacing: -0.04em; line-height: 1; }
+.pbs-l { font-size: 0.8rem; color: var(--text-muted); max-width: 150px; line-height: 1.4; }
+.pbs-div { width: 1px; height: 44px; background: rgba(255,255,255,0.15); margin-right: 40px; flex-shrink: 0; }
+
+/* ─── Use case photo thumbnails ──────────────────────────────────────────── */
+
+.usecase-thumb {
+  width: calc(100% + 40px);
+  height: 130px;
+  margin: -28px -20px 18px;
+  background-size: cover;
+  background-position: center;
+  border-radius: var(--radius) var(--radius) 0 0;
+  position: relative;
+}
+.usecase-thumb::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 60%;
+  background: linear-gradient(to bottom, transparent, var(--surface));
+  border-radius: 0;
+}
+
 /* ─── FAQ ────────────────────────────────────────────────────────────────── */
 
 .faq-list { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 2px; }
@@ -684,6 +767,12 @@ footer {
   .sources-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
+@media (max-width: 1024px) {
+  .photo-band-stats { gap: 0; flex-wrap: wrap; }
+  .pbs { padding-right: 32px; }
+  .pbs-div { margin-right: 32px; }
+}
+
 @media (max-width: 768px) {
   .hero .container { grid-template-columns: 1fr; }
   .hero-visual { display: none; }
@@ -698,4 +787,9 @@ footer {
   .nav-links { display: none; }
   .footer-inner { grid-template-columns: 1fr; gap: 32px; }
   .footer-bottom { flex-direction: column; gap: 8px; text-align: center; }
+  .photo-band { min-height: 360px; background-attachment: scroll; }
+  .pbs-div { display: none; }
+  .pbs { padding-right: 0; width: 50%; padding-bottom: 24px; }
+  .photo-band-stats { flex-wrap: wrap; }
+  .usecase-thumb { height: 110px; }
 }

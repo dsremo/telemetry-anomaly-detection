@@ -64,6 +64,7 @@
       <p class="hero-note">Free forever for 1 satellite · No credit card</p>
     </div>
     <div class="hero-visual">
+      <div class="hero-sat-glow"></div>
       <div class="chart-card">
         <div class="chart-header">
           <span class="chart-title">battery_voltage · SAT-01 · Live</span>
@@ -239,6 +240,39 @@
     </div>
   </div>
 </section>
+
+<!-- ─── Photo Band ────────────────────────────────────────────────────────── -->
+<div class="photo-band">
+  <div class="photo-band-overlay">
+    <div class="container">
+      <div class="photo-band-content">
+        <span class="section-tag">Real missions. Real data.</span>
+        <h2>Validated on spacecraft from ESA, SatNOGS ISS,<br/>and industrial SKAB benchmarks</h2>
+        <div class="photo-band-stats">
+          <div class="pbs">
+            <span class="pbs-n">100%</span>
+            <span class="pbs-l">Recall on ESA OPS-SAT real spacecraft</span>
+          </div>
+          <div class="pbs-div"></div>
+          <div class="pbs">
+            <span class="pbs-n">90.9%</span>
+            <span class="pbs-l">F1-score on SKAB real valve failures</span>
+          </div>
+          <div class="pbs-div"></div>
+          <div class="pbs">
+            <span class="pbs-n">20+</span>
+            <span class="pbs-l">ISS anomalies detected via SatNOGS</span>
+          </div>
+          <div class="pbs-div"></div>
+          <div class="pbs">
+            <span class="pbs-n">993</span>
+            <span class="pbs-l">Automated tests passing</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ─── Detectors ─────────────────────────────────────────────────────────── -->
 <section id="detectors" class="section">
@@ -455,21 +489,25 @@
     </div>
     <div class="usecases-grid">
       <div class="usecase-card">
+        <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/iss072e352255/iss072e352255~large.jpg')"></div>
         <div class="usecase-icon">🛰️</div>
         <h4>Satellite Telemetry</h4>
         <p>Battery voltage, temperature, attitude control, power subsystems. Self-calibrates per orbital period.</p>
       </div>
       <div class="usecase-card">
+        <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/S83-35764/S83-35764~large.jpg')"></div>
         <div class="usecase-icon">🏭</div>
         <h4>Industrial IoT</h4>
         <p>Valve sensors, pressure readings, motor current. SKAB benchmark: F1=90.9% on real valve failure data.</p>
       </div>
       <div class="usecase-card">
+        <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/2010-3122/2010-3122~large.jpg')"></div>
         <div class="usecase-icon">💧</div>
         <h4>Utility Monitoring</h4>
         <p>Water quality, power grid telemetry, HVAC systems. Any CSV with a timestamp column works.</p>
       </div>
       <div class="usecase-card">
+        <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/PIA24105/PIA24105~large.jpg')"></div>
         <div class="usecase-icon">🔬</div>
         <h4>Research &amp; Benchmarking</h4>
         <p>Run against standard benchmarks (SKAB, GECCO, OPS-SAT-AD). Export detection results via REST API.</p>
