@@ -113,10 +113,17 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.limiter = RateLimiter(max_requests, window_seconds)
 
+    # Paths that bypass rate limiting (static UI, health checks)
+    _EXEMPT_PREFIXES = ("/dashboard", "/landing", "/docs", "/openapi.json", "/redoc")
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if _is_websocket(request.scope):
             return await call_next(request)
-        # Rate limit by API key or by IP for unauthenticated endpoints
+        path = request.url.path
+        # Exempt dashboard/static/docs from rate limiting — only meter API calls
+        if path == "/" or any(path.startswith(p) for p in self._EXEMPT_PREFIXES):
+            return await call_next(request)
+        # Rate limit by API key or by IP for unauthenticated API endpoints
         key = request.headers.get("X-API-Key", "")
         if not key:
             key = request.client.host if request.client else "unknown"
