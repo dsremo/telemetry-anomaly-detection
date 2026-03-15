@@ -33,6 +33,7 @@ dependencies = [
     "bcrypt>=4.0",
     "email-validator>=2.0",
     "torch>=2.0",
+    "tqdm>=4.0",
 ]
 
 [project.optional-dependencies]

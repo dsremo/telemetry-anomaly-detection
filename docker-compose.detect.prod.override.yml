@@ -1,0 +1,14 @@
+# Shared-EC2 override — applies on top of docker-compose.detect.prod.yml
+# This EC2 also hosts dsremo.com via system nginx, so we can't use the
+# detect-nginx container (ports 80/443 are taken). Instead:
+#   - detect-nginx is disabled (profile: disabled)
+#   - detect-api exposes port 8400 on localhost only
+#   - System nginx proxies detect.dsremo.com → localhost:8400
+
+services:
+  detect-nginx:
+    profiles: ["disabled"]   # Don't start — system nginx handles SSL
+
+  detect-api:
+    ports:
+      - "127.0.0.1:8400:8400"   # Expose API to host localhost only
