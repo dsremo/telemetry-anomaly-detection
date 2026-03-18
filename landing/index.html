@@ -9,6 +9,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <!-- Google AdSense -->
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2513872416399349" crossorigin="anonymous"></script>
 </head>
 <body>
 
@@ -111,17 +113,17 @@
       </div>
     </div>
   </div>
-
-  <div class="hero-stats">
-    <div class="stat"><span class="stat-n">11</span><span class="stat-l">Detectors in ensemble</span></div>
-    <div class="stat-div"></div>
-    <div class="stat"><span class="stat-n">993</span><span class="stat-l">Tests passing</span></div>
-    <div class="stat-div"></div>
-    <div class="stat"><span class="stat-n">100%</span><span class="stat-l">Recall on OPS-SAT real data</span></div>
-    <div class="stat-div"></div>
-    <div class="stat"><span class="stat-n">90.9%</span><span class="stat-l">F1 on SKAB benchmark</span></div>
-  </div>
 </section>
+
+<div class="hero-stats">
+  <div class="stat"><span class="stat-n">11</span><span class="stat-l">Detectors in ensemble</span></div>
+  <div class="stat-div"></div>
+  <div class="stat"><span class="stat-n">993</span><span class="stat-l">Tests passing</span></div>
+  <div class="stat-div"></div>
+  <div class="stat"><span class="stat-n">100%</span><span class="stat-l">Recall on OPS-SAT real data</span></div>
+  <div class="stat-div"></div>
+  <div class="stat"><span class="stat-n">90.9%</span><span class="stat-l">F1 on SKAB benchmark</span></div>
+</div>
 
 <!-- ─── How it works ──────────────────────────────────────────────────────── -->
 <section id="how-it-works" class="section">
@@ -191,52 +193,52 @@
       <p>CSV upload for historical analysis. Live connectors for real-time monitoring.</p>
     </div>
     <div class="sources-grid">
-      <div class="source-card">
+      <a href="#pricing" class="source-card">
         <div class="source-icon csv-icon">CSV</div>
         <h4>CSV / Excel</h4>
         <p>Upload any wide-format CSV. Auto-detects timestamp column and data frequency. Max 100 MB on Pro.</p>
         <span class="source-badge free">Free</span>
-      </div>
-      <div class="source-card">
+      </a>
+      <a href="#pricing" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="18" rx="2" stroke="#06b6d4" stroke-width="1.5"/><path d="M8 7h8M8 12h8M8 17h5" stroke="#06b6d4" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
         <h4>Direct JSON API</h4>
         <p>POST telemetry in real time. Supports batch and single-point ingest. Webhook alerts on anomaly.</p>
         <span class="source-badge free">Free</span>
-      </div>
-      <div class="source-card">
+      </a>
+      <a href="#pricing" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#8b5cf6" stroke-width="1.5"/><path d="M12 7v5l3 3" stroke="#8b5cf6" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
         <h4>YAMCS</h4>
         <p>Pull telemetry directly from YAMCS mission planning systems. Paginated, auth-aware.</p>
         <span class="source-badge pro">Pro</span>
-      </div>
-      <div class="source-card">
+      </a>
+      <a href="#pricing" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" stroke="#f59e0b" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="#f59e0b" stroke-width="1.5"/></svg>
         </div>
         <h4>InfluxDB</h4>
         <p>Query via Flux language. Pulls data for any time range and field set.</p>
         <span class="source-badge pro">Pro</span>
-      </div>
-      <div class="source-card">
+      </a>
+      <a href="#pricing" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/></svg>
         </div>
         <h4>SatNOGS</h4>
         <p>Pull from the open-source ground station network. Works with any public satellite.</p>
         <span class="source-badge pro">Pro</span>
-      </div>
-      <div class="source-card">
+      </a>
+      <a href="#pricing" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" stroke="#06b6d4" stroke-width="1.5" stroke-linejoin="round"/></svg>
         </div>
         <h4>ESA / XTCE</h4>
         <p>ESA mission data loader and XTCE parameter definition import for standard spacecraft formats.</p>
         <span class="source-badge enterprise">Enterprise</span>
-      </div>
+      </a>
     </div>
   </div>
 </section>
@@ -319,36 +321,36 @@
         <p>Detects increased noise floor — when a signal's scatter doubles or triples while the mean stays constant.</p>
         <div class="detector-weight">Weight: 8%</div>
       </div>
-      <div class="detector-card pro-detector">
+      <a href="#pricing" class="detector-card pro-detector">
         <div class="detector-badge ml-badge">ML · Pro</div>
         <h4>GRU Autoencoder</h4>
         <p>Trains a tiny GRU neural network on each channel's normal residuals. Flags sequences the model can't reconstruct — nonlinear temporal patterns.</p>
         <div class="detector-weight">Weight: 12%</div>
-      </div>
-      <div class="detector-card pro-detector">
+      </a>
+      <a href="#pricing" class="detector-card pro-detector">
         <div class="detector-badge ml-badge">ML · Pro</div>
         <h4>TCN</h4>
         <p>Temporal Convolutional Network with dilated causal convolutions. Captures long-range dependencies across 512+ timestep windows.</p>
         <div class="detector-weight">Weight: 11%</div>
-      </div>
-      <div class="detector-card pro-detector">
+      </a>
+      <a href="#pricing" class="detector-card pro-detector">
         <div class="detector-badge ml-badge">ML · Pro</div>
         <h4>Trend Velocity</h4>
         <p>Monitors the acceleration of the STL trend component. Early onset detection — catches drifts before they become critical.</p>
         <div class="detector-weight">Weight: 8%</div>
-      </div>
-      <div class="detector-card pro-detector">
+      </a>
+      <a href="#pricing" class="detector-card pro-detector">
         <div class="detector-badge ml-badge">ML · Pro</div>
         <h4>Matrix Profile</h4>
         <p>Finds subsequences that have never appeared before in the history of the channel. Pure NumPy, O(n log n) FFT implementation.</p>
         <div class="detector-weight">Weight: 6%</div>
-      </div>
-      <div class="detector-card pro-detector">
+      </a>
+      <a href="#pricing" class="detector-card pro-detector">
         <div class="detector-badge ml-badge">ML · Pro</div>
         <h4>Correlation Graph</h4>
         <p>Monitors rolling Pearson correlations across all channels on a satellite. Flags when one channel decouples from its peers.</p>
         <div class="detector-weight">Weight: 6%</div>
-      </div>
+      </a>
     </div>
   </div>
 </section>
@@ -488,30 +490,30 @@
       <h2>Works on any time-series data</h2>
     </div>
     <div class="usecases-grid">
-      <div class="usecase-card">
+      <a href="/api/v1/auth/google" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/iss072e352255/iss072e352255~large.jpg')"></div>
         <div class="usecase-icon">🛰️</div>
         <h4>Satellite Telemetry</h4>
         <p>Battery voltage, temperature, attitude control, power subsystems. Self-calibrates per orbital period.</p>
-      </div>
-      <div class="usecase-card">
+      </a>
+      <a href="/api/v1/auth/google" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/S83-35764/S83-35764~large.jpg')"></div>
         <div class="usecase-icon">🏭</div>
         <h4>Industrial IoT</h4>
         <p>Valve sensors, pressure readings, motor current. SKAB benchmark: F1=90.9% on real valve failure data.</p>
-      </div>
-      <div class="usecase-card">
+      </a>
+      <a href="/api/v1/auth/google" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/2010-3122/2010-3122~large.jpg')"></div>
         <div class="usecase-icon">💧</div>
         <h4>Utility Monitoring</h4>
         <p>Water quality, power grid telemetry, HVAC systems. Any CSV with a timestamp column works.</p>
-      </div>
-      <div class="usecase-card">
+      </a>
+      <a href="/api/v1/auth/google" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/PIA24105/PIA24105~large.jpg')"></div>
         <div class="usecase-icon">🔬</div>
         <h4>Research &amp; Benchmarking</h4>
         <p>Run against standard benchmarks (SKAB, GECCO, OPS-SAT-AD). Export detection results via REST API.</p>
-      </div>
+      </a>
     </div>
   </div>
 </section>
