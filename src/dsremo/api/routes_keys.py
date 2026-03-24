@@ -14,7 +14,7 @@ Routes:
 from __future__ import annotations
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import dsremo.db.queries as queries
 from dsremo.api.dependencies import require_tenant_admin
@@ -81,7 +81,7 @@ async def list_api_keys(
     ]
 
 
-@keys_router.delete("/{prefix}", status_code=204)
+@keys_router.delete("/{prefix}", status_code=204, response_model=None, response_class=Response)
 async def revoke_api_key(
     prefix: str,
     request: Request,

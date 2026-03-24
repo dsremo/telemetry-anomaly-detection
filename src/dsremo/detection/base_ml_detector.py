@@ -183,8 +183,17 @@ class AbstractMLDetector(ABC):
         self._model          = model
         self._train_mse_mean = float(errors.mean())
         self._train_mse_std  = max(float(errors.std()), 1e-6)
+
+        # ── POT threshold (Peak Over Threshold / Extreme Value Theory) ────────
+        # The fixed 3σ threshold assumes Gaussian reconstruction errors, but
+        # GRU/TCN errors are right-skewed.  POT fits a Generalized Pareto
+        # Distribution (GPD) to the tail of training errors and sets the
+        # threshold at the 0.1% false-positive rate.
+        # Falls back to 3σ if scipy is unavailable or too few tail samples.
+        pot_threshold = self._pot_threshold(errors)
         self._threshold      = (
-            self._train_mse_mean + self.threshold_sigma * self._train_mse_std
+            pot_threshold if pot_threshold is not None
+            else self._train_mse_mean + self.threshold_sigma * self._train_mse_std
         )
         self._is_fitted       = True
         self._samples_since_fit = 0
@@ -195,6 +204,52 @@ class AbstractMLDetector(ABC):
             n_sequences=len(seqs),
             threshold=round(self._threshold, 6),
         )
+
+    # ── POT threshold calibration ─────────────────────────────────────────────
+
+    @staticmethod
+    def _pot_threshold(
+        errors: "np.ndarray",  # type: ignore[name-defined]
+        q: float = 0.001,
+        init_percentile: float = 0.85,
+        min_tail_samples: int = 15,
+    ) -> float | None:
+        """Compute anomaly threshold via Peak Over Threshold (EVT).
+
+        Sets the threshold at risk level q (default 0.1% FPR) using the
+        Generalized Pareto Distribution fitted to training error tail exceedances.
+        Returns None if scipy is unavailable or there are insufficient tail samples
+        (falls back to caller's σ-based threshold in that case).
+
+        Uses 85th percentile as the initial threshold (rather than 98th) to
+        ensure enough tail samples even with 60-200 training sequences.
+
+        Reference: Siffer et al., KDD 2017 — SPOT algorithm.
+        """
+        try:
+            from scipy.stats import genpareto  # noqa: PLC0415
+            import numpy as _np               # noqa: PLC0415
+        except ImportError:
+            return None
+
+        init_t = float(_np.quantile(errors, init_percentile))
+        exceedances = errors[errors > init_t] - init_t
+        if len(exceedances) < min_tail_samples:
+            return None  # not enough tail data — fall back to σ threshold
+
+        try:
+            shape, _, scale = genpareto.fit(exceedances, floc=0)
+        except Exception:
+            return None
+
+        n_total  = len(errors)
+        n_excess = len(exceedances)
+        if shape == 0.0:
+            # Exponential tail (shape → 0)
+            return float(init_t - scale * _np.log(q * n_total / n_excess))
+        return float(init_t + (scale / shape) * (
+            (q * n_total / n_excess) ** (-shape) - 1.0
+        ))
 
     # ── Detection ─────────────────────────────────────────────────────────────
 

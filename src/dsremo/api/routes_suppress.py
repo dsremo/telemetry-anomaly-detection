@@ -10,7 +10,7 @@ NASA/ESA standard: every telemetry ops system supports maintenance windows.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from dsremo.api.dependencies import get_current_user, require_operator
 from dsremo.api.schemas import SuppressionIn, SuppressionOut
@@ -51,6 +51,8 @@ async def create_suppression(
 @suppress_router.delete(
     "/satellites/{satellite_id}/suppress/{parameter}",
     status_code=204,
+    response_model=None,
+    response_class=Response,
 )
 async def delete_suppression(
     satellite_id: str,

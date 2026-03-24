@@ -42,9 +42,19 @@ RECAL_FACTOR:        float = 10.0   # recalibrate if |drift| > RECAL × σ_ref
 SIGMA_UPDATE_INTERVAL: int = 720    # post-calibration samples between σ_ref refreshes
                                     # 720 = 30 days at 1-h resampling; adapts to
                                     # aging / long-term seasonal variance shifts
+SIGMA_UPDATE_THRESHOLD: float = 0.10  # minimum σ_ref change ratio (|new/old - 1|)
+                                      # to trigger a σ_ref update; avoids noisy
+                                      # micro-updates on stable channels
 
 # Pre-computed EWMA spread factor sqrt(λ/(2-λ)) — constant for a given λ
 _ewma_spread = math.sqrt(EWMA_LAMBDA / (2.0 - EWMA_LAMBDA))
+
+# ── Adaptive feature flags (overridable via dsremo.yaml / init_detectors) ─
+GMM_ENABLED: bool = True            # fit GMM-2 on calibration window to handle
+                                    # bimodal channels (two operating modes)
+AUTO_Z_THRESHOLD_ENABLED: bool = True  # compute per-channel 99th-pct z from
+                                       # calibration window; raises threshold
+                                       # automatically for noisy channels
 
 
 @dataclass
@@ -74,6 +84,18 @@ class CalibrationState:
     _recent_buffer: list[float] = field(default_factory=list, repr=False)
     _sigma_update_counter: int = 0
 
+    # ── GMM-2 bimodal reference (set only when BIC(GMM-2) < BIC(Gaussian) - 10) ─
+    # When not None, z-scores are computed as min distance to either component,
+    # preventing false alarms on channels that oscillate between two normal states.
+    gmm_means: list[float] | None = field(default=None, repr=False)
+    gmm_stds:  list[float] | None = field(default=None, repr=False)
+
+    # ── Per-channel empirical z-threshold ────────────────────────────────────
+    # 99th percentile of |residual|/σ_ref from the calibration window.
+    # Stored as the auto-calibrated lower bound for z-threshold overrides.
+    # None until calibration completes.  Clamped to [3.0, 10.0].
+    auto_z_threshold: float | None = None
+
     # ── derived-parameter helpers ───────────────────────────────────────
 
     @property
@@ -101,6 +123,43 @@ class CalibrationState:
             "ref_std":      self.ref_std,
             "sample_count": self.sample_count,
         }
+
+
+def _try_fit_gmm(state: "CalibrationState", arr: "np.ndarray") -> None:
+    """Attempt a GMM-2 fit on the calibration window.
+
+    Sets state.gmm_means and state.gmm_stds when a 2-component Gaussian
+    Mixture Model fits the data significantly better than a single Gaussian
+    (BIC difference > 10).  Handles bimodal channels — e.g. a telemetry
+    channel that oscillates between two operating modes — whose residuals
+    look like infinite-σ spikes relative to a single-Gaussian baseline.
+
+    Silently does nothing if sklearn is unavailable or the fit fails.
+    BIC lower = better; bic1 - bic2 > 10 means GMM-2 is meaningfully better.
+    """
+    try:
+        from sklearn.mixture import GaussianMixture  # noqa: PLC0415
+    except ImportError:
+        return
+
+    try:
+        data = arr.reshape(-1, 1)
+        gmm1 = GaussianMixture(n_components=1, covariance_type="full", random_state=0)
+        gmm1.fit(data)
+        bic1 = gmm1.bic(data)
+
+        gmm2 = GaussianMixture(n_components=2, covariance_type="full", random_state=0)
+        gmm2.fit(data)
+        bic2 = gmm2.bic(data)
+
+        if (bic1 - bic2) > 10.0:
+            means = gmm2.means_.flatten().tolist()
+            stds  = [float(np.sqrt(c[0, 0])) for c in gmm2.covariances_]
+            if all(s > 1e-9 for s in stds):
+                state.gmm_means = means
+                state.gmm_stds  = stds
+    except Exception:  # noqa: BLE001
+        pass  # any sklearn failure → fall back to single-Gaussian silently
 
 
 class CalibrationManager:
@@ -194,6 +253,20 @@ class CalibrationManager:
             arr = np.asarray(state._buffer, dtype=np.float64)
             state.ref_mean = float(np.mean(arr))
             state._update_derived(float(np.std(arr, ddof=1)))
+
+            # ── GMM-2 bimodal fit (resets on recalibration) ───────────────
+            state.gmm_means = None
+            state.gmm_stds  = None
+            if GMM_ENABLED:
+                _try_fit_gmm(state, arr)
+
+            # ── Per-channel empirical z-threshold ─────────────────────────
+            state.auto_z_threshold = None
+            if AUTO_Z_THRESHOLD_ENABLED and state.ref_std > 1e-9:
+                z_scores = np.abs(arr - state.ref_mean) / state.ref_std
+                raw_pct = float(np.percentile(z_scores, 99))
+                state.auto_z_threshold = float(np.clip(raw_pct, 3.0, 10.0))
+
             state._buffer.clear()
             state.state = "calibrated"
             self._recal_streak[key] = 0
@@ -203,6 +276,8 @@ class CalibrationManager:
                 ref_mean=round(state.ref_mean, 4),
                 ref_std=round(state.ref_std, 6),
                 samples=state.sample_count,
+                gmm_active=state.gmm_means is not None,
+                auto_z=round(state.auto_z_threshold, 3) if state.auto_z_threshold else None,
             )
 
     def _check_regime(self, key: str, state: CalibrationState, residual: float) -> None:
@@ -263,7 +338,7 @@ class CalibrationManager:
                 if new_sigma > 1e-9:
                     old_sigma = state.ref_std
                     ratio = new_sigma / max(old_sigma, 1e-9)
-                    if abs(ratio - 1.0) > 0.10:  # >10% change warrants update
+                    if abs(ratio - 1.0) > SIGMA_UPDATE_THRESHOLD:
                         state._update_derived(new_sigma)
                         logger.debug(
                             "sigma_refreshed",

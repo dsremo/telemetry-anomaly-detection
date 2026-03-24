@@ -65,6 +65,7 @@ from dsremo.detection.correlation_detector import CorrelationGraphDetector
 from dsremo.detection.discord_detector import DiscordDetector
 from dsremo.detection.trend_velocity_detector import TrendVelocityDetector
 from dsremo.detection.variance_detector import VarianceDetector
+from dsremo.core.tenant import get_tenant
 from dsremo.features.engine import FeatureEngine
 
 logger = structlog.get_logger()
@@ -115,6 +116,11 @@ def _tcn_model_path(satellite_id: str, parameter: str) -> "Path | None":
 # Per-channel GRU autoencoder models — keyed by "satellite_id:parameter".
 # Each AutoencoderDetector accumulates residuals, self-trains, and scores.
 _lstm_models: dict[str, AutoencoderDetector] = {}
+
+# Hard cap on in-memory ML model registry size.  When either registry grows
+# past this limit, the oldest-inserted entry is evicted (FIFO — Python dicts
+# preserve insertion order since 3.7).  At ~100 KB per model, 200 models ≈ 20 MB.
+_MAX_ML_MODELS: int = 200
 
 # LSTM config — overridable via init_detectors() from dsremo.yaml.
 _lstm_seq_length:      int   = 30
@@ -191,6 +197,14 @@ _ALL_PARAMETERS: list[str] = [
     "signal_strength", "bit_error_rate", "link_margin",
 ]
 
+# Per-channel detector weights — learned from operator FP feedback.
+# Keys: "{tenant}:{satellite_id}:{parameter}" → {detector_name: weight}.
+# When present, used instead of global WEIGHTS for that channel.
+# Decay rule: each FP verdict decays triggering detectors by FP_WEIGHT_DECAY.
+# Weights are re-normalised to sum=1.0 after each update.
+_channel_weights: dict[str, dict[str, float]] = {}
+_FP_WEIGHT_DECAY: float = 0.95   # 5% per false-positive verdict
+
 # State flush to DB: persist CUSUM/EWMA/calibration every N cycles.
 _STATE_FLUSH_EVERY: int = 50
 _detection_cycle_count: dict[str, int] = {}
@@ -202,7 +216,10 @@ _samples_since_fit: dict[str, int] = {}
 # Each detection cycle only feeds NEW residuals into the state machines
 # (calibration, CUSUM, EWMA) — points with timestamp <= this value were
 # already processed in a previous cycle and must not be fed again.
+# Capped at _MAX_CHANNEL_STATE entries; FIFO eviction keeps memory bounded
+# in long-running deployments with many transient channels.
 _last_processed_ts: dict[str, float] = {}
+_MAX_CHANNEL_STATE: int = 10_000   # max tracked channels before FIFO eviction
 
 # Alert cooldown: suppress repeated alarms for the same channel within N hours.
 # Prevents a sustained anomalous regime from generating thousands of records.
@@ -244,9 +261,14 @@ def _get_ml_model(satellite_id: str, parameter: str, registry: dict, factory, ex
     """Lazy-init + checkpoint warm-start shared by all per-channel ML detectors.
 
     Identical pattern for GRU and TCN: check registry → create via factory → load checkpoint.
+    Evicts the oldest entry (FIFO) when registry exceeds _MAX_ML_MODELS to bound memory.
     """
     key = f"{satellite_id}:{parameter}"
     if key not in registry:
+        # Evict oldest if at capacity (FIFO — dict insertion order, Python 3.7+).
+        if len(registry) >= _MAX_ML_MODELS:
+            oldest_key = next(iter(registry))
+            del registry[oldest_key]
         det = factory()
         path = _model_path(satellite_id, parameter, ext)
         if path is not None and path.exists():
@@ -376,7 +398,10 @@ def init_detectors(settings: object) -> None:
     _cal_mod.EWMA_LAMBDA           = float(det.get("ewma_lambda", 0.2))
     _cal_mod.EWMA_SIGMA_FACTOR     = float(det.get("ewma_sigma_factor", 3.0))
     _cal_mod.RECAL_FACTOR          = float(det.get("cusum_recal_factor", 10.0))
-    _cal_mod.SIGMA_UPDATE_INTERVAL = int(det.get("sigma_update_interval", 720))
+    _cal_mod.SIGMA_UPDATE_INTERVAL    = int(det.get("sigma_update_interval", 720))
+    _cal_mod.SIGMA_UPDATE_THRESHOLD   = float(det.get("sigma_update_threshold", 0.10))
+    _cal_mod.GMM_ENABLED              = bool(det.get("gmm_enabled", True))
+    _cal_mod.AUTO_Z_THRESHOLD_ENABLED = bool(det.get("auto_z_threshold_enabled", True))
     # Recompute the spread constant in calibration module after lambda change.
     import math
     lam = _cal_mod.EWMA_LAMBDA
@@ -502,6 +527,7 @@ def init_detectors(settings: object) -> None:
     _channel_last_seen.clear()
     _detection_cycle_count.clear()
     _samples_since_fit.clear()
+    _channel_weights.clear()   # learned FP weights reset on full re-init
 
     logger.info(
         "detectors_initialized",
@@ -546,6 +572,25 @@ def _z_threshold_override(z_threshold: float) -> Generator[None, None, None]:
         _stat_detector.z_threshold = orig
 
 
+def _gmm_nearest_z(
+    residual: float,
+    gmm_means: "list[float]",
+    gmm_stds: "list[float]",
+) -> float:
+    """Return z-score of *residual* relative to the nearest GMM component.
+
+    For a 2-component GMM, computes z against each component and returns
+    the minimum — i.e. the score relative to whichever mode the residual
+    is closest to.  This prevents legitimate bimodal oscillations (e.g. a
+    channel that alternates between two normal operating states) from
+    triggering false alarms relative to the global mean.
+    """
+    return float(min(
+        abs(residual - mu) / max(sigma, 1e-9)
+        for mu, sigma in zip(gmm_means, gmm_stds)
+    ))
+
+
 def _advance_ml_detector(
     det: "AutoencoderDetector | TCNDetector",
     new_indices: "np.ndarray",
@@ -580,6 +625,43 @@ def load_channel_configs(configs: list[dict]) -> None:
         for row in configs
     }
     logger.debug("channel_config_cache_updated", count=len(_channel_config_cache))
+
+
+def record_false_positive(
+    satellite_id: str,
+    parameter: str,
+    detectors_triggered: "tuple[str, ...] | list[str]",
+) -> None:
+    """Decay per-channel weights for detectors that fired on a false positive.
+
+    Called by the feedback API endpoint when an operator marks an anomaly as FP.
+    For each triggering detector, its per-channel weight is multiplied by
+    _FP_WEIGHT_DECAY (default 0.95).  Weights are then re-normalised to sum=1.0.
+
+    The per-channel weight dict starts as a copy of the global WEIGHTS, so
+    channels that have never received feedback use the standard ensemble weights.
+    Only detectors that exist in WEIGHTS are updated — unknown detector names
+    (e.g. "stale_data", "hard_limit") are silently skipped.
+    """
+    if not detectors_triggered:
+        return
+    from dsremo.core.tenant import get_tenant  # noqa: PLC0415
+    key = f"{get_tenant()}:{satellite_id}:{parameter}"
+    ch_w = _channel_weights.setdefault(key, dict(WEIGHTS))
+    for det_name in detectors_triggered:
+        if det_name in ch_w:
+            ch_w[det_name] *= _FP_WEIGHT_DECAY
+    total = sum(ch_w.values())
+    if total > 1e-9:
+        for k in ch_w:
+            ch_w[k] /= total
+    logger.info(
+        "channel_weights_updated",
+        satellite_id=satellite_id,
+        parameter=parameter,
+        detectors_decayed=list(detectors_triggered),
+        top3=sorted(ch_w.items(), key=lambda x: -x[1])[:3],
+    )
 
 
 def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
@@ -620,7 +702,7 @@ def suppress_channel(satellite_id: str, parameter: str, duration_min: float) -> 
     Overwrites any existing suppression for the same channel.
     """
     until = datetime.now(timezone.utc).timestamp() + duration_min * 60.0
-    _suppressed[f"{satellite_id}:{parameter}"] = until
+    _suppressed[f"{get_tenant()}:{satellite_id}:{parameter}"] = until
     logger.info("channel_suppressed", satellite=satellite_id, parameter=parameter,
                 duration_min=duration_min)
     return until
@@ -631,7 +713,7 @@ def lift_suppression(satellite_id: str, parameter: str) -> bool:
 
     Returns True if a suppression was active, False if none existed.
     """
-    key = f"{satellite_id}:{parameter}"
+    key = f"{get_tenant()}:{satellite_id}:{parameter}"
     if key in _suppressed:
         del _suppressed[key]
         logger.info("suppression_lifted", satellite=satellite_id, parameter=parameter)
@@ -640,13 +722,18 @@ def lift_suppression(satellite_id: str, parameter: str) -> bool:
 
 
 def list_suppressions(satellite_id: str) -> list[dict]:
-    """Return active (non-expired) suppressions for *satellite_id*."""
+    """Return active (non-expired) suppressions for *satellite_id* in the current tenant."""
+    tenant = get_tenant()
     now = datetime.now(timezone.utc).timestamp()
     result = []
     expired = []
     for key, until in _suppressed.items():
-        sat, _, param = key.partition(":")
-        if sat != satellite_id:
+        # Key format: "tenant:satellite_id:parameter"
+        parts = key.split(":", 2)
+        if len(parts) != 3:
+            continue
+        t, sat, param = parts
+        if t != tenant or sat != satellite_id:
             continue
         if until > now:
             result.append({
@@ -733,11 +820,19 @@ async def flush_all_states(satellite_id: str | None = None) -> None:
         })
 
     if records:
-        try:
-            await queries.bulk_upsert_detector_states(records)
-            logger.debug("detector_states_flushed", count=len(records))
-        except Exception as exc:
-            logger.warning("detector_state_flush_failed", error=str(exc))
+        # Retry once on transient DB errors (pool timeout, brief disconnect).
+        for _attempt in range(2):
+            try:
+                await queries.bulk_upsert_detector_states(records)
+                logger.debug("detector_states_flushed", count=len(records))
+                break
+            except Exception as exc:
+                if _attempt == 0:
+                    import asyncio  # noqa: PLC0415
+                    logger.warning("detector_state_flush_retrying", error=str(exc))
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.warning("detector_state_flush_failed", error=str(exc))
 
     # Persist calibration states for newly-calibrated channels.
     for key, cal in _calibration_mgr.all_db_records():
@@ -765,6 +860,7 @@ async def analyze_channel_history(
     subsystem: str = "",
     batch_size: int = 600,
     progress_cb: "object | None" = None,
+    max_rows: int | None = None,
 ) -> list[Anomaly]:
     """Stream ALL stored telemetry for one channel through the detection pipeline.
 
@@ -788,7 +884,7 @@ async def analyze_channel_history(
     Returns:
         List of Anomaly objects, each with a precise historical timestamp.
     """
-    key       = f"{satellite_id}:{parameter}"
+    key       = f"{get_tenant()}:{satellite_id}:{parameter}"
     anomalies: list[Anomaly] = []
 
     # Load per-channel overrides once for the entire analysis run.
@@ -831,6 +927,8 @@ async def analyze_channel_history(
     n_processed = 0
 
     while True:
+        if max_rows is not None and n_processed >= max_rows:
+            break
         batch = await queries.get_telemetry_batch_ordered(
             satellite_id, parameter, after_ts=after_ts, limit=batch_size,
         )
@@ -899,6 +997,8 @@ async def analyze_channel_history(
                 best_ewma = er
                 alarm_idx = idx
 
+        if key not in _last_processed_ts and len(_last_processed_ts) >= _MAX_CHANNEL_STATE:
+            del _last_processed_ts[next(iter(_last_processed_ts))]
         _last_processed_ts[key] = float(wt[new_indices[-1]])
 
         # Window-based detectors run on the final new point only.
@@ -956,7 +1056,9 @@ async def analyze_channel_history(
         hist_corr_result = _correlation_detector.detect(satellite_id, parameter)
 
         all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result, hist_discord_result, hist_corr_result]
-        is_anomaly, confidence, severity = _ensemble_vote(all_results)
+        is_anomaly, confidence, severity = _ensemble_vote(
+            all_results, weights=_channel_weights.get(key),
+        )
 
         # Point 3: per-channel min_confidence gate
         if is_anomaly and eff["min_confidence"] > 0.0 and confidence < eff["min_confidence"]:
@@ -1052,7 +1154,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
     for row in latest:
         param    = row["parameter"]
         ts_epoch = row["timestamp"].timestamp() if hasattr(row["timestamp"], "timestamp") else float(row["timestamp"])
-        key      = f"{satellite_id}:{param}"
+        key      = f"{get_tenant()}:{satellite_id}:{param}"
         if key in _channel_last_seen and (now_epoch - ts_epoch) > _stale_threshold_s:
             stale_anomaly = Anomaly(
                 satellite_id=satellite_id,
@@ -1078,6 +1180,8 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                 await queries.link_anomaly_to_incident(stale_anomaly.id, incident.id)
             except Exception:  # noqa: BLE001
                 pass
+        if key not in _channel_last_seen and len(_channel_last_seen) >= _MAX_CHANNEL_STATE:
+            del _channel_last_seen[next(iter(_channel_last_seen))]
         _channel_last_seen[key] = ts_epoch
 
     for row in latest:
@@ -1100,7 +1204,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         )
 
         # ── 2. STL decomposition → residuals ────────────────────────────
-        key    = f"{satellite_id}:{param}"
+        key    = f"{get_tenant()}:{satellite_id}:{param}"
         decomp = _stl_decomposer.decompose(key, window_values, window_ts)
         residuals = decomp.residual
 
@@ -1145,7 +1249,9 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             if er.score > ewma_result.score:
                 ewma_result = er
 
-        # Mark all new window points as processed.
+        # Mark all new window points as processed (FIFO eviction at cap).
+        if key not in _last_processed_ts and len(_last_processed_ts) >= _MAX_CHANNEL_STATE:
+            del _last_processed_ts[next(iter(_last_processed_ts))]
         _last_processed_ts[key] = float(window_ts[new_indices[-1]])
 
         # ── 5. Z-score on the latest new residual (spike detection) ──────
@@ -1153,8 +1259,35 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         current_ts_epoch = float(window_ts[new_indices[-1]])
 
         feat_res = _feature_engine.compute(f"{param}:res", current_residual, current_ts_epoch)
-        # ── 5. Z-score spike detection (per-channel threshold override) ──
-        with _z_threshold_override(eff["z_threshold"]):
+
+        # ── GMM nearest-component z-score (Feature: bimodal channels) ────
+        # When the channel has a GMM baseline, substitute the z-score with
+        # the distance to the nearest component so bimodal oscillations
+        # (e.g. two operating modes) don't look like infinite-σ spikes.
+        if calibration is not None and calibration.gmm_means is not None:
+            import dataclasses  # noqa: PLC0415
+            feat_res = dataclasses.replace(
+                feat_res,
+                z_score=_gmm_nearest_z(
+                    current_residual,
+                    calibration.gmm_means,
+                    calibration.gmm_stds,
+                ),
+            )
+
+        # ── Per-channel auto z-threshold (Feature: empirical 99th-pct) ──
+        # Effective threshold = max(global config, per-channel empirical 99th pct).
+        # Channels with wider natural distributions automatically get a
+        # higher threshold without any manual per-dataset tuning.
+        _base_z = eff["z_threshold"]
+        _auto_z = (
+            calibration.auto_z_threshold
+            if calibration is not None and calibration.auto_z_threshold is not None
+            else None
+        )
+        _eff_z = max(_base_z, _auto_z) if _auto_z is not None else _base_z
+
+        with _z_threshold_override(_eff_z):
             stat_result = _stat_detector.detect(feat_res, residuals)
 
         # ── 6. PELT changepoint on residuals ─────────────────────────────
@@ -1265,10 +1398,13 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         if hard_limit_breached:
             is_anomaly, confidence, severity = True, 1.0, Severity.CRITICAL
         else:
-            is_anomaly, confidence, severity = _ensemble_vote(all_results)
+            is_anomaly, confidence, severity = _ensemble_vote(
+                all_results, weights=_channel_weights.get(live_key),
+            )
 
         # Suppression window (maintenance mode — mutes alerts, not detection).
-        live_key = f"{satellite_id}:{param}"
+        # Prefix with tenant_id to prevent cross-tenant cooldown bleed.
+        live_key = f"{get_tenant()}:{satellite_id}:{param}"
         if is_anomaly and _is_suppressed(live_key):
             is_anomaly = False
 
@@ -1296,6 +1432,8 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             _anomaly_streak[live_key] = 0  # reset streak on any nominal window
 
         if is_anomaly:
+            if live_key not in _last_anomaly_ts and len(_last_anomaly_ts) >= _MAX_CHANNEL_STATE:
+                del _last_anomaly_ts[next(iter(_last_anomaly_ts))]
             _last_anomaly_ts[live_key] = datetime.now(timezone.utc).timestamp()
             explanation  = _build_explanation(param, feat_res, all_results, row, decomp.method)
             contributing = _extract_contributions(all_results)
@@ -1376,6 +1514,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
 
 def _ensemble_vote(
     results: list[DetectorResult],
+    weights: "dict[str, float] | None" = None,
 ) -> tuple[bool, float, Severity]:
     """Combine detector outputs into a single verdict.
 
@@ -1389,20 +1528,24 @@ def _ensemble_vote(
         3/5 triggered → ×0.88
         4/5 triggered → ×0.95
         5/5 triggered → ×1.00
+
+    weights: per-channel learned weights (from feedback). Falls back to
+             global WEIGHTS when None or a detector name is missing.
     """
+    w = weights if weights is not None else WEIGHTS
     triggered = [r for r in results if r.is_anomaly]
     if not triggered:
         # No alarm — return weighted average of sub-threshold scores.
-        avg = sum(r.score * WEIGHTS.get(r.detector_name, 0.2) for r in results)
+        avg = sum(r.score * w.get(r.detector_name, 0.2) for r in results)
         return False, float(avg), Severity.NOMINAL
 
     # Weighted confidence over triggered detectors only.
-    trigger_weight_sum = sum(WEIGHTS.get(r.detector_name, 0.2) for r in triggered)
+    trigger_weight_sum = sum(w.get(r.detector_name, 0.2) for r in triggered)
     if trigger_weight_sum < 1e-9:
         return False, 0.0, Severity.NOMINAL
 
     signal_score = sum(
-        r.score * WEIGHTS.get(r.detector_name, 0.2) for r in triggered
+        r.score * w.get(r.detector_name, 0.2) for r in triggered
     ) / trigger_weight_sum
 
     # Agreement factor — logarithmic so 2 detectors is a meaningful jump.

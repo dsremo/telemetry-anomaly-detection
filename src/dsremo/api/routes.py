@@ -340,6 +340,14 @@ async def submit_anomaly_feedback(
     if not updated:
         raise HTTPException(status_code=404, detail="Anomaly not found")
     row = await queries.get_anomaly_by_id(anomaly_id)
+    # Propagate FP verdict to in-memory detector weights (online learning).
+    if is_fp and row:
+        from dsremo.detection.detector import record_false_positive  # noqa: PLC0415
+        record_false_positive(
+            satellite_id=row["satellite_id"],
+            parameter=row["parameter"],
+            detectors_triggered=row.get("detectors_triggered") or [],
+        )
     return _row_to_anomaly(row)  # type: ignore[arg-type]
 
 

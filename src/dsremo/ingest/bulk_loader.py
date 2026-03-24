@@ -161,6 +161,7 @@ async def run_bulk_detection(
     lstm_epochs: int | None = None,
     tcn_epochs: int | None = None,
     retrain_interval: int | None = None,
+    max_rows_per_channel: int | None = None,
 ) -> dict[str, list[Anomaly]]:
     """Run streaming anomaly detection over all stored channels.
 
@@ -170,20 +171,23 @@ async def run_bulk_detection(
     to DB when all channels have been processed.
 
     Args:
-        satellite_id:     Satellite whose telemetry to analyse.
-        parameters:       Ordered list of channel/parameter names.
-        subsystem_map:    Maps parameter → subsystem label for anomaly records.
-        batch_size:       DB fetch page size (600 = one full STL window).
-        cooldown_hours:   Override alert cooldown (hours). None = use config value.
-        recal_factor:     Override CUSUM recalibration sensitivity. None = use config.
-        z_threshold:      Override z-score threshold. None = use config (default 3.0).
-        cusum_h_factor:   Override CUSUM decision threshold multiplier. None = use config.
-        lstm_epochs:      Override GRU training epochs. 0 = disable GRU entirely (fast).
-                          None = use config (default 30). Useful for benchmark runs.
-        tcn_epochs:       Override TCN training epochs. 0 = disable TCN entirely (fast).
-                          None = use config (default 40). Useful for benchmark runs.
-        retrain_interval: Override how often ML models retrain (samples between retrains).
-                          None = use config (default 500). Higher = faster but less adaptive.
+        satellite_id:         Satellite whose telemetry to analyse.
+        parameters:           Ordered list of channel/parameter names.
+        subsystem_map:        Maps parameter → subsystem label for anomaly records.
+        batch_size:           DB fetch page size (600 = one full STL window).
+        cooldown_hours:       Override alert cooldown (hours). None = use config value.
+        recal_factor:         Override CUSUM recalibration sensitivity. None = use config.
+        z_threshold:          Override z-score threshold. None = use config (default 3.0).
+        cusum_h_factor:       Override CUSUM decision threshold multiplier. None = use config.
+        lstm_epochs:          Override GRU training epochs. 0 = disable GRU entirely (fast).
+                              None = use config (default 30). Useful for benchmark runs.
+        tcn_epochs:           Override TCN training epochs. 0 = disable TCN entirely (fast).
+                              None = use config (default 40). Useful for benchmark runs.
+        retrain_interval:     Override how often ML models retrain (samples between retrains).
+                              None = use config (default 500). Higher = faster but less adaptive.
+        max_rows_per_channel: Hard cap on rows processed per channel. Prevents OOM on
+                              continuous-fire datasets (e.g. CATS-2 5M rows/channel).
+                              None = process all rows.
 
     Returns:
         Dict mapping each parameter name to its list of detected Anomaly objects.
@@ -241,12 +245,14 @@ async def run_bulk_detection(
                 continue
 
             t0 = time.monotonic()
-            with tqdm(total=int(cnt), desc=f"  {param}", unit="pt", leave=False) as pbar:
+            display_cnt = int(min(cnt, max_rows_per_channel) if max_rows_per_channel else cnt)
+            with tqdm(total=display_cnt, desc=f"  {param}", unit="pt", leave=False) as pbar:
                 anomalies = await analyze_channel_history(
                     satellite_id=satellite_id,
                     parameter=param,
                     subsystem=subsystem,
                     batch_size=batch_size,
+                    max_rows=max_rows_per_channel,
                     progress_cb=lambda n, last=[0], p=pbar: (
                         p.update(n - last[0]),
                         last.__setitem__(0, n),

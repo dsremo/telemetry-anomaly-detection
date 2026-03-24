@@ -38,6 +38,11 @@ class CorrelationGraphDetector:
     Thread-safe: asyncio is single-threaded.
     """
 
+    # Maximum number of satellites tracked simultaneously.
+    # When exceeded, the least-recently-inserted satellite is evicted (FIFO).
+    # Prevents unbounded growth in long-running deployments with many missions.
+    _MAX_SATELLITES: int = 100
+
     def __init__(
         self,
         window: int = 60,
@@ -60,6 +65,12 @@ class CorrelationGraphDetector:
     def update(self, satellite_id: str, parameter: str, residual: float) -> None:
         """Append latest residual to the rolling buffer for this channel."""
         if satellite_id not in self._buffers:
+            # FIFO eviction: drop oldest satellite when cap is reached.
+            if len(self._buffers) >= self._MAX_SATELLITES:
+                oldest = next(iter(self._buffers))
+                del self._buffers[oldest]
+                self._pair_baselines.pop(oldest, None)
+                self._corr_history.pop(oldest, None)
             self._buffers[satellite_id] = {}
             self._pair_baselines[satellite_id] = {}
             self._corr_history[satellite_id] = {}

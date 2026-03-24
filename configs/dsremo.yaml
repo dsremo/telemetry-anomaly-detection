@@ -95,6 +95,22 @@ detection:
   # normal drift and fire as false positives.
   # 720 = 30 days at 1-h resampling.  Only updates when σ changes >10%.
   sigma_update_interval: 720
+  sigma_update_threshold: 0.10  # minimum σ_ref ratio change to trigger update
+
+  # ── GMM-2 Bimodal Baseline ────────────────────────────────────────────
+  # During calibration, tests whether a 2-component Gaussian Mixture Model
+  # fits the channel better than a single Gaussian (BIC difference > 10).
+  # If so, z-scores are computed against the nearest component — bimodal
+  # channels (two operating modes) no longer look like infinite-σ spikes.
+  # Requires scikit-learn; falls back silently if unavailable.
+  gmm_enabled: true
+
+  # ── Per-Channel Auto Z-Threshold ─────────────────────────────────────
+  # After calibration, computes the empirical 99th percentile of
+  # |residual| / σ_ref and uses max(config_z, auto_z) as the effective
+  # threshold.  Noisy or oscillatory channels automatically get a higher
+  # threshold without manual per-dataset tuning.  Clamped to [3.0, 10.0].
+  auto_z_threshold_enabled: true
 
   # ── STL decomposition ────────────────────────────────────────────────
   stl_recompute_every: 30   # recompute decomposition after N new points

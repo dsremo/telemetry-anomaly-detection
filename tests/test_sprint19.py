@@ -368,9 +368,11 @@ class TestSuppressionWindows:
 
     def test_is_suppressed_helper(self):
         from dsremo.detection.detector import _is_suppressed, suppress_channel
+        from dsremo.core.tenant import get_tenant
         suppress_channel("SAT-IS", "PARAM_IS", 10.0)
-        assert _is_suppressed("SAT-IS:PARAM_IS") is True
-        assert _is_suppressed("SAT-IS:UNKNOWN") is False
+        tenant = get_tenant()
+        assert _is_suppressed(f"{tenant}:SAT-IS:PARAM_IS") is True
+        assert _is_suppressed(f"{tenant}:SAT-IS:UNKNOWN") is False
 
     def test_suppressed_dict_cleared_by_init_detectors(self):
         import dsremo.detection.detector as det_mod
