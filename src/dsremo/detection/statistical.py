@@ -30,7 +30,7 @@ class StatisticalDetector:
 
     def __init__(
         self,
-        z_threshold: float = 3.0,
+        z_threshold: float = 3.5,
         severe_z_threshold: float = 5.0,
         min_window: int = 30,
     ):

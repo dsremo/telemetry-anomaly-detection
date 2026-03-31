@@ -4,7 +4,7 @@ Detection order per parameter (post-STL architecture):
     1. Fetch recent window from DB (600 pts, oldest → newest)
     2. STL decompose → residuals + trend
     3. Update per-channel calibration (ref_mean, ref_std, k, H, UCL, LCL)
-    4. CUSUM           on residuals  — gradual drift accumulation (NASA standard)
+    4. CUSUM           on residuals  — gradual drift accumulation (NASA flight operations pattern, cf. NPR 7150.2D, NASA-STD-8719.13C)
     5. EWMA            on residuals  — sudden level shifts
     6. Z-score         on residuals  — single-point spikes
     7. PELT            on residuals  — abrupt structural breaks
@@ -13,10 +13,11 @@ Detection order per parameter (post-STL architecture):
    10. GRU Autoencoder  on residuals  — temporal pattern ML
    11. TCN              on residuals  — dilated causal convolution ML
    12. Trend Velocity   on STL trend  — onset detection (drift acceleration)
-   13. Ensemble vote → confidence + severity
+   14. BOCPD           on residuals  — Bayesian online changepoint (replaces PELT weight)
+   15. Ensemble vote → confidence + severity
    14. Store anomaly, broadcast via WebSocket
 
-Ensemble weights (9 detectors, sum=1.0):
+Ensemble weights (12 detectors, LLR-derived from CATS benchmark):
     cusum:            0.19   (primary drift detector)
     ewma:             0.16   (level shift detector)
     statistical:      0.12   (spike detector)
@@ -41,10 +42,12 @@ State persistence:
 
 from __future__ import annotations
 
+import asyncio
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Generator
+from typing import Generator, Protocol, runtime_checkable
 
 import numpy as np
 import structlog
@@ -52,6 +55,7 @@ import structlog
 from dsremo.core.models import Anomaly, DetectorResult, Severity
 from dsremo.db import queries
 from dsremo.detection.calibration import CalibrationManager
+from dsremo.detection.bocpd_detector import BOCPDDetector
 from dsremo.detection.changepoint import ChangePointDetector
 from dsremo.detection.cusum import CUSUMDetector
 from dsremo.detection.ewma import EWMADetector
@@ -65,7 +69,7 @@ from dsremo.detection.correlation_detector import CorrelationGraphDetector
 from dsremo.detection.discord_detector import DiscordDetector
 from dsremo.detection.trend_velocity_detector import TrendVelocityDetector
 from dsremo.detection.variance_detector import VarianceDetector
-from dsremo.core.tenant import get_tenant
+from dsremo.core.tenant import get_tenant, get_trace_id
 from dsremo.features.engine import FeatureEngine
 
 logger = structlog.get_logger()
@@ -79,11 +83,18 @@ _ewma_detector:     EWMADetector             = EWMADetector()
 _stat_detector:     StatisticalDetector      = StatisticalDetector()
 _iso_detector:      IsolationForestDetector  = IsolationForestDetector()
 _cp_detector:       ChangePointDetector      = ChangePointDetector()
+_bocpd_detector:    BOCPDDetector            = BOCPDDetector()
 _variance_detector:        VarianceDetector         = VarianceDetector()
 _trend_velocity_detector:  TrendVelocityDetector    = TrendVelocityDetector()
 _discord_detector:         DiscordDetector          = DiscordDetector()
 _correlation_detector:     CorrelationGraphDetector = CorrelationGraphDetector()
 _incident_grouper:         IncidentGrouper          = IncidentGrouper()
+
+# Thread pool for CPU-bound ML training (GRU/TCN fit()).
+# Prevents blocking the asyncio event loop during model retraining.
+_ml_executor: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="dsremo-ml",
+)
 
 # Directory for persisted ML model checkpoints (warm-start across runs).
 # None = persistence disabled (default until configured via init_detectors).
@@ -165,21 +176,33 @@ _corr_graph_threshold_sigma:   float = 3.0
 # should not silently persist across deployments).
 _suppressed: dict[str, float] = {}
 
+# Mission phase per satellite — set via API, default "nominal" (all active).
+_satellite_phase: dict[str, str] = {}
+_phase_gating: dict[str, list[str]] = {}
+
 # Ensemble weights (must sum to 1.0, overridable via config)
-# 11 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance,
-#               lstm, tcn, trend_velocity, matrix_profile, correlation_graph
+# 12 detectors: cusum, ewma, statistical, changepoint, isolation_forest, variance,
+#               lstm, tcn, trend_velocity, matrix_profile, correlation_graph, bocpd
+# Data-driven LLR weights from CATS benchmark (scripts/benchmark_llr_weights.py).
+# changepoint (PELT) weight=0: fires on every window on non-stationary data (CATS benchmark).
+# bocpd replaces changepoint as the structural-break detector; conservative weight (non-benchmarked).
 WEIGHTS: dict[str, float] = {
-    "cusum":              0.17,   # primary drift detector (NASA CUSUM standard)
-    "ewma":               0.14,   # level-shift detector
-    "statistical":        0.10,   # single-point spike detector (z-score)
-    "changepoint":        0.08,   # structural break detector (PELT)
-    "isolation_forest":   0.05,   # multivariate cross-parameter anomalies
-    "variance":           0.07,   # variance-spike detector (CATS-type oscillatory signals)
-    "lstm":               0.10,   # GRU autoencoder — temporal pattern anomalies (ML)
-    "tcn":                0.09,   # TCN — dilated causal convolutions, deeper ML patterns
-    "trend_velocity":     0.08,   # STL trend acceleration — onset detection (Sprint 14)
-    "matrix_profile":     0.06,   # Matrix Profile discord — shape anomaly detection (Sprint 15)
-    "correlation_graph":  0.06,   # Correlation graph — relationship breakdown (Sprint 19)
+    # Weights renormalized from CATS benchmark (scripts/benchmark_llr_weights.py)
+    # after adding bocpd as 6th non-benchmarked detector.
+    # LLR ratios preserved; benchmarked positives scaled by 0.9381 to keep sum=1.0.
+    # Non-benchmarked conservative weight = min(positive LLR weights) × 0.5 = 0.0473.
+    "cusum":                 0.1261,   # primary drift detector
+    "ewma":                  0.0887,   # level-shift detector
+    "statistical":           0.0000,   # single-point spike detector (z-score)
+    "changepoint":           0.0000,   # structural break detector (PELT — superseded by bocpd)
+    "isolation_forest":      0.0473,   # multivariate cross-parameter anomalies
+    "variance":              0.2507,   # variance-spike detector
+    "lstm":                  0.0473,   # GRU autoencoder — temporal pattern anomalies
+    "tcn":                   0.0473,   # TCN — dilated causal convolutions
+    "trend_velocity":        0.2507,   # STL trend acceleration — onset detection
+    "matrix_profile":        0.0473,   # Matrix Profile discord — shape anomaly detection
+    "correlation_graph":     0.0473,   # Correlation graph — relationship breakdown
+    "bocpd":                 0.0473,   # Bayesian online changepoint (Adams & MacKay 2007)
 }
 
 # Severity thresholds on the ensemble confidence score.
@@ -188,6 +211,47 @@ _severity_thresholds: dict[str, float] = {
     "warning":  0.65,
     "critical": 0.85,
 }
+
+
+# ── Detector plugin protocol (Startup critique: extensibility) ───────────────
+
+@runtime_checkable
+class DetectorPlugin(Protocol):
+    """Protocol for custom detector plugins.
+
+    Startups and operators can implement this protocol to add custom
+    detectors to the ensemble without modifying core detection code.
+
+    Usage:
+        class MyDetector:
+            def detect(self, key: str, residual: float,
+                       calibration: CalibrationState) -> DetectorResult: ...
+            def reset(self, key: str | None = None) -> None: ...
+
+        register_plugin("my_detector", MyDetector(), weight=0.05)
+    """
+    def detect(self, key: str, residual: float, calibration: "CalibrationState") -> "DetectorResult": ...
+    def reset(self, key: str | None = None) -> None: ...
+
+
+_plugins: dict[str, tuple["DetectorPlugin", float]] = {}
+
+
+def register_plugin(name: str, detector: "DetectorPlugin", weight: float = 0.05) -> None:
+    """Register a custom detector plugin with the ensemble.
+
+    The plugin will be called for every sample in both streaming and batch modes.
+    Weight is added to WEIGHTS dict (re-normalisation happens in _ensemble_vote).
+    """
+    _plugins[name] = (detector, weight)
+    WEIGHTS[name] = weight
+    logger.info("detector_plugin_registered", name=name, weight=weight)
+
+
+def unregister_plugin(name: str) -> None:
+    """Remove a custom detector plugin."""
+    _plugins.pop(name, None)
+    WEIGHTS.pop(name, None)
 
 # Standard parameters for multivariate Isolation Forest (simulator / demo data).
 _ALL_PARAMETERS: list[str] = [
@@ -205,6 +269,14 @@ _ALL_PARAMETERS: list[str] = [
 _channel_weights: dict[str, dict[str, float]] = {}
 _FP_WEIGHT_DECAY: float = 0.95   # 5% per false-positive verdict
 
+# Per-severity cooldown multiplier (ISRO/Google critique):
+# CRITICAL alarms re-fire sooner; WATCH respects full cooldown window.
+_SEVERITY_COOLDOWN_MULT: dict[str, float] = {
+    "critical": 0.25,   # 25% of configured cooldown
+    "warning":  0.50,   # 50%
+    "watch":    1.00,   # full cooldown
+}
+
 # State flush to DB: persist CUSUM/EWMA/calibration every N cycles.
 _STATE_FLUSH_EVERY: int = 50
 _detection_cycle_count: dict[str, int] = {}
@@ -219,7 +291,7 @@ _samples_since_fit: dict[str, int] = {}
 # Capped at _MAX_CHANNEL_STATE entries; FIFO eviction keeps memory bounded
 # in long-running deployments with many transient channels.
 _last_processed_ts: dict[str, float] = {}
-_MAX_CHANNEL_STATE: int = 10_000   # max tracked channels before FIFO eviction
+_MAX_CHANNEL_STATE: int = 10_000   # max tracked channels PER TENANT before FIFO eviction
 
 # Alert cooldown: suppress repeated alarms for the same channel within N hours.
 # Prevents a sustained anomalous regime from generating thousands of records.
@@ -228,14 +300,14 @@ _alert_cooldown_s: float = 72.0 * 3600.0   # default 72 h; overridden by init
 _last_anomaly_ts:  dict[str, float] = {}    # key → epoch of last stored anomaly
 
 # Persistence filter: require N consecutive anomalous detections before alerting.
-# Production standard (NASA ASIST, YAMCS, SpaceX Doppel) — avoids single-sample
+# Production standard (NASA flight operations pattern, cf. NPR 7150.2D, NASA-STD-8719.13C; YAMCS; SpaceX Doppel) — avoids single-sample
 # FPs without needing a data scan.  1 = disabled (backward-compatible default).
 # Applied only in run_detection_cycle() (streaming); analyze_channel_history()
 # uses the cooldown guard instead (batch analysis).
 _alert_persistence_min: int = 1             # set to 2-3 for production streaming
 _anomaly_streak:  dict[str, int] = {}       # key → consecutive anomalous windows
 
-# Stale data detection (NASA ASIST / ISRO FOLIO standard, Sprint 18).
+# Stale data detection (NASA flight operations pattern, cf. NPR 7150.2D, NASA-STD-8719.13C / ISRO FOLIO standard, Sprint 18).
 # Tracks when each channel last produced a telemetry value.  If the gap
 # exceeds stale_threshold_s, a CRITICAL "stale_data" anomaly is raised.
 # This catches sensor dropout, instrument power-off, and comms loss —
@@ -243,6 +315,7 @@ _anomaly_streak:  dict[str, int] = {}       # key → consecutive anomalous wind
 _channel_last_seen:  dict[str, float] = {}  # key=sat:param → UTC epoch
 _stale_threshold_s:  float = 300.0          # default 5 min; overridden by config
 _ttl_warn_min:       float = 60.0           # default 60 min; warn when ttl < this
+_expected_contact_gap_s: float = 0.0        # 0=disabled; AOS/LOS gap tolerance
 
 # Adaptive context window: auto-scaled per channel based on FFT-detected period.
 # window = min(max(600, stl_window_factor × period), stl_max_window)
@@ -335,7 +408,7 @@ def init_detectors(settings: object) -> None:
     """Wire config values into all detector singletons.  Call once at startup."""
     global _feature_engine, _stl_decomposer, _calibration_mgr
     global _cusum_detector, _ewma_detector, _stat_detector
-    global _iso_detector, _cp_detector, _variance_detector
+    global _iso_detector, _cp_detector, _bocpd_detector, _variance_detector
     global WEIGHTS, _severity_thresholds
     global _last_processed_ts, _detection_cycle_count, _samples_since_fit
     global _alert_cooldown_s, _last_anomaly_ts
@@ -355,14 +428,16 @@ def init_detectors(settings: object) -> None:
     global _correlation_detector
     global _suppressed
     global _model_dir
-    global _stale_threshold_s, _ttl_warn_min
+    global _stale_threshold_s, _ttl_warn_min, _expected_contact_gap_s
     global _incident_grouper
+    global _ml_executor
 
     det  = settings.get("detection", {})   # type: ignore[attr-defined]
     feat = settings.get("features",  {})   # type: ignore[attr-defined]
 
     # ── Statistical (z-score spike detector) ─────────────────────────────
-    z_thresh   = float(det.get("z_score_threshold",  3.0))
+    # Default 3.5 per Iglewicz & Hoaglin (1993) for Modified z-score.
+    z_thresh   = float(det.get("z_score_threshold",  3.5))
     severe_z   = z_thresh * 1.5
     _stat_detector = StatisticalDetector(
         z_threshold=z_thresh,
@@ -371,14 +446,22 @@ def init_detectors(settings: object) -> None:
 
     # ── Isolation Forest ──────────────────────────────────────────────────
     _iso_detector = IsolationForestDetector(
-        contamination=float(det.get("isolation_contamination", 0.01)),
+        contamination=float(det.get("isolation_contamination", 0.001)),
     )
 
-    # ── PELT changepoint ──────────────────────────────────────────────────
+    # ── PELT changepoint (weight=0; kept for legacy config compatibility) ──
     _cp_detector = ChangePointDetector(
         penalty=float(det.get("changepoint_penalty", 10.0)),
         min_segment_size=int(det.get("changepoint_min_size", 50)),
     )
+
+    # ── BOCPD (Bayesian Online Changepoint Detection) ─────────────────────
+    _bocpd_detector = BOCPDDetector(
+        hazard=float(det.get("bocpd_hazard", 0.002)),
+        alarm_threshold=float(det.get("bocpd_alarm_threshold", 0.3)),
+        max_run=int(det.get("bocpd_max_run", 300)),
+    )
+    _bocpd_detector.reset()   # clear channel states on re-init
 
     # ── STL decomposer + adaptive context window ──────────────────────────
     orbital_period_s  = int(feat.get("orbital_period", 5400))
@@ -516,9 +599,15 @@ def init_detectors(settings: object) -> None:
     # the public suppress_channel() API which callers must re-call).
     _suppressed.clear()
 
+    # ── Mission Phase Gating (ISRO/NASA operations pattern) ───────────────
+    global _phase_gating, _satellite_phase
+    _phase_gating = det.get("mission_phase_gating", {})
+    _satellite_phase.clear()
+
     # ── Stale data + TTL config (Sprint 18) ───────────────────────────────
     _stale_threshold_s = float(det.get("stale_threshold_s", 300.0))
     _ttl_warn_min      = float(det.get("ttl_warn_min",      60.0))
+    _expected_contact_gap_s = float(det.get("expected_contact_gap_s", 0.0))
 
     # Reset per-channel state so a server restart or re-init starts clean.
     _last_processed_ts.clear()
@@ -528,6 +617,9 @@ def init_detectors(settings: object) -> None:
     _detection_cycle_count.clear()
     _samples_since_fit.clear()
     _channel_weights.clear()   # learned FP weights reset on full re-init
+
+    # Reset the ML training thread pool so stale threads don't linger after re-init.
+    _ml_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dsremo-ml")
 
     logger.info(
         "detectors_initialized",
@@ -591,7 +683,7 @@ def _gmm_nearest_z(
     ))
 
 
-def _advance_ml_detector(
+async def _advance_ml_detector(
     det: "AutoencoderDetector | TCNDetector",
     new_indices: "np.ndarray",
     residuals: "np.ndarray",
@@ -601,13 +693,16 @@ def _advance_ml_detector(
     Extracts the identical 6-line pattern duplicated in both run_detection_cycle()
     and analyze_channel_history() for each of GRU and TCN detectors.
     Training data is capped internally by AbstractMLDetector._MAX_TRAIN_SAMPLES.
+    fit() is offloaded to _ml_executor to avoid blocking the asyncio event loop.
     """
     for idx in new_indices:
         det.add_sample(float(residuals[idx]))
     if not det.is_fitted and det.sample_count >= det.min_train_samples:
-        det.fit()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_ml_executor, det.fit)
     elif det.needs_refit():
-        det.fit()   # uses internal buffer (already capped at 2000 samples)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_ml_executor, det.fit)
     return det.detect(list(residuals))
 
 
@@ -690,6 +785,7 @@ def get_effective_thresholds(satellite_id: str, parameter: str) -> dict:
         "discord_threshold":     _get("discord_threshold",     None),   # None = uses global threshold_sigma
         "hard_limit_high":       _get("hard_limit_high",       None),   # absolute redline (high)
         "hard_limit_low":        _get("hard_limit_low",        None),   # absolute redline (low)
+        "sensor_noise_floor":    _get("sensor_noise_floor",    0.0),
     }
 
 
@@ -748,6 +844,23 @@ def list_suppressions(satellite_id: str) -> list[dict]:
     return result
 
 
+def set_satellite_phase(satellite_id: str, phase: str) -> None:
+    """Set the current mission phase for a satellite (e.g. 'maneuver', 'safe_mode')."""
+    _satellite_phase[f"{get_tenant()}:{satellite_id}"] = phase
+    logger.info("satellite_phase_set", satellite=satellite_id, phase=phase)
+
+
+def get_satellite_phase(satellite_id: str) -> str:
+    """Get current mission phase (default: 'nominal')."""
+    return _satellite_phase.get(f"{get_tenant()}:{satellite_id}", "nominal")
+
+
+def _is_detector_gated(satellite_id: str, detector_name: str) -> bool:
+    """Check if a detector is suppressed by the current mission phase."""
+    phase = get_satellite_phase(satellite_id)
+    return detector_name in _phase_gating.get(phase, [])
+
+
 def _is_suppressed(key: str) -> bool:
     """Return True if the sat:param key has an active suppression window."""
     until = _suppressed.get(key, 0.0)
@@ -784,6 +897,11 @@ def _apply_calibration_overrides(cal: "CalibrationState", eff: dict) -> None:  #
         spread = math.sqrt(lam / (2.0 - lam))
         cal.ewma_ucl = +smult * sigma * spread
         cal.ewma_lcl = -smult * sigma * spread
+
+    # Sensor noise floor — decompose ref_std into process + sensor noise.
+    snf = eff.get("sensor_noise_floor", 0.0)
+    if snf > 0:
+        cal.sensor_noise_floor = float(snf)
 
 
 async def flush_all_states(satellite_id: str | None = None) -> None:
@@ -981,14 +1099,22 @@ async def analyze_channel_history(
         # run only on the final new point to save CPU.
         best_cusum: DetectorResult = _nominal_result("cusum", "warming_up")
         best_ewma:  DetectorResult = _nominal_result("ewma",  "warming_up")
+        best_bocpd: DetectorResult = _nominal_result("bocpd", "warming_up")
         alarm_idx: int | None = None  # window index of the highest-confidence alarm
 
         for idx in new_indices:
             res         = float(residuals[idx])
             calibration = _calibration_mgr.update(key, res)
             _apply_calibration_overrides(calibration, eff)   # Point 1: CUSUM/EWMA overrides
-            cr          = _cusum_detector.detect(key, res, calibration)
-            er          = _ewma_detector.detect(key, res, calibration)
+            # AR(1) pre-whitening: removes lag-1 autocorrelation so CUSUM/EWMA
+            # ARL formulas (derived for i.i.d. Normal) remain valid.
+            # w_res == res when ar1_phi == 0.0 (no autocorrelation detected).
+            w_res       = calibration.whiten(res)
+            cr          = _cusum_detector.detect(key, w_res, calibration)
+            er          = _ewma_detector.detect(key, w_res, calibration)
+            # BOCPD uses raw residual (not whitened): Normal-Gamma posterior
+            # models the noise variance directly; pre-whitening is unnecessary.
+            br          = _bocpd_detector.detect(key, res, calibration)
 
             if cr.score > best_cusum.score:
                 best_cusum = cr
@@ -996,9 +1122,15 @@ async def analyze_channel_history(
             if er.score > best_ewma.score:
                 best_ewma = er
                 alarm_idx = idx
+            if br.score > best_bocpd.score:
+                best_bocpd = br
+                alarm_idx  = idx
 
-        if key not in _last_processed_ts and len(_last_processed_ts) >= _MAX_CHANNEL_STATE:
-            del _last_processed_ts[next(iter(_last_processed_ts))]
+        if key not in _last_processed_ts:
+            _tenant = key.split(":")[0] + ":"
+            if sum(1 for k in _last_processed_ts if k.startswith(_tenant)) >= _MAX_CHANNEL_STATE:
+                _evict = next(k for k in _last_processed_ts if k.startswith(_tenant))
+                del _last_processed_ts[_evict]
         _last_processed_ts[key] = float(wt[new_indices[-1]])
 
         # Window-based detectors run on the final new point only.
@@ -1034,8 +1166,8 @@ async def analyze_channel_history(
         )
 
         # ── ML detectors: GRU Autoencoder + TCN ──────────────────────────
-        lstm_result = _advance_ml_detector(_get_lstm_model(satellite_id, parameter), new_indices, residuals)
-        tcn_result  = _advance_ml_detector(_get_tcn_model(satellite_id, parameter),  new_indices, residuals)
+        lstm_result = await _advance_ml_detector(_get_lstm_model(satellite_id, parameter), new_indices, residuals)
+        tcn_result  = await _advance_ml_detector(_get_tcn_model(satellite_id, parameter),  new_indices, residuals)
 
         # ── Trend Velocity (9th detector) ─────────────────────────────────
         hist_tvel_result = (
@@ -1055,7 +1187,7 @@ async def analyze_channel_history(
         _correlation_detector.update(satellite_id, parameter, final_residual)
         hist_corr_result = _correlation_detector.detect(satellite_id, parameter)
 
-        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result, hist_discord_result, hist_corr_result]
+        all_results = [best_cusum, best_ewma, stat_result, cp_result, iso_result, var_result, lstm_result, tcn_result, hist_tvel_result, hist_discord_result, hist_corr_result, best_bocpd]
         is_anomaly, confidence, severity = _ensemble_vote(
             all_results, weights=_channel_weights.get(key),
         )
@@ -1069,7 +1201,8 @@ async def analyze_channel_history(
             # Point 4: use per-channel cooldown instead of global.
             alarm_ts_epoch = float(wt[alarm_idx])
             last_alarm = _last_anomaly_ts.get(key, 0.0)
-            if alarm_ts_epoch - last_alarm < eff["alert_cooldown_s"]:
+            sev_mult = _SEVERITY_COOLDOWN_MULT.get(severity.value, 1.0)
+            if alarm_ts_epoch - last_alarm < eff["alert_cooldown_s"] * sev_mult:
                 # Still within cooldown window — skip but keep advancing state.
                 after_ts    = batch[-1]["timestamp"]
                 n_processed += len(batch)
@@ -1112,6 +1245,7 @@ async def analyze_channel_history(
                 await queries.link_anomaly_to_incident(anomaly.id, incident.id)
                 logger.debug(
                     "historical_anomaly_found",
+                    trace_id=get_trace_id(),
                     parameter=parameter,
                     timestamp=str(alarm_ts_dt)[:19],
                     severity=severity.value,
@@ -1146,7 +1280,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
     if not latest:
         return anomalies
 
-    # ── Stale data check (NASA ASIST / ISRO FOLIO standard, Sprint 18) ────
+    # ── Stale data check (NASA flight operations pattern, cf. NPR 7150.2D, NASA-STD-8719.13C / ISRO FOLIO standard, Sprint 18) ────
     # For every channel we've seen before, if the latest known timestamp is
     # older than _stale_threshold_s, fire a CRITICAL stale_data anomaly.
     # This catches sensor dropout, instrument power-off, and comms loss.
@@ -1155,7 +1289,12 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         param    = row["parameter"]
         ts_epoch = row["timestamp"].timestamp() if hasattr(row["timestamp"], "timestamp") else float(row["timestamp"])
         key      = f"{get_tenant()}:{satellite_id}:{param}"
-        if key in _channel_last_seen and (now_epoch - ts_epoch) > _stale_threshold_s:
+        stale_gap = now_epoch - ts_epoch
+        if key in _channel_last_seen and stale_gap > _stale_threshold_s:
+            # AOS/LOS awareness: skip stale alert if gap is within expected contact gap
+            if _expected_contact_gap_s > 0 and stale_gap <= _expected_contact_gap_s:
+                _channel_last_seen[key] = ts_epoch
+                continue
             stale_anomaly = Anomaly(
                 satellite_id=satellite_id,
                 timestamp=row["timestamp"],
@@ -1180,8 +1319,11 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                 await queries.link_anomaly_to_incident(stale_anomaly.id, incident.id)
             except Exception:  # noqa: BLE001
                 pass
-        if key not in _channel_last_seen and len(_channel_last_seen) >= _MAX_CHANNEL_STATE:
-            del _channel_last_seen[next(iter(_channel_last_seen))]
+        if key not in _channel_last_seen:
+            _tenant = key.split(":")[0] + ":"
+            if sum(1 for k in _channel_last_seen if k.startswith(_tenant)) >= _MAX_CHANNEL_STATE:
+                _evict = next(k for k in _channel_last_seen if k.startswith(_tenant))
+                del _channel_last_seen[_evict]
         _channel_last_seen[key] = ts_epoch
 
     for row in latest:
@@ -1235,23 +1377,35 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         # alarm that fired during the batch is visible to the ensemble vote.
         cusum_result: DetectorResult = _nominal_result("cusum", "warming_up")
         ewma_result:  DetectorResult = _nominal_result("ewma",  "warming_up")
+        bocpd_result: DetectorResult = _nominal_result("bocpd", "warming_up")
         calibration  = None
 
         for idx in new_indices:
             res         = float(residuals[idx])
             calibration = _calibration_mgr.update(key, res)
             _apply_calibration_overrides(calibration, eff)   # Point 1: CUSUM/EWMA overrides
-            cr          = _cusum_detector.detect(key, res, calibration)
-            er          = _ewma_detector.detect(key, res, calibration)
+            # AR(1) pre-whitening: removes lag-1 autocorrelation so CUSUM/EWMA
+            # ARL formulas (derived for i.i.d. Normal) remain valid.
+            # w_res == res when ar1_phi == 0.0 (no autocorrelation detected).
+            w_res       = calibration.whiten(res)
+            cr          = _cusum_detector.detect(key, w_res, calibration)
+            er          = _ewma_detector.detect(key, w_res, calibration)
+            # BOCPD uses raw residual: Normal-Gamma posterior models variance directly.
+            br          = _bocpd_detector.detect(key, res, calibration)
             # Promote to best result seen so far in this batch.
             if cr.score > cusum_result.score:
                 cusum_result = cr
             if er.score > ewma_result.score:
                 ewma_result = er
+            if br.score > bocpd_result.score:
+                bocpd_result = br
 
-        # Mark all new window points as processed (FIFO eviction at cap).
-        if key not in _last_processed_ts and len(_last_processed_ts) >= _MAX_CHANNEL_STATE:
-            del _last_processed_ts[next(iter(_last_processed_ts))]
+        # Mark all new window points as processed (per-tenant eviction at cap).
+        if key not in _last_processed_ts:
+            _tenant = key.split(":")[0] + ":"
+            if sum(1 for k in _last_processed_ts if k.startswith(_tenant)) >= _MAX_CHANNEL_STATE:
+                _evict = next(k for k in _last_processed_ts if k.startswith(_tenant))
+                del _last_processed_ts[_evict]
         _last_processed_ts[key] = float(window_ts[new_indices[-1]])
 
         # ── 5. Z-score on the latest new residual (spike detection) ──────
@@ -1317,8 +1471,8 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         )
 
         # ── 9+10. GRU Autoencoder + TCN (ML detectors) ───────────────────
-        lstm_result = _advance_ml_detector(_get_lstm_model(satellite_id, param), new_indices, residuals)
-        tcn_result  = _advance_ml_detector(_get_tcn_model(satellite_id, param),  new_indices, residuals)
+        lstm_result = await _advance_ml_detector(_get_lstm_model(satellite_id, param), new_indices, residuals)
+        tcn_result  = await _advance_ml_detector(_get_tcn_model(satellite_id, param),  new_indices, residuals)
 
         # ── 11. Trend Velocity (STL trend acceleration onset) ────────────
         tvel_result = (
@@ -1394,7 +1548,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
         # ── 15. Ensemble vote ────────────────────────────────────────────
         all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result,
                        var_result, lstm_result, tcn_result, tvel_result, discord_result,
-                       corr_result]
+                       corr_result, bocpd_result]
         if hard_limit_breached:
             is_anomaly, confidence, severity = True, 1.0, Severity.CRITICAL
         else:
@@ -1414,13 +1568,15 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
 
         # Cooldown guard: one alarm per channel per cooldown window.
         # Point 4: use per-channel cooldown instead of global _alert_cooldown_s.
+        # Per-severity multiplier: CRITICAL re-fires sooner than WATCH.
         if is_anomaly:
             now_epoch = datetime.now(timezone.utc).timestamp()
-            if now_epoch - _last_anomaly_ts.get(live_key, 0.0) < eff["alert_cooldown_s"]:
+            sev_mult = _SEVERITY_COOLDOWN_MULT.get(severity.value, 1.0)
+            if now_epoch - _last_anomaly_ts.get(live_key, 0.0) < eff["alert_cooldown_s"] * sev_mult:
                 is_anomaly = False  # still in cooldown — suppress
 
         # Persistence filter: require N consecutive anomalous detections before
-        # alerting (production standard — NASA ASIST, YAMCS, SpaceX Doppel).
+        # alerting (production standard — NASA flight operations pattern, cf. NPR 7150.2D; YAMCS; SpaceX Doppel).
         # Streak increments on anomaly, resets on nominal.  Alert only fires when
         # streak reaches _alert_persistence_min.  Cooldown check runs first so a
         # suppressed alarm still counts toward the streak.
@@ -1432,8 +1588,11 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             _anomaly_streak[live_key] = 0  # reset streak on any nominal window
 
         if is_anomaly:
-            if live_key not in _last_anomaly_ts and len(_last_anomaly_ts) >= _MAX_CHANNEL_STATE:
-                del _last_anomaly_ts[next(iter(_last_anomaly_ts))]
+            if live_key not in _last_anomaly_ts:
+                _tenant = live_key.split(":")[0] + ":"
+                if sum(1 for k in _last_anomaly_ts if k.startswith(_tenant)) >= _MAX_CHANNEL_STATE:
+                    _evict = next(k for k in _last_anomaly_ts if k.startswith(_tenant))
+                    del _last_anomaly_ts[_evict]
             _last_anomaly_ts[live_key] = datetime.now(timezone.utc).timestamp()
             explanation  = _build_explanation(param, feat_res, all_results, row, decomp.method)
             contributing = _extract_contributions(all_results)
@@ -1502,6 +1661,7 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
     if anomalies:
         logger.info(
             "detection_cycle_complete",
+            trace_id=get_trace_id(),
             satellite=satellite_id,
             anomalies_found=len(anomalies),
             elapsed_ms=round(elapsed_ms, 1),

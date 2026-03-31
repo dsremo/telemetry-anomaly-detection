@@ -1,0 +1,68 @@
+meta:
+  generated_by: scripts/benchmark_llr_weights.py
+  dataset: data.parquet
+  resample_seconds: 60
+  train_fraction: 0.7
+  n_channels: 17
+  n_train: 58333
+  n_test: 25001
+  weight_cap: 0.35
+  conservative_factor: 0.5
+benchmark_stats:
+  cusum:
+    tp: 2503
+    fp: 50083
+    tn: 355367
+    fn: 17064
+    tpr: 0.1279
+    fpr: 0.1235
+  ewma:
+    tp: 6268
+    fp: 126693
+    tn: 278757
+    fn: 13299
+    tpr: 0.3203
+    fpr: 0.3125
+  statistical:
+    tp: 1459
+    fp: 32776
+    tn: 372674
+    fn: 18108
+    tpr: 0.0746
+    fpr: 0.0808
+  changepoint:
+    tp: 19083
+    fp: 397967
+    tn: 7483
+    fn: 484
+    tpr: 0.9753
+    fpr: 0.9815
+  variance:
+    tp: 1042
+    fp: 19514
+    tn: 385936
+    fn: 18525
+    tpr: 0.0533
+    fpr: 0.0481
+  trend_velocity:
+    tp: 765
+    fp: 10823
+    tn: 394627
+    fn: 18802
+    tpr: 0.0391
+    fpr: 0.0267
+weights:
+  # Benchmarked positives rescaled by 0.9381 to keep sum=1.0 with 6 non-benchmarked detectors.
+  # LLR ratios (variance/cusum = 1.99, trend_velocity/cusum = 1.99) preserved.
+  cusum: 0.1261
+  ewma: 0.0887
+  statistical: 0.0
+  changepoint: 0.0
+  isolation_forest: 0.0473
+  variance: 0.2507
+  lstm: 0.0473
+  tcn: 0.0473
+  trend_velocity: 0.2507
+  matrix_profile: 0.0473
+  correlation_graph: 0.0473
+  bocpd: 0.0473

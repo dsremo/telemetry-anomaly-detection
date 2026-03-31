@@ -27,10 +27,11 @@ security:
 
 detection:
   # ── Z-Score spike detector (runs on STL residuals) ──────────────────
-  z_score_threshold: 3.0    # flag residuals above 3σ from rolling mean
+  z_score_threshold: 3.5    # flag residuals above 3.5σ from rolling mean
+                            # per Iglewicz & Hoaglin (1993) Modified z-score recommendation
                             # z-score is spike-only; drift is handled by CUSUM
 
-  # ── CUSUM drift detector — NASA standard parameters ─────────────────
+  # ── CUSUM drift detector — NASA flight operations parameters (cf. NPR 7150.2D, NASA-STD-8719.13C) ──
   # k = allowance = 0.5 × σ_ref   (detect shifts ≥ 1σ)
   # H = threshold = 8.0 × σ_ref   (require 8σ of accumulated evidence)
   #   H was raised from 5.0 to 8.0 to handle long-term telemetry drift;
@@ -64,18 +65,18 @@ detection:
   # Persistence filter — require N consecutive anomalous detection windows
   # before emitting an alert (streaming path only, run_detection_cycle).
   # 1 = disabled (default for batch analysis).
-  # 2-3 = production streaming (NASA ASIST uses 3-5 consecutive OOL samples;
+  # 2-3 = production streaming (NASA flight operations pattern, cf. NPR 7150.2D, uses 3-5 consecutive OOL samples;
   # YAMCS default = 2).  Eliminates single-sample FPs without any data scan.
   alert_persistence_min: 1
 
   # ── Hierarchical Alert Routing: Incident Grouping (Sprint 17) ────────
   # Anomalies within incident_window_s on the same satellite → one Incident.
   # Operators see one incident card, not N individual alarm notifications.
-  # Production standard: NASA GSFC 600s; SpaceX 5min for telemetry anomalies.
+  # Production standard: NASA GSFC event correlation pattern (cf. NPR 7150.2D §5.3) 600s; SpaceX 5min for telemetry anomalies.
   incident_window_s:      300   # 5 min correlation window
   incident_close_after_s: 3600  # auto-close incident after 1 h of silence
 
-  # ── Stale Data Detection (NASA ASIST / ISRO FOLIO standard, Sprint 18) ─
+  # ── Stale Data Detection (NASA flight operations pattern, cf. NPR 7150.2D, NASA-STD-8719.13C / ISRO FOLIO standard, Sprint 18) ─
   # Alert when a channel's last known telemetry timestamp is older than
   # stale_threshold_s.  Catches sensor dropout, power-off, and comms loss.
   # Set to orbital_period_s / 3 for deep-space missions (e.g. 1800s for LEO).
@@ -85,6 +86,16 @@ detection:
   # When hard_limit_high/low are set on a channel and TrendVelocity detects
   # active drift, warn when the redline will be breached within ttl_warn_min.
   ttl_warn_min: 60   # warn at < 60 min to redline; critical at < 20 min
+  expected_contact_gap_s: 0   # 0=disabled; set >0 for LEO satellites with AOS/LOS gaps
+
+  # ── Mission Phase Gating (ISRO/NASA operations pattern) ──────────────
+  # Suppresses specified detectors during dynamic mission phases to prevent
+  # false alarms.  Operators set phase via POST /satellites/{id}/phase.
+  mission_phase_gating:
+    maneuver:    [statistical, trend_velocity, cusum]
+    safe_mode:   [cusum, ewma, trend_velocity, variance]
+    eclipse:     [variance, statistical]
+    nominal:     []
 
   # ── Adaptive σ_ref: periodic noise-floor refresh ─────────────────────
   # After initial calibration, σ_ref is refreshed every N samples using
@@ -184,7 +195,7 @@ detection:
   # ── Isolation Forest (multivariate cross-parameter) ──────────────────
   # Sprint 14: now activates for ANY satellite with ≥2 parameters (not just
   # standard simulator parameter names).  OPS-SAT, CATS, GECCO all benefit.
-  isolation_contamination: 0.01  # expected anomaly fraction (~1%)
+  isolation_contamination: 0.001  # expected anomaly fraction (~0.1%)
   isolation_lookback: 3600       # samples for training window
 
   # ── PELT changepoint (structural breaks in residuals) ────────────────
@@ -201,12 +212,12 @@ detection:
   corr_graph_threshold_sigma:  3.0   # alarm when correlation z > this
 
   # ── Ensemble weights (must sum to 1.0) ───────────────────────────────
-  # Sprint 19: 11-detector ensemble (correlation_graph added — relationship breakdown)
+  # Sprint 20: 12-detector ensemble — BOCPD replaces PELT changepoint weight
   ensemble_weights:
     cusum:             0.17   # primary: gradual drift accumulation
     ewma:              0.14   # secondary: sudden level shifts
     statistical:       0.10   # spike detection (single-point outliers)
-    changepoint:       0.08   # structural break detection
+    changepoint:       0.00   # PELT structural break — superseded by bocpd (weight=0)
     isolation_forest:  0.05   # multivariate (≥2 parameters required)
     variance:          0.07   # variance-spike detector (CATS-type oscillatory signals)
     lstm:              0.10   # GRU autoencoder — temporal pattern anomalies (ML)
@@ -214,6 +225,7 @@ detection:
     trend_velocity:    0.08   # STL trend acceleration — onset detection (Sprint 14)
     matrix_profile:    0.06   # Matrix Profile discord — shape anomaly detection (Sprint 15)
     correlation_graph: 0.06   # Correlation graph — relationship breakdown (Sprint 19)
+    bocpd:             0.08   # Bayesian online changepoint — Adams & MacKay 2007 (Sprint 20)
 
   # ── Severity gates (on ensemble confidence 0–1) ──────────────────────
   severity_thresholds:

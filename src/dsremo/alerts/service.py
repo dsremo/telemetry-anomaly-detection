@@ -32,6 +32,34 @@ from dsremo.core.models import Anomaly, Severity
 
 logger = structlog.get_logger()
 
+# ---------------------------------------------------------------------------
+# Multilingual severity labels (ISRO operations requirement).
+# ---------------------------------------------------------------------------
+
+_SEVERITY_LABELS: dict[str, dict[str, str]] = {
+    "en": {"critical": "CRITICAL", "warning": "WARNING", "watch": "WATCH", "nominal": "NOMINAL"},
+    "hi": {"critical": "गंभीर", "warning": "चेतावनी", "watch": "निगरानी", "nominal": "सामान्य"},
+}
+
+# Default locale for alert messages.
+_alert_locale: str = "en"
+
+
+def set_alert_locale(locale: str) -> None:
+    """Set the locale for alert messages (e.g. 'en', 'hi')."""
+    global _alert_locale
+    _alert_locale = locale
+
+
+def get_severity_label(severity_value: str) -> str:
+    """Return localized severity label."""
+    labels = _SEVERITY_LABELS.get(_alert_locale, _SEVERITY_LABELS["en"])
+    return labels.get(severity_value, severity_value.upper())
+
+
+_dead_letters: list[dict] = []
+_MAX_DEAD_LETTERS: int = 1000
+
 
 # ---------------------------------------------------------------------------
 # AlertRouter — strategy ABC
@@ -48,8 +76,13 @@ class AlertRouter(ABC):
 class WebhookRouter(AlertRouter):
     """POST JSON payload to a webhook URL with optional HMAC-SHA256 signature.
 
-    Retries once on 429 (respects Retry-After header).
+    Retries up to 3 times on 429/502/503 with exponential backoff (capped at 30s).
+    Respects Retry-After header for 429 responses.
     """
+
+    _MAX_RETRIES: int = 3
+    _RETRIABLE_STATUSES: frozenset[int] = frozenset({429, 502, 503})
+    _MAX_BACKOFF: float = 30.0
 
     def __init__(self, url: str, secret: str = "") -> None:
         self._url = url
@@ -78,20 +111,49 @@ class WebhookRouter(AlertRouter):
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(self._url, content=body, headers=headers)
-                if resp.status_code == 429:
-                    wait = float(resp.headers.get("Retry-After", 2))
-                    await asyncio.sleep(wait)
+                for attempt in range(self._MAX_RETRIES + 1):
                     resp = await client.post(self._url, content=body, headers=headers)
-                if resp.status_code >= 400:
-                    logger.warning(
-                        "webhook_failed",
+
+                    if resp.status_code < 400:
+                        return True
+
+                    if resp.status_code not in self._RETRIABLE_STATUSES:
+                        logger.warning(
+                            "webhook_failed",
+                            tenant_id=tenant_id,
+                            status=resp.status_code,
+                            url=self._url,
+                        )
+                        return False
+
+                    if attempt >= self._MAX_RETRIES:
+                        break
+
+                    # Compute backoff: Retry-After for 429, exponential for 502/503
+                    if resp.status_code == 429:
+                        wait = float(resp.headers.get("Retry-After", 2 ** attempt))
+                    else:
+                        wait = min(2 ** attempt, self._MAX_BACKOFF)
+
+                    logger.info(
+                        "webhook_retry",
                         tenant_id=tenant_id,
+                        attempt=attempt + 1,
                         status=resp.status_code,
+                        wait_s=wait,
                         url=self._url,
                     )
-                    return False
-            return True
+                    await asyncio.sleep(wait)
+
+                # All retries exhausted
+                logger.warning(
+                    "webhook_failed",
+                    tenant_id=tenant_id,
+                    status=resp.status_code,
+                    url=self._url,
+                    retries_exhausted=True,
+                )
+                return False
         except (httpx.TransportError, httpx.HTTPError) as exc:
             logger.error("webhook_error", tenant_id=tenant_id, error=str(exc))
             return False
@@ -133,7 +195,7 @@ class EmailRouter(AlertRouter):
 
     async def send(self, anomaly: Anomaly, tenant_id: str) -> bool:
         subject = (
-            f"[Dsremo {anomaly.severity.value.upper()}] "
+            f"[Dsremo {get_severity_label(anomaly.severity.value)}] "
             f"{anomaly.satellite_id} — {anomaly.parameter}"
         )
         body = (
@@ -282,6 +344,7 @@ class AlertService:
 
         # Build and dispatch routers concurrently
         routers = _build_routers(config)
+        any_succeeded = False
         if routers:
             results = await asyncio.gather(
                 *[r.send(anomaly, tenant_id) for r in routers],
@@ -294,6 +357,28 @@ class AlertService:
                         router=type(routers[i]).__name__,
                         error=str(res),
                     )
+                elif res is True:
+                    any_succeeded = True
+
+        # Dead-letter queue: capture alerts where all routers failed
+        if routers and not any_succeeded:
+            if len(_dead_letters) < _MAX_DEAD_LETTERS:
+                _dead_letters.append({
+                    "tenant_id": tenant_id,
+                    "satellite_id": anomaly.satellite_id,
+                    "parameter": anomaly.parameter,
+                    "severity": anomaly.severity.value,
+                    "timestamp": anomaly.timestamp.isoformat(),
+                    "explanation": anomaly.explanation,
+                    "failed_at": time.time(),
+                })
+                logger.warning(
+                    "alert_dead_lettered",
+                    tenant_id=tenant_id,
+                    satellite_id=anomaly.satellite_id,
+                    parameter=anomaly.parameter,
+                    queue_size=len(_dead_letters),
+                )
 
         # Update dedup + escalation state
         cls._dedup[key] = now
@@ -371,3 +456,19 @@ class AlertService:
         key = f"{tenant_id}::{satellite_id}::{parameter}"
         cls._dedup.pop(key, None)
         cls._escalation.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter queue accessors
+# ---------------------------------------------------------------------------
+
+def get_dead_letters() -> list[dict]:
+    """Return dead-letter queue entries."""
+    return list(_dead_letters)
+
+
+def clear_dead_letters() -> int:
+    """Clear dead-letter queue. Returns count cleared."""
+    n = len(_dead_letters)
+    _dead_letters.clear()
+    return n

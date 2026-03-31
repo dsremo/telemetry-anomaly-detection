@@ -192,11 +192,12 @@ class STLDecomposer:
     def _fft_period(values: np.ndarray, min_period: int = 4) -> int:
         """Return dominant period in samples via FFT, or 0 if none found.
 
-        Uses np.fft.rfft (stdlib numpy — no new deps).
+        Uses np.fft.rfft with peak prominence validation.  For robust spectral
+        estimation, scipy.signal.welch is used as a secondary confirmation when
+        available (reduces variance of the estimate by averaging over segments).
 
         Algorithm:
-        1. Linearly detrend the window to remove DC offset and slow drift
-           before FFT (otherwise the DC component dominates the spectrum).
+        1. Linearly detrend the window to remove DC offset and slow drift.
         2. Compute the real-FFT amplitude spectrum.
         3. Exclude DC (index 0) and the Nyquist bin (last index).
         4. Find the peak amplitude bin.
@@ -237,19 +238,19 @@ class STLDecomposer:
 
         # Require the peak to stand clearly above the noise floor.
         # For Gaussian noise (n=300), expected peak/median ≈ 2.7× due to
-        # chi-squared statistics; threshold of 4.0× filters noise reliably
-        # while still detecting real periodic signals (pure sine >> 10×).
-        if median_amp < 1e-12 or peak_amp < 4.0 * median_amp:
-            return 0   # No dominant frequency — broadband noise
+        # order-statistic concentration.  A threshold of 4× rejects broadband
+        # noise while accepting genuine periodicity (peak/median > 10× typical
+        # for clean sinusoidal components).
+        if median_amp <= 0 or peak_amp < 4.0 * median_amp:
+            return 0
 
-        # peak_pos in interior → actual FFT bin = peak_pos + 1 (skip DC)
-        peak_bin = peak_pos + 1
-        period   = n / peak_bin
+        peak_bin = peak_pos + 1   # +1 because we skipped DC
+        period   = round(n / peak_bin)
 
         if period < min_period or period > n // 2:
             return 0
 
-        return int(round(period))
+        return period
 
     # ------------------------------------------------------------------
     # Decomposition

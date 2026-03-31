@@ -167,9 +167,11 @@ class IncidentGrouper:
         self,
         window_s:     float = 300.0,
         close_after_s: float = 3600.0,
+        causal_max_delay_s: float = 600.0,  # max propagation delay in causal graph
     ) -> None:
         self.window_s      = window_s
         self.close_after_s = close_after_s
+        self.causal_max_delay_s = causal_max_delay_s
         # satellite_id → _OpenIncident
         self._open: dict[str, _OpenIncident] = {}
 
@@ -189,7 +191,17 @@ class IncidentGrouper:
 
         if open_inc is not None:
             delta = (ts - open_inc.last_ts).total_seconds()
-            if 0 <= delta <= self.window_s:
+            # Use extended causal window for cross-subsystem anomalies
+            # (anomalies from different parameters on the same satellite).
+            # Causal graph propagation delays can exceed the base window_s;
+            # e.g. a battery fault may take minutes to manifest in ADCS telemetry.
+            is_cross_param = anomaly.parameter not in open_inc.channels
+            effective_window = (
+                max(self.window_s, self.causal_max_delay_s)
+                if is_cross_param
+                else self.window_s
+            )
+            if 0 <= delta <= effective_window:
                 open_inc.absorb(anomaly)
                 return open_inc.to_incident()
             # Gap too large — close the old one and open a new one.

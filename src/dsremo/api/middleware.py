@@ -6,8 +6,10 @@ Defense in depth: even if one layer fails, others catch threats.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
+from typing import ClassVar
 
 import structlog
 from fastapi import Request, Response
@@ -15,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse
 
 from dsremo.core.security import RateLimiter
-from dsremo.core.tenant import set_tenant
+from dsremo.core.tenant import get_trace_id, new_trace_id, set_tenant
 
 logger = structlog.get_logger()
 
@@ -147,6 +149,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if _is_websocket(request.scope):
             return await call_next(request)
+        trace_id = new_trace_id()
         start = time.monotonic()
         response = await call_next(request)
         latency_ms = (time.monotonic() - start) * 1000
@@ -154,6 +157,7 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
         api_key = request.headers.get("X-API-Key", "")
         logger.info(
             "api_request",
+            trace_id=trace_id,
             method=request.method,
             path=request.url.path,
             status=response.status_code,
@@ -162,3 +166,24 @@ class AuditLogMiddleware(BaseHTTPMiddleware):
             client=request.client.host if request.client else "unknown",
         )
         return response
+
+
+class BackpressureMiddleware(BaseHTTPMiddleware):
+    """Reject POST /telemetry and /connectors requests when pipeline is overloaded."""
+
+    _MAX_CONCURRENT: ClassVar[int] = 50
+    _sem: ClassVar[asyncio.Semaphore] = asyncio.Semaphore(50)
+    _GATED: ClassVar[tuple[str, ...]] = ("/api/v1/telemetry", "/api/v1/connectors")
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if request.method == "POST" and any(path.startswith(p) for p in self._GATED):
+            if self._sem.locked():
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Detection pipeline at capacity. Retry later."},
+                    headers={"Retry-After": "5"},
+                )
+            async with self._sem:
+                return await call_next(request)
+        return await call_next(request)

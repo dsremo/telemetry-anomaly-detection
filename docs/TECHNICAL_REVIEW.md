@@ -39,12 +39,12 @@ Satellite operators receive hundreds to thousands of telemetry channels per seco
 - Cannot correlate anomalies across channels to identify root causes
 - Requires domain experts to set thresholds for every channel manually
 
-Dsremo replaces manual threshold tuning with a self-calibrating 11-detector ensemble that learns each channel's normal behavior and flags genuine deviations.
+Dsremo replaces manual threshold tuning with a self-calibrating 12-detector ensemble that learns each channel's normal behavior and flags genuine deviations.
 
 ### What It Does (User-Facing)
 
 1. **Ingest** — Upload CSV telemetry or connect live data sources (YAMCS, InfluxDB, SatNOGS, ESA)
-2. **Detect** — 11 detectors run per channel: statistical + ML methods, STL decomposition removes orbital seasonality first
+2. **Detect** — 12 detectors run per channel: statistical + ML methods, STL decomposition removes orbital seasonality first
 3. **Explain** — Every anomaly comes with a plain-English explanation: "Gradual drift accumulation on battery_voltage (CUSUM+EWMA, z=4.2)"
 4. **Alert** — Webhook or email notifications with dedup and cooldown to prevent alert fatigue
 5. **Investigate** — Dashboard with real-time WebSocket updates, anomaly timeline, and operator feedback
@@ -67,7 +67,7 @@ Dsremo replaces manual threshold tuning with a self-calibrating 11-detector ense
    ┌──────▼──────┐ ┌─────▼──────┐  ┌───────▼──────┐
    │  Ingest     │ │  Detection  │  │  Alert       │
    │  Layer      │ │  Pipeline   │  │  Service     │
-   │             │ │  (11 det.)  │  │              │
+   │             │ │  (12 det.)  │  │              │
    │  CSV        │ │             │  │  Webhook     │
    │  YAMCS      │ │  STL Decomp │  │  Email       │
    │  InfluxDB   │ │  CUSUM/EWMA │  │  Dedup       │
@@ -133,7 +133,7 @@ Each channel maintains a `CalibrationState` with:
 
 This means **zero manual threshold configuration** is required for new channels.
 
-### Step 3: The 11-Detector Ensemble
+### Step 3: The 12-Detector Ensemble
 
 Each detector receives the STL residuals (or raw values for multivariate detectors) and returns a `DetectorResult`:
 
@@ -160,15 +160,16 @@ class DetectorResult:
 | 9 | **Trend Velocity** | STL trend acceleration | Onset detection — early drift warning |
 | 10 | **Discord (Matrix Profile)** | Pure NumPy FFT distance | Novel subsequence patterns (never-seen-before) |
 | 11 | **Correlation Graph** | Rolling Pearson across channels | Cross-channel decoupling anomalies |
+| 12 | **BOCPD** | Bayesian Online Changepoint (Adams & MacKay 2007) | Structural regime changes with calibrated probability |
 
 ### Step 4: Ensemble Vote
 
 ```python
 WEIGHTS = {
-    "cusum": 0.19, "ewma": 0.16, "statistical": 0.12,
-    "changepoint": 0.09, "isolation_forest": 0.05, "variance": 0.08,
-    "lstm": 0.12, "tcn": 0.11, "trend_velocity": 0.08,
-    "matrix_profile": 0.06, "correlation_graph": 0.06
+    "cusum": 0.17, "ewma": 0.14, "statistical": 0.10,
+    "changepoint": 0.00, "isolation_forest": 0.05, "variance": 0.07,
+    "lstm": 0.10, "tcn": 0.09, "trend_velocity": 0.08,
+    "matrix_profile": 0.06, "correlation_graph": 0.06, "bocpd": 0.08
 }  # sum = 1.0 (verified by test)
 ```
 
@@ -188,7 +189,7 @@ Individual per-channel anomalies are grouped into `Incidents` by `IncidentGroupe
 - Incident auto-closes after 3600 seconds of silence
 - Severity = max of member anomalies; root cause derived from detector pattern
 
-This follows NASA GSFC event manager doctrine: "No single raw sensor alert reaches an operator without correlation."
+This follows the NASA GSFC event correlation pattern (cf. NPR 7150.2D §5.3): "No single raw sensor alert reaches an operator without correlation."
 
 ### Step 6: Explanation Generation
 
@@ -509,7 +510,7 @@ GRU and TCN both implement `fit()`, `detect()`, `save()`, `load()` interface. Sw
 
 ## 11. Test Coverage
 
-**993 tests, 100% passing** (as of Sprint 19, ~110 seconds, no database required).
+**1042+ tests, 100% passing** (as of Sprint 19, ~110 seconds, no database required).
 
 Test suite runs entirely in-memory using `memory_store.py` — a dict-backed stub that implements the same query interface as `queries.py`. No PostgreSQL dependency in CI.
 
@@ -597,8 +598,8 @@ For scale-out: the stateless HTTP layer scales horizontally. ML models and calib
 | Tier | Price | Satellites | Channels | Data | Retention | Detectors |
 |---|---|---|---|---|---|---|
 | **Free** | $0 | 1 | 5 | 1 MB/upload | 7 days | 6 stats only |
-| **Pro** | $99/mo | 5 | 50 | 100 MB/upload | 90 days | All 11 (+ ML) |
-| **Team** | $299/mo | 20 | 500 | 500 MB/upload | 1 year | All 11 + webhooks |
+| **Pro** | $99/mo | 5 | 50 | 100 MB/upload | 90 days | All 12 (+ ML) |
+| **Team** | $299/mo | 20 | 500 | 500 MB/upload | 1 year | All 12 + webhooks |
 | **Enterprise** | Custom | Unlimited | Unlimited | Custom | Custom | All + XTCE + SLA |
 
 ### AWS Deployment Architecture (Planned)
@@ -696,4 +697,4 @@ src/dsremo/
 
 ---
 
-*This document represents the state of the Dsremo codebase as of Sprint 19 (March 2026). 993 tests passing. No external service dependencies required for the test suite. Production deployment targets AWS with PostgreSQL + TimescaleDB.*
+*This document represents the state of the Dsremo codebase as of Sprint 19 (March 2026). 1042+ tests passing. No external service dependencies required for the test suite. Production deployment targets AWS with PostgreSQL + TimescaleDB.*

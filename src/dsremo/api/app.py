@@ -20,6 +20,7 @@ from dsremo import __version__
 from dsremo.api.middleware import (
     ApiKeyMiddleware,
     AuditLogMiddleware,
+    BackpressureMiddleware,
     PayloadLimitMiddleware,
     RateLimitMiddleware,
 )
@@ -204,6 +205,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
         PayloadLimitMiddleware,
         max_bytes=sec.get("max_payload_bytes", 1_048_576),
     )
+    app.add_middleware(BackpressureMiddleware)
 
     cors = settings.get("server", {}).get("cors_origins", ["http://localhost:8400"])
     app.add_middleware(

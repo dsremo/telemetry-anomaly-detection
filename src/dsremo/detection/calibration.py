@@ -93,10 +93,39 @@ class CalibrationState:
     # ── Per-channel empirical z-threshold ────────────────────────────────────
     # 99th percentile of |residual|/σ_ref from the calibration window.
     # Stored as the auto-calibrated lower bound for z-threshold overrides.
-    # None until calibration completes.  Clamped to [3.0, 10.0].
+    # None until calibration completes.  Clamped to [3.5, 10.0].
     auto_z_threshold: float | None = None
 
+    # ── AR(1) autocorrelation pre-whitening ───────────────────────────────────
+    # Lag-1 Pearson correlation coefficient estimated from the calibration window.
+    # 0.0 = no significant autocorrelation (i.i.d. assumption holds).
+    # When |rho_1| > 0.2, pre-whitening is active for CUSUM and EWMA:
+    #     w_t = r_t - ar1_phi × r_{t-1}
+    # This removes the autocorrelation component so the CUSUM/EWMA ARL formulas
+    # (derived for i.i.d. Normal residuals) remain valid.  Without pre-whitening,
+    # AR(1) correlation ρ inflates the effective variance by (1+ρ)/(1-ρ), which
+    # can increase the false-positive rate by up to 10× for ρ ≈ 0.5.
+    ar1_phi: float = 0.0
+    # Previous raw residual value — used in whiten() to compute w_t.
+    # Stores the raw r_{t-1} (not the whitened value) because the AR(1) model
+    # is r_t = ar1_phi × r_{t-1} + w_t, so w_t = r_t - ar1_phi × r_{t-1}.
+    _prev_residual: float = field(default=0.0, repr=False)
+
+    # Sensor noise floor (optional per-channel override).
+    # When set, ref_std is decomposed: σ²_total = σ²_process + σ²_sensor.
+    # σ_process = √(ref_std² - sensor_noise_floor²) when ref_std > sensor_noise_floor.
+    # Detectors should use σ_process for threshold derivation, not raw ref_std.
+    sensor_noise_floor: float = 0.0
+
     # ── derived-parameter helpers ───────────────────────────────────────
+
+    @property
+    def process_std(self) -> float:
+        """Process noise standard deviation, excluding known sensor noise floor."""
+        if self.sensor_noise_floor > 0 and self.ref_std > self.sensor_noise_floor:
+            import math
+            return math.sqrt(self.ref_std ** 2 - self.sensor_noise_floor ** 2)
+        return self.ref_std
 
     @property
     def is_calibrated(self) -> bool:
@@ -106,15 +135,44 @@ class CalibrationState:
     def is_warming(self) -> bool:
         return self.state in ("warming_up", "recalibrating")
 
+    def whiten(self, residual: float) -> float:
+        """Apply AR(1) pre-whitening to one residual and advance the lag buffer.
+
+        Returns w_t = residual - ar1_phi × r_{t-1}.
+        When ar1_phi = 0.0 (no autocorrelation detected), returns residual
+        unchanged — zero overhead on the common path.
+
+        Must be called once per residual in strict chronological order.
+        Called in detector.py immediately after calibration_mgr.update(),
+        before passing the residual to CUSUM and EWMA.
+        """
+        w = residual - self.ar1_phi * self._prev_residual
+        self._prev_residual = residual  # store raw r_t for next call
+        return w
+
     def _update_derived(self, sigma: float) -> None:
-        """Recompute CUSUM and EWMA thresholds from a new σ_ref."""
+        """Recompute CUSUM and EWMA thresholds from a new σ_ref.
+
+        When AR(1) pre-whitening is active (ar1_phi ≠ 0), CUSUM and EWMA see
+        whitened innovations w_t = r_t - φ·r_{t-1}, whose variance is:
+
+            Var(w_t) = σ²_raw × (1 − φ²)   →   σ_innov = σ_raw × √(1 − φ²)
+
+        Thresholds must scale with σ_innov (the actual noise seen by the
+        detectors), NOT σ_raw.  Using σ_raw when φ ≈ 0.95 makes thresholds
+        ~3× too large — CUSUM/EWMA never fire.  ref_std stays at σ_raw so
+        VarianceDetector (which compares rolling_std of raw residuals to
+        ref_std) and regime-shift detection remain unaffected.
+        """
         sigma = max(sigma, 1e-6)        # guard against near-zero variance
         self.ref_std  = sigma
-        self.cusum_k  = CUSUM_K_FACTOR * sigma
-        self.cusum_h  = CUSUM_H_FACTOR * sigma
+        # Innovation std for CUSUM/EWMA: reduced by √(1-φ²) when |φ| > 0.
+        sigma_innov = sigma * math.sqrt(max(1.0 - self.ar1_phi ** 2, 0.01))
+        self.cusum_k  = CUSUM_K_FACTOR  * sigma_innov
+        self.cusum_h  = CUSUM_H_FACTOR  * sigma_innov
         spread        = _ewma_spread
-        self.ewma_ucl = +EWMA_SIGMA_FACTOR * sigma * spread
-        self.ewma_lcl = -EWMA_SIGMA_FACTOR * sigma * spread
+        self.ewma_ucl = +EWMA_SIGMA_FACTOR * sigma_innov * spread
+        self.ewma_lcl = -EWMA_SIGMA_FACTOR * sigma_innov * spread
 
     def to_dict(self) -> dict:
         return {
@@ -152,7 +210,14 @@ def _try_fit_gmm(state: "CalibrationState", arr: "np.ndarray") -> None:
         gmm2.fit(data)
         bic2 = gmm2.bic(data)
 
-        if (bic1 - bic2) > 10.0:
+        # Threshold scales with n: 3 extra parameters × ln(n) is the BIC penalty
+        # for the 3 additional parameters in GMM-2 (2 means, 2 variances, 1 mixing
+        # proportion) over GMM-1 (1 mean, 1 variance).  A fixed threshold of 10
+        # becomes increasingly liberal at large n where BIC penalises more.
+        # Requiring ΔBIC > 3·ln(n) ensures the log-likelihood gain substantially
+        # exceeds the BIC complexity penalty before we accept bimodality.
+        bic_threshold = 3.0 * math.log(max(len(arr), 2))
+        if (bic1 - bic2) > bic_threshold:
             means = gmm2.means_.flatten().tolist()
             stds  = [float(np.sqrt(c[0, 0])) for c in gmm2.covariances_]
             if all(s > 1e-9 for s in stds):
@@ -252,6 +317,23 @@ class CalibrationManager:
         if len(state._buffer) >= CALIBRATION_WINDOW:
             arr = np.asarray(state._buffer, dtype=np.float64)
             state.ref_mean = float(np.mean(arr))
+
+            # ── AR(1) autocorrelation detection ───────────────────────────
+            # MUST run BEFORE _update_derived() so that σ_innov = σ × √(1-φ²)
+            # can be used when computing cusum_k / cusum_h / ewma_ucl / ewma_lcl.
+            # Compute lag-1 Pearson correlation from the calibration window.
+            # If |rho_1| > 0.2 (practical significance threshold), activate
+            # per-sample pre-whitening for CUSUM and EWMA.  A threshold of 0.2
+            # is used because smaller correlations inflate CUSUM ARL by < 5%,
+            # which is within acceptable tolerance.  np.corrcoef is O(n) and
+            # runs once at calibration — no impact on the real-time hot path.
+            state.ar1_phi = 0.0
+            state._prev_residual = 0.0
+            if len(arr) >= 4:
+                rho1 = float(np.corrcoef(arr[:-1], arr[1:])[0, 1])
+                if np.isfinite(rho1) and abs(rho1) > 0.2:
+                    state.ar1_phi = rho1
+
             state._update_derived(float(np.std(arr, ddof=1)))
 
             # ── GMM-2 bimodal fit (resets on recalibration) ───────────────
@@ -264,8 +346,18 @@ class CalibrationManager:
             state.auto_z_threshold = None
             if AUTO_Z_THRESHOLD_ENABLED and state.ref_std > 1e-9:
                 z_scores = np.abs(arr - state.ref_mean) / state.ref_std
-                raw_pct = float(np.percentile(z_scores, 99))
-                state.auto_z_threshold = float(np.clip(raw_pct, 3.0, 10.0))
+                # Trim the top 5% of z-scores before computing the 99th percentile.
+                # Raw 99th percentile is contaminated when the calibration window
+                # contains anomalies: a single z=50 spike raises the threshold so
+                # high that subsequent real anomalies are silently suppressed.
+                # Trimming the top 5% removes those extreme outliers, giving a
+                # threshold that reflects the channel's true noise distribution.
+                n_trim = max(1, int(len(z_scores) * 0.05))
+                z_trimmed = np.sort(z_scores)[:-n_trim]
+                raw_pct = float(np.percentile(z_trimmed, 99)) if len(z_trimmed) > 0 else 3.5
+                # Clamp lower bound raised to 3.5 (consistent with Modified z-score
+                # threshold of 3.5 per Iglewicz & Hoaglin 1993).
+                state.auto_z_threshold = float(np.clip(raw_pct, 3.5, 10.0))
 
             state._buffer.clear()
             state.state = "calibrated"
@@ -314,6 +406,9 @@ class CalibrationManager:
                 state._sigma_update_counter = 0
                 state.sample_count += 1
                 self._recal_streak[key] = 0
+                # Reset AR(1) state — will be recomputed from new calibration window.
+                state.ar1_phi = 0.0
+                state._prev_residual = 0.0
         else:
             # Normal — reset streak counter.
             self._recal_streak[key] = 0

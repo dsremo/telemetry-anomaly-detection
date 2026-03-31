@@ -6,7 +6,7 @@ Non-negotiable rules. Read before touching any detector, feature engine, or conf
 
 ## Pipeline
 
-- **Order**: Raw → STL Decompose → Residuals → CUSUM/EWMA/PELT/IsoForest → Ensemble → Alert
+- **Order**: Raw → STL Decompose → Residuals → CUSUM/EWMA/PELT/BOCPD/IsoForest → Ensemble → Alert
 - **Detectors run on STL residuals only. Never on raw telemetry values.**
 - STL removes the predictable orbital sinusoid. Anomalies live in the residual.
 - Until enough data for STL (< 2× orbital period): fallback to rolling z-score on raw values.
@@ -32,6 +32,7 @@ Non-negotiable rules. Read before touching any detector, feature engine, or conf
 | Z-score on residuals | Spikes, sudden outliers | Slow drift (memoryless) |
 | PELT changepoint | Abrupt structural breaks in mean/variance | Gradual trends |
 | Isolation Forest | Cross-parameter multivariate anomalies | Univariate drift |
+| BOCPD (Bayesian Online Changepoint) | Structural regime changes with calibrated probability (Adams & MacKay 2007) | Gradual drift without regime shift |
 
 - **Run all applicable detectors in parallel. No single detector is sufficient.**
 - Z-score alone = memoryless. It will miss degradation because the rolling mean follows the drift.
