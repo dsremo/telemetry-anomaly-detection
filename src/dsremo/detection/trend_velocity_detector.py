@@ -141,10 +141,21 @@ class TrendVelocityDetector:
         ref_std = max(float(calibration.ref_std), self.min_calibrated_std)
 
         # ── Velocity estimation ───────────────────────────────────────────────
-        # Use the last (window+1) trend values so np.gradient has enough
-        # context for central-difference at interior points.
-        segment   = trend[-(self.window + 1):]
-        velocity  = np.gradient(segment.astype(np.float64))
+        # P3-H fix: Use Savitzky-Golay derivative instead of np.gradient for
+        # better accuracy on curved trends.  np.gradient uses central differences
+        # with O(h) error at boundaries; SG derivative estimation has O(h²) error
+        # and handles polynomial trends correctly.
+        segment = trend[-(self.window + 1):].astype(np.float64)
+        try:
+            from scipy.signal import savgol_filter  # noqa: PLC0415
+            # Window must be odd and <= len(segment)
+            sg_win = min(len(segment), 7)
+            if sg_win % 2 == 0:
+                sg_win -= 1
+            sg_win = max(sg_win, 3)
+            velocity = savgol_filter(segment, window_length=sg_win, polyorder=2, deriv=1)
+        except ImportError:
+            velocity = np.gradient(segment)
 
         # Evaluate the most recent `recent_points` velocity samples.
         recent_vel      = velocity[-self.recent_points:]

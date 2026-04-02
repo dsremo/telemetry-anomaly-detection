@@ -219,6 +219,44 @@ class FeatureEngine:
         """Return the set of parameters that have been seen so far."""
         return set(self._windows.keys())
 
+    def detect_rate_change(self, parameter: str) -> dict:
+        """Detect if the sampling rate has changed for a parameter.
+
+        P2-I fix: Multi-rate telemetry handling.  Spacecraft telemetry is NOT
+        uniform rate (housekeeping 1 Hz, payload 10 Hz, ADCS 100 Hz).  Rate
+        changes from mode transitions or compression corrupt STL period
+        detection and rolling statistics.
+
+        Returns:
+            {"rate_changed": bool, "median_interval_s": float,
+             "current_interval_s": float, "ratio": float}
+        """
+        win = self._windows.get(parameter)
+        if not win or win.size < 10:
+            return {"rate_changed": False, "median_interval_s": 0.0,
+                    "current_interval_s": 0.0, "ratio": 1.0}
+
+        ts = win.timestamps
+        diffs = np.diff(ts[-min(win.size, 50):])
+        valid = diffs[diffs > 0]
+        if len(valid) < 5:
+            return {"rate_changed": False, "median_interval_s": 0.0,
+                    "current_interval_s": 0.0, "ratio": 1.0}
+
+        median_dt = float(np.median(valid))
+        current_dt = float(valid[-1]) if len(valid) > 0 else median_dt
+
+        ratio = current_dt / max(median_dt, 1e-6)
+        # Rate change if current interval differs by >3x from median
+        rate_changed = ratio > 3.0 or ratio < 0.33
+
+        return {
+            "rate_changed": rate_changed,
+            "median_interval_s": round(median_dt, 3),
+            "current_interval_s": round(current_dt, 3),
+            "ratio": round(ratio, 3),
+        }
+
     def reset(self, parameter: str | None = None) -> None:
         """Clear feature windows. If parameter given, clear only that one."""
         if parameter:

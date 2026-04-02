@@ -111,8 +111,22 @@ def _discord_score_last(T: np.ndarray, m: int) -> float:
     return float(np.min(valid)) if len(valid) > 0 else 0.0
 
 
+# P3-K: Check for stumpy availability at import time.
+_STUMPY_AVAILABLE = False
+try:
+    import stumpy  # noqa: F401
+    _STUMPY_AVAILABLE = True
+except ImportError:
+    pass
+
+
 class DiscordDetector:
-    """Matrix Profile discord detector — stateless, mirrors VarianceDetector API.
+    """Matrix Profile discord detector.
+
+    P3-K fix: When stumpy is available, uses stumpy.stump() for the initial
+    matrix profile computation (O(n²) but MASS-optimized), providing
+    numerically exact results.  Falls back to the FFT cross-correlation
+    method (O(n log n)) when stumpy is not installed.
 
     Detects when the most recent m-sample window of STL residuals is unusual
     compared to all other m-sample windows in the recent history.
@@ -127,6 +141,7 @@ class DiscordDetector:
         window:             int   = 300,   # look-back window (residual count)
         threshold_sigma:    float = 3.0,   # alarm: score > mean + k × std
         min_window_factor:  int   = 4,     # need window >= factor × m samples
+        use_stumpy:         bool  = True,  # P3-K: use stumpy when available
     ) -> None:
         """
         Args:
@@ -142,6 +157,7 @@ class DiscordDetector:
         self.window            = max(window, min_window_factor * m + 1)
         self.threshold_sigma   = threshold_sigma
         self.min_window_factor = min_window_factor
+        self.use_stumpy        = use_stumpy and _STUMPY_AVAILABLE
 
     # ── Detection ──────────────────────────────────────────────────────────
 
@@ -202,7 +218,15 @@ class DiscordDetector:
             )
 
         # ── Discord score for the last subsequence ────────────────────────
-        discord_score = _discord_score_last(w, self.m)
+        # P3-K: Use stumpy.stump when available for numerically exact results.
+        if self.use_stumpy:
+            try:
+                mp = stumpy.stump(w, self.m)  # type: ignore[name-not-defined]
+                discord_score = float(mp[-1, 0])  # nearest-neighbor distance for last subsequence
+            except Exception:
+                discord_score = _discord_score_last(w, self.m)
+        else:
+            discord_score = _discord_score_last(w, self.m)
 
         # ── Reference distribution: all discord scores in the window ──────
         # Compute scores for every position (sampled at step=m//2 for speed)

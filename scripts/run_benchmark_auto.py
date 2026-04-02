@@ -1,13 +1,16 @@
 """Fully automated benchmark runner — zero manual input.
 
 Scans ALL tenants/satellites in the DB, auto-extracts ground truth from:
-  - CATS:       parquet y-column (200 GT windows, auto-detected)
-  - SKAB:       downloads labels from GitHub raw (anomaly column)
-  - OPSSAT:     OPS-SAT-AD ground truth fetched from ESA Zenodo record
-  - GECCO:      GECCO 2018 competition labels from GitHub
-  - SatNOGS:    no GT — reports raw detection stats
-  - ESA-Mission1: no GT — reports raw detection stats
-  - NAB:        detection stats from DB
+  - CATS:         parquet y-column (200 GT windows, auto-detected)
+  - SKAB:         downloads labels from GitHub raw (anomaly column)
+  - OPSSAT:       OPS-SAT-AD ground truth fetched from ESA Zenodo record
+  - GECCO:        GECCO 2018 competition labels from GitHub
+  - ESA-Mission1: local Resources/ESA-Mission1/labels.csv (200 events, 58 channels)
+  - SatNOGS:      no GT — reports raw detection stats
+
+NOTE on proxy GT: when external GT cannot be fetched, the scorer falls back
+to deriving GT by clustering the detector's own outputs. These runs are
+labelled "[PROXY]" in the output and MUST NOT be used for external reporting.
 
 Run:
     python3 scripts/run_benchmark_auto.py
@@ -39,7 +42,12 @@ DB_CONFIG = dict(
     database="sentinel", user="sentinel", password="sentinel_dev_only",
 )
 
-PARQUET_PATH = _ROOT / "Resources" / "data.parquet"
+PARQUET_PATH    = _ROOT / "Resources" / "data.parquet"
+ESA_LABELS_PATH = _ROOT / "Resources" / "ESA-Mission1" / "labels.csv"
+
+# ESA-Mission1 scoring params (hourly data, events span hours to weeks)
+_ESA_GAP_S    = 7_200    # 2 h — cluster detections within same event
+_ESA_WINDOW_S = 86_400   # 24 h — detection must land within ±24 h of GT window
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -57,6 +65,7 @@ class BenchmarkEntry:
     gap_s: float = 3600.0
     window_s: float = 1800.0
     note: str = ""
+    proxy_gt: bool = False   # True = GT derived from own detections (not for reporting)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,6 +104,31 @@ def extract_cats_gt() -> list[tuple[datetime, datetime]]:
     except Exception as e:
         print(f"  [CATS]    parquet read failed: {e}")
         return []
+
+
+def extract_esa_mission1_gt() -> dict[str, list[tuple[datetime, datetime]]]:
+    """Load ESA-Mission1 GT from local labels.csv (per-channel windows).
+
+    Returns a dict mapping channel name → list of (start, end) anomaly windows.
+    The labels.csv has 200 event IDs across 58 channels (3589 rows total).
+    Timestamps are ISO-8601 UTC from the ESA archive (years 2000–2013).
+    """
+    if not ESA_LABELS_PATH.exists():
+        print(f"  [ESA-M1]  labels.csv not found at {ESA_LABELS_PATH}")
+        return {}
+    import csv as _csv
+    gt_by_channel: dict[str, list[tuple[datetime, datetime]]] = {}
+    with open(ESA_LABELS_PATH) as f:
+        for row in _csv.DictReader(f):
+            ch = row["Channel"]
+            s  = datetime.fromisoformat(row["StartTime"].replace("Z", "+00:00"))
+            e  = datetime.fromisoformat(row["EndTime"].replace("Z", "+00:00"))
+            gt_by_channel.setdefault(ch, []).append((s, e))
+    total_events = len({row["ID"] for row in _csv.DictReader(open(ESA_LABELS_PATH))})
+    total_rows   = sum(len(v) for v in gt_by_channel.values())
+    print(f"  [ESA-M1]  local labels.csv → {total_events} events, "
+          f"{len(gt_by_channel)} channels, {total_rows} (channel, window) pairs")
+    return gt_by_channel
 
 
 def fetch_skab_gt_from_github(valve: int = 2) -> list[tuple[datetime, datetime]]:
@@ -381,21 +415,24 @@ def print_result(entry: BenchmarkEntry, detectors: dict, severity: dict) -> None
 def print_summary_table(entries: list[BenchmarkEntry]) -> None:
     print(f"\n\n{'#'*72}")
     print("  FULL BENCHMARK SUMMARY — ALL DATASETS")
+    print(f"  * = PROXY GT (self-referential — NOT for external reporting)")
     print(f"{'#'*72}")
     header = f"{'Dataset':<28} {'Domain':<22} {'Detections':>11} {'GT':>5} {'P':>7} {'R':>7} {'F1':>7}"
     print(header)
     print("-" * 72)
     for e in entries:
-        r = e.result
+        r     = e.result
+        proxy = "*" if e.proxy_gt else " "
+        label = e.satellite_id + proxy
         if r is not None:
             row = (
-                f"{e.satellite_id:<28} {e.domain:<22} "
+                f"{label:<29} {e.domain:<22} "
                 f"{len(e.detected):>11,} {r.event_count:>5} "
                 f"{fmt_pct(r.precision):>7} {fmt_pct(r.recall):>7} {fmt_pct(r.f1):>7}"
             )
         else:
             row = (
-                f"{e.satellite_id:<28} {e.domain:<22} "
+                f"{label:<29} {e.domain:<22} "
                 f"{len(e.detected):>11,} {'N/A':>5} "
                 f"{'—':>7} {'—':>7} {'—':>7}"
             )
@@ -444,8 +481,10 @@ async def run(quick: bool = False, filter_tenant: str | None = None) -> None:
     skab_gt       : list[tuple[datetime, datetime]] = []
     gecco_gt      : list[tuple[datetime, datetime]] = []
     opssat_gt     : list[tuple[datetime, datetime]] = []
+    esa_m1_gt     : dict[str, list[tuple[datetime, datetime]]] = {}
 
-    cats_gt = extract_cats_gt()
+    cats_gt  = extract_cats_gt()
+    esa_m1_gt = extract_esa_mission1_gt()   # always local — no network needed
 
     if not quick:
         skab_gt   = fetch_skab_gt_from_github(valve=2)
@@ -483,41 +522,56 @@ async def run(quick: bool = False, filter_tenant: str | None = None) -> None:
             # Pick GT
             gt_windows: list[tuple[datetime, datetime]] = []
             gt_source = "none"
+            is_proxy  = False
 
             if "CATS" in sat:
                 gt_windows = cats_gt
                 gt_source  = f"parquet y-column ({len(cats_gt)} windows)"
+                # NOTE: CATS detection currently capped at 1M rows → misses all 200 GT windows
+                # (GT starts at row ~1M+91min). Re-detect with full 5M rows to get honest scores.
 
             elif "SKAB" in sat:
                 if skab_gt:
                     gt_windows = skab_gt
                     gt_source  = f"GitHub raw valve2 ({len(skab_gt)} windows)"
                 else:
-                    # Fallback: use detection timestamps clustered as proxy GT
+                    is_proxy   = True
                     gt_windows = derive_gt_from_detections(detected, gap_s=gap_s)
-                    gt_source  = f"auto-clustered from detections ({len(gt_windows)} windows, proxy)"
+                    gt_source  = f"[PROXY] auto-clustered from detections ({len(gt_windows)} windows)"
 
             elif "OPSSAT" in sat:
                 if opssat_gt:
                     gt_windows = opssat_gt
                     gt_source  = f"Zenodo events.csv ({len(opssat_gt)} windows)"
                 else:
-                    # Use 17-window GT reconstructed from paper (hardcoded only as last resort)
-                    # — we auto-derive from detections if download failed
+                    is_proxy   = True
                     gt_windows = derive_gt_from_detections(detected, gap_s=300)
-                    gt_source  = f"auto-clustered detections ({len(gt_windows)} proxy windows)"
+                    gt_source  = f"[PROXY] auto-clustered detections ({len(gt_windows)} windows)"
 
             elif "GECCO" in sat:
                 if gecco_gt:
                     gt_windows = gecco_gt
                     gt_source  = f"GitHub labels ({len(gecco_gt)} windows)"
                 else:
+                    is_proxy   = True
                     gt_windows = derive_gt_from_detections(detected, gap_s=3600)
-                    gt_source  = f"auto-clustered detections ({len(gt_windows)} proxy windows)"
+                    gt_source  = f"[PROXY] auto-clustered detections ({len(gt_windows)} windows)"
 
-            # SatNOGS / ESA: no labeled GT → proxy only
-            elif "SATNOGS" in sat or "ESA" in sat:
-                gt_windows = []  # no score, stats only
+            elif "ESA-MISSION1" in sat:
+                if esa_m1_gt:
+                    # Flatten all per-channel windows into a single list for summary scoring.
+                    # Per-channel scoring happens in Phase 3b below.
+                    gt_windows = sorted(
+                        {w for wins in esa_m1_gt.values() for w in wins}
+                    )
+                    gt_source  = (f"local labels.csv ({len(gt_windows)} unique windows, "
+                                  f"{len(esa_m1_gt)} channels)")
+                else:
+                    gt_windows = []
+                    gt_source  = "labels.csv missing — detection stats only"
+
+            elif "SATNOGS" in sat:
+                gt_windows = []
                 gt_source  = "no public GT available"
 
             entry = BenchmarkEntry(
@@ -531,6 +585,7 @@ async def run(quick: bool = False, filter_tenant: str | None = None) -> None:
                 gt_windows=gt_windows,
                 gap_s=gap_s,
                 window_s=window_s,
+                proxy_gt=is_proxy,
             )
             entries.append(entry)
 
@@ -541,7 +596,63 @@ async def run(quick: bool = False, filter_tenant: str | None = None) -> None:
         print(SEP2)
 
         for entry in entries:
-            if entry.gt_windows:
+            if not entry.gt_windows:
+                continue
+
+            if "ESA-MISSION1" in entry.satellite_id and esa_m1_gt:
+                # Per-channel scoring: aggregate TP/FP/FN across all 58 channels
+                # using per-channel detections and per-channel GT windows.
+                det_by_ch: dict[str, list[datetime]] = {}
+                for dt in entry.detected:
+                    # anomalies table stores parameter; fetch_anomalies returns all timestamps.
+                    # We need per-channel detections — re-query here.
+                    pass  # populated below via separate query (see note)
+
+                # Re-query per-channel detections from DB for ESA-M1
+                conn2 = await asyncpg.connect(**DB_CONFIG)
+                await conn2.execute(
+                    "SELECT set_config('app.tenant_id',$1,false)", entry.tenant
+                )
+                ch_rows = await conn2.fetch(
+                    "SELECT parameter, timestamp FROM anomalies "
+                    "WHERE satellite_id=$1 ORDER BY timestamp",
+                    entry.satellite_id,
+                )
+                await conn2.close()
+
+                for r in ch_rows:
+                    ch = r["parameter"]
+                    dt = r["timestamp"]
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    det_by_ch.setdefault(ch, []).append(dt)
+
+                total_tp = total_fp = total_fn = 0
+                for ch, ch_gt in esa_m1_gt.items():
+                    ch_det = det_by_ch.get(ch, [])
+                    r = score(ch_det, ch_gt,
+                              window_s=_ESA_WINDOW_S, gap_s=_ESA_GAP_S)
+                    total_tp += r.tp
+                    total_fp += r.fp
+                    total_fn += r.fn
+
+                agg_p  = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+                agg_r  = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+                agg_f1 = 2*agg_p*agg_r / (agg_p+agg_r) if (agg_p+agg_r) > 0 else 0.0
+
+                # Wrap in a ScoringResult-compatible object for unified display
+                from dsremo.eval.scoring import ScoringResult
+                entry.result = ScoringResult(
+                    event_count=sum(len(v) for v in esa_m1_gt.values()),
+                    detected_count=len(entry.detected),
+                    tp=total_tp, fp=total_fp, fn=total_fn,
+                    precision=agg_p, recall=agg_r, f1=agg_f1,
+                )
+                entry.note = (
+                    f"Per-channel scoring: {len(esa_m1_gt)} channels × local labels.csv. "
+                    f"gap={_ESA_GAP_S//3600}h, window={_ESA_WINDOW_S//3600}h."
+                )
+            else:
                 entry.result = score(
                     entry.detected,
                     entry.gt_windows,

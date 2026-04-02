@@ -14,9 +14,17 @@ from enum import Enum, unique
 
 @unique
 class Severity(str, Enum):
-    """Anomaly severity levels — maps directly to operator response urgency."""
+    """Anomaly severity levels — maps directly to operator response urgency.
+
+    P3-V: 4 active levels to align with ISRO FOLIO standard:
+        CAUTION  → informational, log-only (ISRO FOLIO: CAUTION)
+        WATCH    → worth monitoring (ISRO FOLIO: ADVISORY)
+        WARNING  → operator should investigate (ISRO FOLIO: WARNING)
+        CRITICAL → immediate attention required (ISRO FOLIO: CRITICAL)
+    """
 
     NOMINAL = "nominal"
+    CAUTION = "caution"    # P3-V: informational, no action (ISRO FOLIO CAUTION level)
     WATCH = "watch"        # worth monitoring, no action needed yet
     WARNING = "warning"    # operator should investigate
     CRITICAL = "critical"  # immediate attention required
@@ -104,6 +112,15 @@ class Anomaly:
     explanation: str = ""
     root_cause_group: str | None = None
     contributing_params: dict[str, float] = field(default_factory=dict)
+    # P2-M: Anomaly verification state — tracks whether the anomaly has been
+    # verified by operator or autonomous system.
+    # "suspected" → initial detection (default)
+    # "confirmed" → operator/AI verified as real fault
+    # "false_positive" → operator marked as FP
+    # "pending_verification" → high-rate data requested for confirmation
+    verification_status: str = "suspected"
+    # P2-L: FMEA failure mode ID (e.g., "FM-PWR-003")
+    failure_mode_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

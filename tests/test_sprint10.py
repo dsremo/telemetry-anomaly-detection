@@ -43,10 +43,10 @@ def _sine(n: int, period: int, amplitude: float = 1.0, noise: float = 0.0) -> np
 class TestMaxFftSamples:
     """STLDecomposer stores and exposes max_fft_samples."""
 
-    def test_default_max_fft_samples_is_600(self):
+    def test_default_max_fft_samples_is_5000(self):
         from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer()
-        assert d._max_fft_samples == 600
+        assert d._max_fft_samples == 5000  # raised from 600 for orbital period detection (P0-D fix)
 
     def test_custom_max_fft_samples_stored(self):
         from dsremo.detection.stl_decomposer import STLDecomposer
@@ -290,11 +290,11 @@ class TestInitDetectorsWindow:
         det_mod.init_detectors(cfg)
         assert det_mod._stl_window_factor == 3
 
-    def test_default_max_window_is_10000(self):
+    def test_default_max_window_is_200000(self):
         import dsremo.detection.detector as det_mod
         cfg = {"detection": {}, "features": {}}
         det_mod.init_detectors(cfg)
-        assert det_mod._stl_max_window == 10000
+        assert det_mod._stl_max_window == 200000  # raised for GEO orbit support (P2-B fix)
 
     def test_config_sets_window_factor(self):
         import dsremo.detection.detector as det_mod
@@ -311,11 +311,11 @@ class TestInitDetectorsWindow:
         det_mod.init_detectors(self._make_cfg(stl_max_fft_samples=3000))
         assert det_mod._stl_decomposer._max_fft_samples == 3000
 
-    def test_default_max_fft_samples_on_decomposer_is_600(self):
-        """Without config, decomposer defaults to 600 (Sprint 9 compat)."""
+    def test_default_max_fft_samples_on_decomposer_is_5000(self):
+        """Without config, decomposer defaults to 5000 (P0-D fix for orbital periods)."""
         import dsremo.detection.detector as det_mod
         det_mod.init_detectors({"detection": {}, "features": {}})
-        assert det_mod._stl_decomposer._max_fft_samples == 600
+        assert det_mod._stl_decomposer._max_fft_samples == 5000
 
     def test_stl_decomposer_recreated_on_reinit(self):
         import dsremo.detection.detector as det_mod
@@ -516,8 +516,8 @@ class TestConfigKeys:
     def test_stl_max_window_present(self, cfg):
         assert "stl_max_window" in cfg
 
-    def test_stl_max_window_is_10000(self, cfg):
-        assert int(cfg["stl_max_window"]) == 10000
+    def test_stl_max_window_is_200000(self, cfg):
+        assert int(cfg["stl_max_window"]) == 200000  # raised for GEO orbit support (P2-B fix)
 
 
 # ---------------------------------------------------------------------------
@@ -586,10 +586,10 @@ class TestRegressionSprint9:
         assert p >= 0
 
     def test_stl_decomposer_default_backwards_compatible(self):
-        """STLDecomposer() with no args still works identically to Sprint 9."""
+        """STLDecomposer() with no args still works with current defaults."""
         from dsremo.detection.stl_decomposer import STLDecomposer
         d = STLDecomposer()  # no max_fft_samples
-        assert d._max_fft_samples == 600
+        assert d._max_fft_samples == 5000  # raised from 600 for P0-D orbital period fix
         assert d._orbital_period_s == 5400
 
     def test_detect_data_frequency_unchanged(self):

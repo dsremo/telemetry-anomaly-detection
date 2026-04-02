@@ -149,6 +149,7 @@ class BOCPDDetector:
             raise ValueError(f"alpha_0 must be > 1 for finite prior variance; got {alpha_0}")
 
         self.hazard          = hazard
+        self._default_hazard = hazard   # fallback when no per-channel override
         self.mu_0            = mu_0
         self.kappa_0         = kappa_0
         self.alpha_0         = alpha_0
@@ -157,6 +158,17 @@ class BOCPDDetector:
         self.alarm_threshold = alarm_threshold
 
         self._states: dict[str, _BOCPDState] = {}
+        # Per-channel hazard overrides (P2-H fix).  Channels with known
+        # changepoint frequency can have their hazard tuned independently.
+        self._channel_hazard: dict[str, float] = {}
+
+    def set_channel_hazard(self, key: str, hazard: float) -> None:
+        """Set a per-channel hazard rate (P2-H: empirical Bayes approach)."""
+        self._channel_hazard[key] = hazard
+
+    def _get_hazard(self, key: str) -> float:
+        """Return per-channel hazard if set, else the global default."""
+        return self._channel_hazard.get(key, self._default_hazard)
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -188,7 +200,7 @@ class BOCPDDetector:
             beta_0 = (calibration.ref_std ** 2) * (self.alpha_0 - 1.0)
             beta_0 = max(beta_0, 1e-12)
 
-        cp_prob = self._run_step(state, float(residual), beta_0)
+        cp_prob = self._run_step(state, float(residual), beta_0, key=key)
 
         if not calibration.is_calibrated:
             # During warm-up still update state (keep model learning) but
@@ -236,7 +248,7 @@ class BOCPDDetector:
 
     # ── Core BOCPD update ─────────────────────────────────────────────────
 
-    def _run_step(self, state: _BOCPDState, x: float, beta_0: float) -> float:
+    def _run_step(self, state: _BOCPDState, x: float, beta_0: float, key: str = "") -> float:
         """One BOCPD update step.  Returns P(changepoint at this step).
 
         Derivation (Adams & MacKay 2007, eq. 1):
@@ -258,7 +270,7 @@ class BOCPDDetector:
         Complexity: O(max_run) — fully vectorised.
         Numerical: all operations in log-space to handle large run lengths.
         """
-        H   = self.hazard
+        H   = self._get_hazard(key) if key else self.hazard
         n   = len(state.obs)          # observations already in buffer
         r_n = min(n, self.max_run)    # maximum run length to evaluate
 

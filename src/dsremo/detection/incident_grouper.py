@@ -54,6 +54,23 @@ _SEV_ORDER = {
     Severity.CRITICAL: 3,
 }
 
+# ── Subsystem dependency graph (P2-F / P3-Z: causal inference) ──────────────
+# Directed edges: if subsystem A fails, subsystem B may be affected.
+# Used to determine if two anomalies on different subsystems are likely
+# causally related (extends the grouping window) vs. coincidental.
+SUBSYSTEM_DEPENDENCIES: dict[str, list[str]] = {
+    "eps":     ["adcs", "thermal", "comms"],   # power failure cascades everywhere
+    "adcs":    ["comms", "thermal"],             # attitude loss → solar array mispoint, thermal
+    "thermal": [],                                # thermal rarely causes other subsystems
+    "comms":   [],                                # comms loss is usually isolated
+}
+
+# Auto-escalation thresholds (P2-N: alert fatigue reduction).
+# If an incident persists with severity WATCH for > _ESCALATION_WATCH_S seconds,
+# escalate to WARNING.  If WARNING persists > _ESCALATION_WARNING_S, escalate to CRITICAL.
+_ESCALATION_WATCH_S: float = 14400.0    # 4 hours
+_ESCALATION_WARNING_S: float = 28800.0  # 8 hours
+
 
 def _max_severity(a: Severity, b: Severity) -> Severity:
     return a if _SEV_ORDER[a] >= _SEV_ORDER[b] else b
@@ -129,13 +146,23 @@ class _OpenIncident:
 
     def to_incident(self, *, closed: bool = False) -> Incident:
         now = datetime.now(timezone.utc)
+
+        # P2-N: Auto-escalation — if incident has been open long enough,
+        # bump severity to reflect sustained anomalous condition.
+        severity = self.severity
+        duration_s = (now - self.opened_at).total_seconds()
+        if severity == Severity.WATCH and duration_s > _ESCALATION_WATCH_S:
+            severity = Severity.WARNING
+        elif severity == Severity.WARNING and duration_s > _ESCALATION_WARNING_S:
+            severity = Severity.CRITICAL
+
         return Incident(
             id=self.incident_id,
             satellite_id=self.satellite_id,
             first_anomaly_at=self.opened_at,
             last_anomaly_at=self.last_ts,
             closed_at=now if closed else None,
-            severity=self.severity,
+            severity=severity,
             confidence=round(self.confidence, 4),
             channels=tuple(self.channels),
             root_cause_summary=self.root_cause or "",

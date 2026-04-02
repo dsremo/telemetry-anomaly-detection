@@ -31,6 +31,16 @@ Feed-forward decoder is deliberate:
 
 Parameter count: ~5 K — well under the "no GPU needed" regime.
 
+Design rationale for hidden=32, bottleneck=8 (P3-I documentation):
+  - hidden=32: minimum GRU capacity to capture temporal patterns across 30-step
+    sequences.  Smaller hidden (8/16) under-represents multi-scale dynamics in
+    thermal/power telemetry.  Larger (64+) overfits on 60-200 training samples.
+  - bottleneck=8: forces the encoder to compress 32-d hidden into 8-d latent,
+    creating an information bottleneck that makes reconstruction error meaningful.
+    Ratio 32:8 = 4:1 matches the VAE literature for small sequence models.
+  - Both are configurable via dsremo.yaml (lstm_hidden_size, lstm_bottleneck_size)
+    and per-channel overrides.  No fixed architecture — operators can tune.
+
 Lazy import
 -----------
 `import torch` is deferred to fit() and detect() so this module can be

@@ -56,6 +56,7 @@ class DecompositionResult:
     method: str             # "stl" | "savgol_trend" | "cold_start"
     period_samples: int     # effective orbital period in samples (0 if N/A)
     n_samples: int          # length of the input window
+    transition_mask: np.ndarray | None = None  # True at eclipse/transition points
 
 
 @dataclass
@@ -79,14 +80,16 @@ class STLDecomposer:
         self,
         orbital_period_s: int = 5400,
         recompute_every: int = _RECOMPUTE_EVERY,
-        max_fft_samples: int = 600,
+        max_fft_samples: int = 5000,
     ):
         self._orbital_period_s  = orbital_period_s
         self._recompute_every   = recompute_every
         # Maximum number of samples passed to _fft_period() for period detection.
-        # Default 600 (fast, handles periods up to 300 samples).
-        # Increase to 5000 to detect long-period signals such as 24h diurnal cycles
-        # in water quality or environmental data (1440 samples at 1-min resolution).
+        # Default 5000: with Hann windowing + 4× zero-padding, this resolves
+        # periods up to 2500 samples.  At 1 Hz that's ~42 min — enough for LEO
+        # orbital periods (90 min) when at least 2 cycles are present.
+        # For GEO (24h), increase via stl_max_fft_samples config or use the
+        # orbital_period_s fallback.
         self._max_fft_samples   = max_fft_samples
         self._cache: dict[str, _ChannelCache] = {}
 
@@ -192,20 +195,19 @@ class STLDecomposer:
     def _fft_period(values: np.ndarray, min_period: int = 4) -> int:
         """Return dominant period in samples via FFT, or 0 if none found.
 
-        Uses np.fft.rfft with peak prominence validation.  For robust spectral
-        estimation, scipy.signal.welch is used as a secondary confirmation when
-        available (reduces variance of the estimate by averaging over segments).
-
         Algorithm:
         1. Linearly detrend the window to remove DC offset and slow drift.
-        2. Compute the real-FFT amplitude spectrum.
-        3. Exclude DC (index 0) and the Nyquist bin (last index).
-        4. Find the peak amplitude bin.
-        5. Accept the peak only if its amplitude is > 2× the median of all
-           non-DC bins — this filters broadband noise that has no dominant
-           frequency (a flat spectrum has peak ≈ median).
-        6. Convert peak bin index to period: period = n / peak_bin.
-        7. Reject if period < min_period or period > n//2.
+        2. Apply Hann window to reduce spectral leakage (P3-T fix).
+        3. Zero-pad to 4× input length for finer frequency resolution,
+           enabling detection of periods up to n/2 samples (P0-D fix).
+        4. Compute the real-FFT amplitude spectrum.
+        5. Exclude DC (index 0) and the Nyquist bin (last index).
+        6. Find the peak amplitude bin.
+        7. Accept the peak only if its amplitude is > 4× the median of all
+           non-DC bins — this filters broadband noise.
+        8. Convert peak bin index to period using nfft (zero-padded length).
+        9. Reject if period < min_period or period > n//2 (need 2 full
+           cycles in the ORIGINAL data for meaningful STL decomposition).
 
         Args:
             values:     1-D signal array (oldest → newest).
@@ -226,7 +228,19 @@ class STLDecomposer:
         # Linear detrend: subtract the best-fit line to remove DC + slow drift.
         detrended = values - np.linspace(float(values[0]), float(values[-1]), n)
 
-        spectrum = np.abs(np.fft.rfft(detrended))
+        # Hann window: reduces spectral leakage from rectangular windowing.
+        # Without this, a strong signal bleeds into adjacent frequency bins,
+        # creating phantom peaks at harmonics.
+        windowed = detrended * np.hanning(n)
+
+        # Zero-pad to at least 4× input length for finer frequency resolution.
+        # Frequency resolution = sampling_rate / nfft.  With nfft = 4n,
+        # resolution improves 4× — enabling detection of periods up to n/2
+        # even with limited data.  For n=5000 at 1 Hz, this resolves orbital
+        # periods up to 2500s (enough for LEO 5400s with 2 cycles).
+        nfft = max(n * 4, 2048)
+
+        spectrum = np.abs(np.fft.rfft(windowed, n=nfft))
         # Skip DC (index 0) and Nyquist (last) — only examine interior bins.
         interior = spectrum[1:-1]
         if len(interior) == 0:
@@ -245,12 +259,70 @@ class STLDecomposer:
             return 0
 
         peak_bin = peak_pos + 1   # +1 because we skipped DC
-        period   = round(n / peak_bin)
+        # Period computed from nfft (zero-padded length), not n.
+        period   = round(nfft / peak_bin)
 
+        # Validate against ORIGINAL data length: need at least 2 full cycles
+        # in the actual data for STL decomposition, regardless of zero-padding.
         if period < min_period or period > n // 2:
             return 0
 
         return period
+
+    # ------------------------------------------------------------------
+    # Eclipse / transition detection (P1-A fix)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_transitions(
+        values: np.ndarray,
+        period_samples: int,
+        sigma_mult: float = 4.0,
+    ) -> np.ndarray:
+        """Detect sharp transitions (eclipse entry/exit) in the signal.
+
+        Returns a boolean mask: True at indices where the signal has a sharp
+        step discontinuity (derivative exceeds sigma_mult × MAD of derivatives).
+        These points should be excluded from CUSUM/EWMA accumulation to prevent
+        systematic false positives at eclipse boundaries.
+
+        Algorithm:
+        1. Compute first differences: d[i] = values[i] - values[i-1]
+        2. Compute MAD (Median Absolute Deviation) of differences
+        3. Mark indices where |d[i]| > sigma_mult × MAD as transitions
+        4. Expand mask by ±2 samples (transitions have ringing)
+
+        Args:
+            values:         Raw or residual telemetry values.
+            period_samples: Detected orbital period (used for validation).
+            sigma_mult:     How many MADs above median to flag as transition.
+
+        Returns:
+            Boolean ndarray, same length as values. True = transition point.
+        """
+        n = len(values)
+        mask = np.zeros(n, dtype=bool)
+        if n < 10:
+            return mask
+
+        diffs = np.diff(values)
+        if len(diffs) == 0:
+            return mask
+
+        mad = float(np.median(np.abs(diffs - np.median(diffs))))
+        if mad < 1e-12:
+            return mask
+
+        threshold = sigma_mult * mad
+        transition_indices = np.where(np.abs(diffs) > threshold)[0]
+
+        # Expand each transition by ±2 samples (ringing from sharp edges).
+        for idx in transition_indices:
+            lo = max(0, idx - 1)
+            hi = min(n, idx + 3)  # +3 because diff shifts by 1
+            mask[lo:hi] = True
+
+        return mask
 
     # ------------------------------------------------------------------
     # Decomposition
@@ -262,17 +334,20 @@ class STLDecomposer:
         if n < _MIN_SAMPLES:
             return self._cold_start(values)
 
+        # Detect eclipse/transition boundaries in the raw signal.
+        transition_mask = self._detect_transitions(values, period_samples)
+
         # Full STL: requires period >= 4 AND at least 2 complete cycles of data.
         if period_samples >= 4 and n >= 2 * period_samples:
-            result = self._try_stl(values, period_samples)
+            result = self._try_stl(values, period_samples, transition_mask)
             if result is not None:
                 return result
 
         # Fallback: extract trend via Savitzky-Golay, no seasonal component.
         # Residual = raw - trend.  CUSUM will then detect accelerating drift.
-        return self._savgol_trend(values)
+        return self._savgol_trend(values, transition_mask)
 
-    def _try_stl(self, values: np.ndarray, period_samples: int) -> DecompositionResult | None:
+    def _try_stl(self, values: np.ndarray, period_samples: int, transition_mask: np.ndarray | None = None) -> DecompositionResult | None:
         try:
             from statsmodels.tsa.seasonal import STL  # type: ignore
 
@@ -305,12 +380,13 @@ class STLDecomposer:
                 method="stl",
                 period_samples=period_samples,
                 n_samples=n,
+                transition_mask=transition_mask,
             )
         except Exception as exc:
             logger.debug("stl_decomp_failed", error=str(exc))
             return None
 
-    def _savgol_trend(self, values: np.ndarray) -> DecompositionResult:
+    def _savgol_trend(self, values: np.ndarray, transition_mask: np.ndarray | None = None) -> DecompositionResult:
         """Trend-only decomposition via Savitzky-Golay smoothing.
 
         Used when the data rate is too coarse for orbital STL.
@@ -337,6 +413,7 @@ class STLDecomposer:
             method="savgol_trend",
             period_samples=0,
             n_samples=n,
+            transition_mask=transition_mask,
         )
 
     @staticmethod

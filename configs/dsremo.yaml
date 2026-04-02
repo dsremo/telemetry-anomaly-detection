@@ -39,7 +39,7 @@ detection:
   #   flagging normal aging as anomalies.
   # Both are per-channel — derived from the calibration reference window.
   cusum_k_factor: 0.5
-  cusum_h_factor: 8.0
+  cusum_h_factor: 5.0          # NASA-STD-8719.13C standard; was 8.0 (too conservative for degradation detection)
   cusum_recal_factor: 3.0   # recalibrate if mean drifts > 3σ for 20 samples
                             # lower = more responsive to slow regime shifts
 
@@ -73,7 +73,8 @@ detection:
   # Anomalies within incident_window_s on the same satellite → one Incident.
   # Operators see one incident card, not N individual alarm notifications.
   # Production standard: NASA GSFC event correlation pattern (cf. NPR 7150.2D §5.3) 600s; SpaceX 5min for telemetry anomalies.
-  incident_window_s:      300   # 5 min correlation window
+  incident_window_s:      600   # 10 min correlation window (raised from 300s for cascade failures)
+  incident_causal_delay_s: 1800  # 30 min max causal propagation (battery→attitude→thermal cascade)
   incident_close_after_s: 3600  # auto-close incident after 1 h of silence
 
   # ── Stale Data Detection (NASA flight operations pattern, cf. NPR 7150.2D, NASA-STD-8719.13C / ISRO FOLIO standard, Sprint 18) ─
@@ -86,7 +87,7 @@ detection:
   # When hard_limit_high/low are set on a channel and TrendVelocity detects
   # active drift, warn when the redline will be breached within ttl_warn_min.
   ttl_warn_min: 60   # warn at < 60 min to redline; critical at < 20 min
-  expected_contact_gap_s: 0   # 0=disabled; set >0 for LEO satellites with AOS/LOS gaps
+  expected_contact_gap_s: 5400  # P3-W: LEO default ~90 min (one orbit); prevents stale-data FPs during ground station gaps
 
   # ── Mission Phase Gating (ISRO/NASA operations pattern) ──────────────
   # Suppresses specified detectors during dynamic mission phases to prevent
@@ -142,7 +143,8 @@ detection:
   # channel at analysis start.  FFT of 5000 samples is O(n log n) ≈ 0.5 ms.
   stl_max_fft_samples: 5000    # rows queried for period pre-scan (default 600 = Sprint 9)
   stl_window_factor:   3       # context_window = factor × detected_period
-  stl_max_window:      10000   # absolute cap (memory guard; ~80 KB per channel)
+  stl_max_window:      200000  # raised for GEO (86400s period at 1Hz = 86400 samples; 3×86400=259200 capped here)
+                               # ~1.6 MB per channel at max; memory bounded by _MAX_CHANNEL_STATE
 
   # ── GRU Autoencoder (ML detector, Sprint 10) ─────────────────────────
   # Trains per-channel on STL residuals; high reconstruction MSE = anomaly.

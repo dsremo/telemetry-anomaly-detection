@@ -33,6 +33,7 @@ class IsolationForestDetector:
         min_training_samples: int = 200,
     ):
         self.contamination = contamination
+        self._default_contamination = contamination
         self.n_estimators = n_estimators
         self.min_training_samples = min_training_samples
 
@@ -40,12 +41,42 @@ class IsolationForestDetector:
         self._is_fitted = False
         self._feature_names: list[str] = []
         self._fit_count = 0
+        # P3-J: Per-satellite contamination overrides
+        self._sat_contamination: dict[str, float] = {}
 
     @property
     def is_ready(self) -> bool:
         return self._is_fitted
 
-    def fit(self, training_data: np.ndarray, feature_names: list[str]) -> None:
+    def set_contamination(self, satellite_id: str, contamination: float) -> None:
+        """Set per-satellite contamination rate (P3-J: channel-adaptive)."""
+        self._sat_contamination[satellite_id] = max(0.0001, min(contamination, 0.5))
+
+    def estimate_contamination(self, training_data: np.ndarray) -> float:
+        """Estimate contamination from training data using IQR outlier fraction.
+
+        P3-J fix: Instead of a fixed global contamination, estimate the actual
+        anomaly fraction from the training data using the interquartile range
+        method: points beyond Q1 - 3×IQR or Q3 + 3×IQR are considered outliers.
+        """
+        if len(training_data) < 50:
+            return self._default_contamination
+        # Use per-feature IQR and count points that are outliers in ANY dimension
+        n_samples = len(training_data)
+        outlier_mask = np.zeros(n_samples, dtype=bool)
+        for col in range(training_data.shape[1]):
+            vals = training_data[:, col]
+            q1, q3 = float(np.percentile(vals, 25)), float(np.percentile(vals, 75))
+            iqr = q3 - q1
+            if iqr < 1e-12:
+                continue
+            lo, hi = q1 - 3.0 * iqr, q3 + 3.0 * iqr
+            outlier_mask |= (vals < lo) | (vals > hi)
+        fraction = float(np.sum(outlier_mask)) / n_samples
+        # Clamp to [0.001, 0.1] — never below 0.1% (too sensitive) or above 10%
+        return max(0.001, min(fraction, 0.10))
+
+    def fit(self, training_data: np.ndarray, feature_names: list[str], satellite_id: str = "") -> None:
         """Fit the model on recent normal telemetry data.
 
         training_data: shape (n_samples, n_features)
@@ -60,8 +91,13 @@ class IsolationForestDetector:
             )
             return
 
+        # P3-J: Use per-satellite contamination if set, else estimate from data.
+        effective_contamination = self._sat_contamination.get(
+            satellite_id,
+            self.estimate_contamination(training_data),
+        )
         self._model = IsolationForest(
-            contamination=self.contamination,
+            contamination=effective_contamination,
             n_estimators=self.n_estimators,
             random_state=42,
             n_jobs=1,  # single-threaded to avoid fork issues in async

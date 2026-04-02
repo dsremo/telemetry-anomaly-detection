@@ -1902,3 +1902,92 @@ async def revoke_all_dsremo_user_tokens(user_id: str) -> None:
             "UPDATE dsremo_refresh_tokens SET revoked = TRUE WHERE user_id = $1::uuid",
             user_id,
         )
+
+
+# ── Suppression persistence (P1-H) ──────────────────────────────────────────
+
+async def upsert_suppression(
+    tenant_id: str, satellite_id: str, parameter: str,
+    until_epoch: float, reason: str = "",
+) -> None:
+    """Persist a suppression window to DB (survives server restarts)."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO suppressions (tenant_id, satellite_id, parameter, until_epoch, reason)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (tenant_id, satellite_id, parameter)
+            DO UPDATE SET until_epoch = $4, reason = $5
+            """,
+            tenant_id, satellite_id, parameter, until_epoch, reason,
+        )
+
+
+async def delete_suppression(
+    tenant_id: str, satellite_id: str, parameter: str,
+) -> bool:
+    """Remove a suppression window. Returns True if one existed."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM suppressions WHERE tenant_id = $1 AND satellite_id = $2 AND parameter = $3",
+            tenant_id, satellite_id, parameter,
+        )
+        return result.split()[-1] != "0"
+
+
+async def load_active_suppressions(tenant_id: str | None = None) -> list[dict]:
+    """Load all non-expired suppressions from DB. Called at startup."""
+    import time  # noqa: PLC0415
+    pool = get_pool()
+    now = time.time()
+    async with pool.acquire() as conn:
+        if tenant_id:
+            rows = await conn.fetch(
+                "SELECT tenant_id, satellite_id, parameter, until_epoch, reason "
+                "FROM suppressions WHERE tenant_id = $1 AND until_epoch > $2",
+                tenant_id, now,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT tenant_id, satellite_id, parameter, until_epoch, reason "
+                "FROM suppressions WHERE until_epoch > $1",
+                now,
+            )
+        return [dict(r) for r in rows]
+
+
+# ── Detection audit trail (P1-D) ────────────────────────────────────────────
+
+async def insert_detection_audit(
+    satellite_id: str,
+    parameter: str,
+    timestamp: "datetime",
+    detector_scores: dict,
+    ensemble_confidence: float,
+    severity: str,
+    calibration_state: dict | None = None,
+    stl_method: str = "",
+) -> None:
+    """Store an immutable audit record of a detection decision.
+
+    Records individual detector scores, ensemble output, calibration state,
+    and STL method at the time of detection for full decision traceability.
+    """
+    import json  # noqa: PLC0415
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO detection_audit
+                (satellite_id, parameter, timestamp, detector_scores,
+                 ensemble_confidence, severity, calibration_state, stl_method)
+            VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7::jsonb, $8)
+            """,
+            satellite_id, parameter, timestamp,
+            json.dumps(detector_scores),
+            ensemble_confidence, severity,
+            json.dumps(calibration_state) if calibration_state else None,
+            stl_method,
+        )

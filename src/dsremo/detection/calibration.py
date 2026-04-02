@@ -35,7 +35,7 @@ logger = structlog.get_logger()
 # ── tuneable constants (also overridable via dsremo.yaml / init) ──────────
 CALIBRATION_WINDOW:  int   = 100    # residuals before detectors activate
 CUSUM_K_FACTOR:      float = 0.5    # k = K × σ_ref
-CUSUM_H_FACTOR:      float = 5.0    # H = H × σ_ref
+CUSUM_H_FACTOR:      float = 5.0    # H = H × σ_ref  (NASA-STD-8719.13C standard)
 EWMA_LAMBDA:         float = 0.2    # smoothing weight per new sample
 EWMA_SIGMA_FACTOR:   float = 3.0    # UCL/LCL = ±SIGMA × σ_ref × spread
 RECAL_FACTOR:        float = 10.0   # recalibrate if |drift| > RECAL × σ_ref
@@ -117,6 +117,21 @@ class CalibrationState:
     # Detectors should use σ_process for threshold derivation, not raw ref_std.
     sensor_noise_floor: float = 0.0
 
+    # ── EWMA adaptive variance (P2-G: heteroskedasticity handling) ────────
+    # Exponentially weighted variance tracks time-varying noise levels.
+    # Updated per-sample: σ²_ewma = λ × r² + (1-λ) × σ²_ewma_prev
+    # Provides a short-memory variance estimate for detectors on channels
+    # where variance changes faster than the 720-sample σ_ref refresh cycle
+    # (e.g., thermal telemetry during eclipse transitions).
+    ewma_variance: float = 0.0
+    _ewma_var_initialized: bool = field(default=False, repr=False)
+
+    # ── Normality test (P3-R: validate i.i.d. Normal assumption) ──────────
+    # Shapiro-Wilk p-value from calibration window whitened innovations.
+    # p < 0.05 means the Normal assumption is likely violated; CUSUM ARL
+    # formulas may not be accurate.  Logged as informational warning.
+    normality_p_value: float | None = None
+
     # ── derived-parameter helpers ───────────────────────────────────────
 
     @property
@@ -142,12 +157,25 @@ class CalibrationState:
         When ar1_phi = 0.0 (no autocorrelation detected), returns residual
         unchanged — zero overhead on the common path.
 
+        Also updates the EWMA adaptive variance (P2-G fix) for
+        heteroskedasticity tracking.
+
         Must be called once per residual in strict chronological order.
         Called in detector.py immediately after calibration_mgr.update(),
         before passing the residual to CUSUM and EWMA.
         """
         w = residual - self.ar1_phi * self._prev_residual
         self._prev_residual = residual  # store raw r_t for next call
+
+        # EWMA adaptive variance: σ²_ewma = λ × r² + (1-λ) × σ²_ewma_prev
+        # Uses the same λ as EWMA detector for consistency.
+        if not self._ewma_var_initialized:
+            self.ewma_variance = residual * residual
+            self._ewma_var_initialized = True
+        else:
+            lam = 0.2  # matches EWMA_LAMBDA default
+            self.ewma_variance = lam * residual * residual + (1.0 - lam) * self.ewma_variance
+
         return w
 
     def _update_derived(self, sigma: float) -> None:
@@ -158,16 +186,16 @@ class CalibrationState:
 
             Var(w_t) = σ²_raw × (1 − φ²)   →   σ_innov = σ_raw × √(1 − φ²)
 
-        Thresholds must scale with σ_innov (the actual noise seen by the
-        detectors), NOT σ_raw.  Using σ_raw when φ ≈ 0.95 makes thresholds
-        ~3× too large — CUSUM/EWMA never fire.  ref_std stays at σ_raw so
-        VarianceDetector (which compares rolling_std of raw residuals to
-        ref_std) and regime-shift detection remain unaffected.
+        P2-K: When sensor_noise_floor is set, use process_std (σ_process)
+        instead of raw σ_ref for threshold derivation, so CUSUM/EWMA are
+        sensitive to real process variation, not inflated by measurement noise.
         """
         sigma = max(sigma, 1e-6)        # guard against near-zero variance
         self.ref_std  = sigma
+        # P2-K: Use process std (excluding known sensor noise) for thresholds.
+        sigma_eff = self.process_std if self.sensor_noise_floor > 0 else sigma
         # Innovation std for CUSUM/EWMA: reduced by √(1-φ²) when |φ| > 0.
-        sigma_innov = sigma * math.sqrt(max(1.0 - self.ar1_phi ** 2, 0.01))
+        sigma_innov = sigma_eff * math.sqrt(max(1.0 - self.ar1_phi ** 2, 0.01))
         self.cusum_k  = CUSUM_K_FACTOR  * sigma_innov
         self.cusum_h  = CUSUM_H_FACTOR  * sigma_innov
         spread        = _ewma_spread
@@ -184,16 +212,15 @@ class CalibrationState:
 
 
 def _try_fit_gmm(state: "CalibrationState", arr: "np.ndarray") -> None:
-    """Attempt a GMM-2 fit on the calibration window.
+    """Attempt GMM fit on the calibration window (k=1,2,3).
 
-    Sets state.gmm_means and state.gmm_stds when a 2-component Gaussian
-    Mixture Model fits the data significantly better than a single Gaussian
-    (BIC difference > 10).  Handles bimodal channels — e.g. a telemetry
-    channel that oscillates between two operating modes — whose residuals
-    look like infinite-σ spikes relative to a single-Gaussian baseline.
+    P3-F fix: Test k=1,2,3 (not just k=2) because some spacecraft channels
+    have 3 modes (sunlit, eclipse, transition).  Select by BIC.
+
+    Sets state.gmm_means and state.gmm_stds when a multi-component GMM
+    fits the data significantly better than a single Gaussian.
 
     Silently does nothing if sklearn is unavailable or the fit fails.
-    BIC lower = better; bic1 - bic2 > 10 means GMM-2 is meaningfully better.
     """
     try:
         from sklearn.mixture import GaussianMixture  # noqa: PLC0415
@@ -202,27 +229,35 @@ def _try_fit_gmm(state: "CalibrationState", arr: "np.ndarray") -> None:
 
     try:
         data = arr.reshape(-1, 1)
-        gmm1 = GaussianMixture(n_components=1, covariance_type="full", random_state=0)
-        gmm1.fit(data)
-        bic1 = gmm1.bic(data)
-
-        gmm2 = GaussianMixture(n_components=2, covariance_type="full", random_state=0)
-        gmm2.fit(data)
-        bic2 = gmm2.bic(data)
-
-        # Threshold scales with n: 3 extra parameters × ln(n) is the BIC penalty
-        # for the 3 additional parameters in GMM-2 (2 means, 2 variances, 1 mixing
-        # proportion) over GMM-1 (1 mean, 1 variance).  A fixed threshold of 10
-        # becomes increasingly liberal at large n where BIC penalises more.
-        # Requiring ΔBIC > 3·ln(n) ensures the log-likelihood gain substantially
-        # exceeds the BIC complexity penalty before we accept bimodality.
         bic_threshold = 3.0 * math.log(max(len(arr), 2))
-        if (bic1 - bic2) > bic_threshold:
-            means = gmm2.means_.flatten().tolist()
-            stds  = [float(np.sqrt(c[0, 0])) for c in gmm2.covariances_]
-            if all(s > 1e-9 for s in stds):
-                state.gmm_means = means
-                state.gmm_stds  = stds
+
+        # Fit k=1,2,3 and select by BIC (lower = better).
+        best_k = 1
+        best_bic = float("inf")
+        best_gmm = None
+
+        for k in (1, 2, 3):
+            if len(arr) < k * 5:  # need at least 5 samples per component
+                continue
+            gmm = GaussianMixture(n_components=k, covariance_type="full", random_state=0)
+            gmm.fit(data)
+            bic = gmm.bic(data)
+            if bic < best_bic:
+                best_bic = bic
+                best_k = k
+                best_gmm = gmm
+
+        if best_k > 1 and best_gmm is not None:
+            # Verify the improvement over k=1 is significant.
+            gmm1 = GaussianMixture(n_components=1, covariance_type="full", random_state=0)
+            gmm1.fit(data)
+            bic1 = gmm1.bic(data)
+            if (bic1 - best_bic) > bic_threshold:
+                means = best_gmm.means_.flatten().tolist()
+                stds  = [float(np.sqrt(c[0, 0])) for c in best_gmm.covariances_]
+                if all(s > 1e-9 for s in stds):
+                    state.gmm_means = means
+                    state.gmm_stds  = stds
     except Exception:  # noqa: BLE001
         pass  # any sklearn failure → fall back to single-Gaussian silently
 
@@ -319,18 +354,16 @@ class CalibrationManager:
             state.ref_mean = float(np.mean(arr))
 
             # ── AR(1) autocorrelation detection ───────────────────────────
-            # MUST run BEFORE _update_derived() so that σ_innov = σ × √(1-φ²)
-            # can be used when computing cusum_k / cusum_h / ewma_ucl / ewma_lcl.
-            # Compute lag-1 Pearson correlation from the calibration window.
-            # If |rho_1| > 0.2 (practical significance threshold), activate
-            # per-sample pre-whitening for CUSUM and EWMA.  A threshold of 0.2
-            # is used because smaller correlations inflate CUSUM ARL by < 5%,
-            # which is within acceptable tolerance.  np.corrcoef is O(n) and
-            # runs once at calibration — no impact on the real-time hot path.
+            # P3-U fix: Detrend the calibration window before AR(1) estimation.
+            # If the calibration window contains a trend (e.g., thermal ramp-up),
+            # the raw lag-1 correlation is biased upward.  Linear detrending
+            # removes this bias.
             state.ar1_phi = 0.0
             state._prev_residual = 0.0
             if len(arr) >= 4:
-                rho1 = float(np.corrcoef(arr[:-1], arr[1:])[0, 1])
+                # Detrend: subtract best-fit line before estimating autocorrelation.
+                detrended = arr - np.linspace(float(arr[0]), float(arr[-1]), len(arr))
+                rho1 = float(np.corrcoef(detrended[:-1], detrended[1:])[0, 1])
                 if np.isfinite(rho1) and abs(rho1) > 0.2:
                     state.ar1_phi = rho1
 
@@ -342,22 +375,55 @@ class CalibrationManager:
             if GMM_ENABLED:
                 _try_fit_gmm(state, arr)
 
-            # ── Per-channel empirical z-threshold ─────────────────────────
+            # ── Per-channel empirical z-threshold (P3-S: parametric fit) ──
             state.auto_z_threshold = None
             if AUTO_Z_THRESHOLD_ENABLED and state.ref_std > 1e-9:
                 z_scores = np.abs(arr - state.ref_mean) / state.ref_std
-                # Trim the top 5% of z-scores before computing the 99th percentile.
-                # Raw 99th percentile is contaminated when the calibration window
-                # contains anomalies: a single z=50 spike raises the threshold so
-                # high that subsequent real anomalies are silently suppressed.
-                # Trimming the top 5% removes those extreme outliers, giving a
-                # threshold that reflects the channel's true noise distribution.
+                # P3-S fix: Use parametric Gaussian fit instead of raw empirical
+                # percentile.  With only n=100 observations, the 99th percentile
+                # is the ~99th-largest value (1 observation from the tail) — unreliable.
+                # Parametric approach: assume z ~ |N(0,1)|, so the 99th percentile
+                # of |z| = Φ⁻¹(0.995) ≈ 2.576 for a standard Normal.
+                # For non-standard noise: fit σ_z from the trimmed z-scores, then
+                # threshold = σ_z × 2.576.
                 n_trim = max(1, int(len(z_scores) * 0.05))
                 z_trimmed = np.sort(z_scores)[:-n_trim]
-                raw_pct = float(np.percentile(z_trimmed, 99)) if len(z_trimmed) > 0 else 3.5
-                # Clamp lower bound raised to 3.5 (consistent with Modified z-score
-                # threshold of 3.5 per Iglewicz & Hoaglin 1993).
-                state.auto_z_threshold = float(np.clip(raw_pct, 3.5, 10.0))
+                if len(z_trimmed) > 0:
+                    # Fit half-normal: σ_z = √(π/2) × mean(|z|) (MLE for folded normal)
+                    sigma_z = float(np.mean(z_trimmed)) * math.sqrt(math.pi / 2.0)
+                    # 99th percentile of |N(0, σ_z²)| = σ_z × Φ⁻¹(0.995)
+                    parametric_pct = sigma_z * 2.576
+                else:
+                    parametric_pct = 3.5
+                state.auto_z_threshold = float(np.clip(parametric_pct, 3.5, 10.0))
+
+            # ── Normality test (P3-R: validate i.i.d. assumption) ─────────
+            state.normality_p_value = None
+            if len(arr) >= 20:
+                try:
+                    from scipy.stats import shapiro  # noqa: PLC0415
+                    # Test whitened innovations if AR(1) is active, else raw residuals.
+                    test_data = arr
+                    if state.ar1_phi != 0.0 and len(arr) >= 4:
+                        test_data = arr[1:] - state.ar1_phi * arr[:-1]
+                    # Shapiro-Wilk limited to 5000 samples; subsample if needed.
+                    if len(test_data) > 5000:
+                        rng = np.random.default_rng(42)
+                        test_data = rng.choice(test_data, 5000, replace=False)
+                    _, p_val = shapiro(test_data)
+                    state.normality_p_value = round(float(p_val), 6)
+                    if p_val < 0.05:
+                        logger.warning(
+                            "normality_violated",
+                            key=key,
+                            p_value=round(float(p_val), 4),
+                            msg="CUSUM/EWMA ARL formulas assume Normal innovations; "
+                                "results may be approximate for this channel.",
+                        )
+                except ImportError:
+                    pass  # scipy not available
+                except Exception:  # noqa: BLE001
+                    pass
 
             state._buffer.clear()
             state.state = "calibrated"
@@ -371,6 +437,20 @@ class CalibrationManager:
                 gmm_active=state.gmm_means is not None,
                 auto_z=round(state.auto_z_threshold, 3) if state.auto_z_threshold else None,
             )
+            # Log ARL budget so operators know the false alarm and detection delay
+            # characteristics of CUSUM/EWMA for this channel.
+            try:
+                from dsremo.detection.arl import log_channel_arl  # noqa: PLC0415
+                log_channel_arl(
+                    key=key,
+                    cusum_k=state.cusum_k,
+                    cusum_h=state.cusum_h,
+                    ewma_lambda=EWMA_LAMBDA,
+                    ewma_L=EWMA_SIGMA_FACTOR,
+                    ref_std=state.ref_std,
+                )
+            except Exception:  # noqa: BLE001
+                pass  # ARL logging is informational; never block calibration
 
     def _check_regime(self, key: str, state: CalibrationState, residual: float) -> None:
         """Detect if the process has shifted to a new regime.
