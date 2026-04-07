@@ -35,6 +35,7 @@ from dsremo.api.routes_oauth import oauth_router
 from dsremo.api.routes_suppress import suppress_router
 from dsremo.api.routes_keys import keys_router
 from dsremo.api.routes_parameters import parameters_router
+from dsremo.api.routes_aria import aria_router
 from dsremo.api.routes_tenants import tenants_router
 from dsremo.api.routes_users import users_router
 from dsremo.api.websocket import ws_router
@@ -231,6 +232,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
     app.include_router(keys_router, prefix="/api/v1")
     app.include_router(parameters_router, prefix="/api/v1")
     app.include_router(ws_router, prefix="/api/v1")
+    app.include_router(aria_router, prefix="/api/v1")
 
     # --- Static files ---
     # Landing page (public marketing site) served at /
