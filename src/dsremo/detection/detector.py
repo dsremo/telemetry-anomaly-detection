@@ -1957,6 +1957,8 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
             (hl_low  is not None and value < hl_low)
         )
 
+        live_key = f"{get_tenant()}:{satellite_id}:{param}"
+
         # ── 15. Ensemble vote ────────────────────────────────────────────
         all_results = [cusum_result, ewma_result, stat_result, cp_result, iso_result,
                        var_result, lstm_result, tcn_result, tvel_result, discord_result,
@@ -1970,7 +1972,6 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
 
         # Suppression window (maintenance mode — mutes alerts, not detection).
         # Prefix with tenant_id to prevent cross-tenant cooldown bleed.
-        live_key = f"{get_tenant()}:{satellite_id}:{param}"
         if is_anomaly and _is_suppressed(live_key):
             is_anomaly = False
 
@@ -2072,7 +2073,6 @@ async def run_detection_cycle(satellite_id: str) -> list[Anomaly]:
                 # Dispatch alert (webhook / email) for WARNING and CRITICAL only.
                 # WATCH-level anomalies are informational — no pager alert.
                 from dsremo.alerts.service import AlertService
-                from dsremo.core.tenant import get_tenant
                 await AlertService.dispatch(anomaly, get_tenant())
             except Exception as exc:
                 logger.error("anomaly_store_failed", error=str(exc), parameter=param)

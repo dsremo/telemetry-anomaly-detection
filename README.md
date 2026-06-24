@@ -4,6 +4,15 @@ Real-time anomaly detection for satellite and industrial sensor telemetry. Point
 sensor readings and it surfaces the moments that matter — degradations, faults, off-nominal events —
 each with a confidence score and the detectors that fired. No labelled training data required.
 
+## Screenshots
+
+![Operations dashboard](docs/img/dashboard.png)
+*Authenticated ops console — live telemetry, anomaly monitor, sample-dataset detection.*
+
+![Landing](docs/img/landing.png)
+
+![API](docs/img/api.png)
+
 ## Why
 
 Satellite and plant operators spend hundreds of engineer-hours a month eyeballing telemetry
