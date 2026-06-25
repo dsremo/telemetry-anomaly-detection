@@ -1,24 +1,27 @@
-"""Google OAuth2 sign-in flow.
+"""Single sign-on via the dsremo identity provider (auth.dsremo.com).
 
 Flow:
-  1. GET /auth/google          → redirect to Google consent screen
-  2. GET /auth/google/callback → exchange code → issue JWT → redirect to /dashboard/
+  1. GET /auth/login          → redirect to the dsremo SSO authorize screen
+  2. GET /auth/login/callback → exchange code → issue JWT → redirect to /dashboard/
 
 Security:
   - State parameter: HMAC-SHA256(nonce, JWT_SECRET) prevents CSRF.
     The nonce is embedded in the state so the callback can verify it
     without server-side session storage.
-  - Google ID token is NOT used — we exchange the code for an access token
-    and then call the userinfo endpoint directly. Simpler, no JWT parsing needed.
+  - The provider access token is exchanged for the user identity via the
+    standard OIDC userinfo endpoint — no ID-token parsing needed.
   - New users get their own tenant (id = "t-{uuid4}") and the 'free' plan.
-  - avatar_url and display_name are refreshed on every login.
+  - avatar_url and display_name are refreshed on every login when present.
 
 Environment variables required:
-  GOOGLE_CLIENT_ID       — from Google Cloud Console
-  GOOGLE_CLIENT_SECRET   — from Google Cloud Console
-  GOOGLE_REDIRECT_URI    — must match exactly what's registered in GCP
-                           e.g. https://yourdomain.com/api/v1/auth/google/callback
-  DSREMO_JWT_SECRET    — already required for existing auth
+  DSREMO_SSO_CLIENT_ID      — registered client id at auth.dsremo.com
+  DSREMO_SSO_CLIENT_SECRET  — the client secret for that registration
+  DSREMO_SSO_REDIRECT_URI   — must exactly match the registered redirect_uri,
+                              e.g. https://yourhost/api/v1/auth/login/callback
+  DSREMO_JWT_SECRET         — already required for existing auth
+
+Optional overrides (default to auth.dsremo.com):
+  DSREMO_SSO_AUTHORIZE_URL, DSREMO_SSO_TOKEN_URL, DSREMO_SSO_USERINFO_URL
 """
 
 from __future__ import annotations
@@ -41,58 +44,59 @@ from dsremo.db import queries
 logger = structlog.get_logger()
 oauth_router = APIRouter(prefix="/auth", tags=["auth"])
 
-_GOOGLE_AUTH_URL  = "https://accounts.google.com/o/oauth2/v2/auth"
-_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-_GOOGLE_USERINFO  = "https://www.googleapis.com/oauth2/v3/userinfo"
+_SSO_BASE = os.environ.get("DSREMO_SSO_BASE_URL", "https://auth.dsremo.com").rstrip("/")
+_SSO_AUTHORIZE_URL = os.environ.get("DSREMO_SSO_AUTHORIZE_URL", f"{_SSO_BASE}/authorize")
+_SSO_TOKEN_URL     = os.environ.get("DSREMO_SSO_TOKEN_URL", f"{_SSO_BASE}/token")
+_SSO_USERINFO_URL  = os.environ.get("DSREMO_SSO_USERINFO_URL", f"{_SSO_BASE}/userinfo")
 
 _DEFAULT_ACCESS_TTL  = 900       # 15 min
 _DEFAULT_REFRESH_TTL = 604_800   # 7 days
 
 
-def _google_client_id() -> str:
-    v = os.environ.get("GOOGLE_CLIENT_ID", "")
-    if not v:
-        raise HTTPException(status_code=503, detail="Google OAuth not configured")
-    return v
+def _sso_client_id() -> str:
+    value = os.environ.get("DSREMO_SSO_CLIENT_ID", "")
+    if not value:
+        raise HTTPException(status_code=503, detail="SSO not configured")
+    return value
 
 
-def _google_client_secret() -> str:
-    v = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-    if not v:
-        raise HTTPException(status_code=503, detail="Google OAuth not configured")
-    return v
+def _sso_client_secret() -> str:
+    value = os.environ.get("DSREMO_SSO_CLIENT_SECRET", "")
+    if not value:
+        raise HTTPException(status_code=503, detail="SSO not configured")
+    return value
 
 
 def _redirect_uri() -> str:
     return os.environ.get(
-        "GOOGLE_REDIRECT_URI",
-        "http://localhost:8400/api/v1/auth/google/callback",
+        "DSREMO_SSO_REDIRECT_URI",
+        "http://localhost:8400/api/v1/auth/login/callback",
     )
 
 
 def _make_state(nonce: str, secret: str) -> str:
     """HMAC-sign the nonce so the callback can verify it without server-side storage."""
-    sig = hmac.new(secret.encode(), nonce.encode(), hashlib.sha256).hexdigest()
-    return f"{nonce}.{sig}"
+    signature = hmac.new(secret.encode(), nonce.encode(), hashlib.sha256).hexdigest()
+    return f"{nonce}.{signature}"
 
 
 def _verify_state(state: str, secret: str) -> bool:
     """Verify the HMAC-signed state parameter. Constant-time comparison."""
     try:
-        nonce, sig = state.rsplit(".", 1)
+        nonce, signature = state.rsplit(".", 1)
     except ValueError:
         return False
     expected = hmac.new(secret.encode(), nonce.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, sig)
+    return hmac.compare_digest(expected, signature)
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/google  → redirect to Google
+# GET /auth/login  → redirect to the dsremo SSO authorize screen
 # ---------------------------------------------------------------------------
 
-@oauth_router.get("/google")
-async def google_login(request: Request) -> RedirectResponse:
-    """Redirect the user's browser to Google's OAuth consent screen."""
+@oauth_router.get("/login")
+async def sso_login(request: Request) -> RedirectResponse:
+    """Redirect the user's browser to the dsremo SSO sign-in screen."""
     secret = getattr(request.app.state, "jwt_secret", "")
     if not secret:
         raise HTTPException(status_code=503, detail="Auth not configured — set DSREMO_JWT_SECRET")
@@ -101,56 +105,51 @@ async def google_login(request: Request) -> RedirectResponse:
     state = _make_state(nonce, secret)
 
     params = {
-        "client_id":     _google_client_id(),
+        "client_id":     _sso_client_id(),
         "redirect_uri":  _redirect_uri(),
         "response_type": "code",
-        "scope":         "openid email profile",
+        "scope":         "openid email",
         "state":         state,
-        "access_type":   "online",
-        "prompt":        "select_account",
     }
-    url = f"{_GOOGLE_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    url = f"{_SSO_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
     return RedirectResponse(url=url, status_code=302)
 
 
 # ---------------------------------------------------------------------------
-# GET /auth/google/callback  → exchange code → issue JWT → redirect to /dashboard/
+# GET /auth/login/callback  → exchange code → issue JWT → redirect to /dashboard/
 # ---------------------------------------------------------------------------
 
-@oauth_router.get("/google/callback")
-async def google_callback(
+@oauth_router.get("/login/callback")
+async def sso_callback(
     request: Request,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
 ) -> RedirectResponse:
-    """Handle Google's redirect back after user consents (or denies)."""
-    # 1. Handle user-denied case
+    """Handle the SSO redirect back after the user signs in (or cancels)."""
     if error:
-        logger.warning("google_oauth_denied", error=error)
+        logger.warning("sso_denied", error=error)
         return RedirectResponse(url="/?error=access_denied", status_code=302)
 
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing code or state parameter")
 
-    # 2. Verify CSRF state
     secret = getattr(request.app.state, "jwt_secret", "")
     if not secret:
         raise HTTPException(status_code=503, detail="Auth not configured")
 
     if not _verify_state(state, secret):
-        logger.warning("google_oauth_state_mismatch", state=state[:20])
+        logger.warning("sso_state_mismatch", state=state[:20])
         raise HTTPException(status_code=400, detail="Invalid state parameter — possible CSRF")
 
-    # 3. Exchange authorization code for Google access token
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             token_resp = await client.post(
-                _GOOGLE_TOKEN_URL,
+                _SSO_TOKEN_URL,
                 data={
                     "code":          code,
-                    "client_id":     _google_client_id(),
-                    "client_secret": _google_client_secret(),
+                    "client_id":     _sso_client_id(),
+                    "client_secret": _sso_client_secret(),
                     "redirect_uri":  _redirect_uri(),
                     "grant_type":    "authorization_code",
                 },
@@ -158,57 +157,53 @@ async def google_callback(
             token_resp.raise_for_status()
             token_data = token_resp.json()
 
-            # 4. Fetch Google user profile
             user_resp = await client.get(
-                _GOOGLE_USERINFO,
+                _SSO_USERINFO_URL,
                 headers={"Authorization": f"Bearer {token_data['access_token']}"},
             )
             user_resp.raise_for_status()
-            google_user = user_resp.json()
+            profile = user_resp.json()
 
     except httpx.HTTPError as exc:
-        logger.error("google_token_exchange_failed", error=str(exc))
-        raise HTTPException(status_code=502, detail="Failed to communicate with Google")
+        logger.error("sso_token_exchange_failed", error=str(exc))
+        raise HTTPException(status_code=502, detail="Failed to communicate with SSO provider")
 
-    google_id    = google_user.get("sub", "")
-    email        = google_user.get("email", "")
-    display_name = google_user.get("name", "")
-    avatar_url   = google_user.get("picture", "")
+    subject      = profile.get("sub", "")
+    email        = profile.get("email", "")
+    display_name = profile.get("name", "") or (email.split("@")[0] if email else "")
+    avatar_url   = profile.get("picture", "")
 
-    if not google_id or not email:
-        raise HTTPException(status_code=502, detail="Google did not return user identity")
+    if not subject or not email:
+        raise HTTPException(status_code=502, detail="SSO provider did not return user identity")
 
-    # 5. Find or create user
     settings    = getattr(request.app.state, "settings", {})
     access_ttl  = int(settings.get("auth", {}).get("access_token_ttl_seconds", _DEFAULT_ACCESS_TTL))
     refresh_ttl = int(settings.get("auth", {}).get("refresh_token_ttl_seconds", _DEFAULT_REFRESH_TTL))
 
-    existing    = await queries.get_user_by_google_id(google_id)
+    existing    = await queries.get_user_by_google_id(subject)
     is_new_user = False
 
     if existing:
-        user       = existing
-        tenant_id  = user["tenant_id"]
+        user      = existing
+        tenant_id = user["tenant_id"]
     else:
-        # New user — create a dedicated tenant and the user record.
-        tenant_id  = f"t-{uuid.uuid4().hex[:12]}"
+        tenant_id = f"t-{uuid.uuid4().hex[:12]}"
         await queries.create_tenant(tenant_id, name=email, plan="free")
         user = await queries.upsert_google_user(
-            google_id=google_id,
+            google_id=subject,
             email=email,
             display_name=display_name,
             avatar_url=avatar_url,
             tenant_id=tenant_id,
-            role="admin",   # first user in their own tenant is always admin
+            role="admin",
             plan="free",
         )
-        logger.info("google_signup", email=email[:3] + "***", tenant_id=tenant_id)
+        logger.info("sso_signup", email=email[:3] + "***", tenant_id=tenant_id)
         is_new_user = True
 
     if not user["active"]:
         return RedirectResponse(url="/?error=account_inactive", status_code=302)
 
-    # 6. Issue Dsremo JWT (same structure as email/password login)
     access_token = create_access_token(
         user_id=user["id"],
         tenant_id=tenant_id,
@@ -218,7 +213,6 @@ async def google_callback(
         email=email,
     )
 
-    # 7. Store refresh token
     import hashlib as _hl, secrets as _sec
     from datetime import datetime, timedelta, timezone
     from dsremo.core.tenant import set_tenant
@@ -231,10 +225,8 @@ async def google_callback(
     await queries.store_refresh_token(user["id"], token_hash, expires_at)
     await queries.update_last_login(user["id"])
 
-    logger.info("google_login_success", user_id=user["id"], tenant=tenant_id)
+    logger.info("sso_login_success", user_id=user["id"], tenant=tenant_id)
 
-    # 8. Redirect to dashboard — tokens passed as URL fragment (never hits server logs)
-    #    Dashboard JS reads fragment, stores in localStorage, clears URL.
     fragment = urllib.parse.urlencode({
         "access_token":  access_token,
         "refresh_token": refresh_token,

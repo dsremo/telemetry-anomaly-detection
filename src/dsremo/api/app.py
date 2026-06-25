@@ -74,6 +74,15 @@ async def lifespan(app: FastAPI):
         routes_keys_mod.queries = memory_store  # type: ignore[attr-defined]
         detector_mod.queries = memory_store  # type: ignore[attr-defined]
 
+        import os
+        app.state.jwt_secret = settings.get("auth", {}).get(
+            "jwt_secret", os.environ.get("DSREMO_JWT_SECRET", "")
+        )
+
+        from dsremo.db.demo_seed import seed_demo_data
+        seeded = await seed_demo_data()
+        logger.info("demo_data_seeded", **seeded)
+
     else:
         from dsremo.db.connection import close_pool, init_pool
         from dsremo.db.migrations import run_migrations
@@ -244,3 +253,7 @@ def create_app(config_path: Path | None = None, demo: bool = False) -> FastAPI:
         app.mount("/", StaticFiles(directory=str(_LANDING_DIR), html=True), name="landing")
 
     return app
+
+
+def create_demo_app() -> FastAPI:
+    return create_app(demo=True)
