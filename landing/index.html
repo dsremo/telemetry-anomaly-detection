@@ -28,14 +28,12 @@
     <div class="nav-links">
       <a href="#how-it-works">How it works</a>
       <a href="#detectors">Detectors</a>
-      <a href="#pricing">Pricing</a>
       <a href="#faq">FAQ</a>
     </div>
     <div class="nav-cta">
-      <a href="/api/v1/auth/login" class="btn-ghost">Sign in</a>
-      <a href="/api/v1/auth/login" class="btn-primary">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" fill="#34A853"/><path d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
-        Start free
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="btn-ghost">Sign in</a>
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="btn-primary">
+        Open dashboard
       </a>
     </div>
   </div>
@@ -57,13 +55,12 @@
         automatically. Zero thresholds to set.
       </p>
       <div class="hero-actions">
-        <a href="/api/v1/auth/login" class="btn-primary btn-large">
-          <svg width="20" height="20" viewBox="0 0 18 18" fill="none"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" fill="#34A853"/><path d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
-          Start free
+        <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="btn-primary btn-large">
+          Open dashboard
         </a>
         <a href="#how-it-works" class="btn-ghost btn-large">See how it works</a>
       </div>
-      <p class="hero-note">Free forever for 1 satellite · No credit card</p>
+      <p class="hero-note">Live portfolio demo on a synthetic satellite fleet &middot; <a href="https://dsremo-telemetry-sentinel.hf.space/docs" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">explore the live API</a></p>
     </div>
     <div class="hero-visual">
       <div class="hero-sat-glow"></div>
@@ -193,51 +190,45 @@
       <p>CSV upload for historical analysis. Live connectors for real-time monitoring.</p>
     </div>
     <div class="sources-grid">
-      <a href="#pricing" class="source-card">
+      <a href="#detectors" class="source-card">
         <div class="source-icon csv-icon">CSV</div>
         <h4>CSV / Excel</h4>
         <p>Upload any wide-format CSV. Auto-detects timestamp column and data frequency. Max 100 MB on Pro.</p>
-        <span class="source-badge free">Free</span>
       </a>
-      <a href="#pricing" class="source-card">
+      <a href="#detectors" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="2" y="3" width="20" height="18" rx="2" stroke="#06b6d4" stroke-width="1.5"/><path d="M8 7h8M8 12h8M8 17h5" stroke="#06b6d4" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
         <h4>Direct JSON API</h4>
         <p>POST telemetry in real time. Supports batch and single-point ingest. Webhook alerts on anomaly.</p>
-        <span class="source-badge free">Free</span>
       </a>
-      <a href="#pricing" class="source-card">
+      <a href="#detectors" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#8b5cf6" stroke-width="1.5"/><path d="M12 7v5l3 3" stroke="#8b5cf6" stroke-width="1.5" stroke-linecap="round"/></svg>
         </div>
         <h4>YAMCS</h4>
         <p>Pull telemetry directly from YAMCS mission planning systems. Paginated, auth-aware.</p>
-        <span class="source-badge pro">Pro</span>
       </a>
-      <a href="#pricing" class="source-card">
+      <a href="#detectors" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" stroke="#f59e0b" stroke-width="1.5"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" stroke="#f59e0b" stroke-width="1.5"/></svg>
         </div>
         <h4>InfluxDB</h4>
         <p>Query via Flux language. Pulls data for any time range and field set.</p>
-        <span class="source-badge pro">Pro</span>
       </a>
-      <a href="#pricing" class="source-card">
+      <a href="#detectors" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2L2 7l10 5 10-5-10-5z" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5" stroke="#10b981" stroke-width="1.5" stroke-linejoin="round"/></svg>
         </div>
         <h4>SatNOGS</h4>
         <p>Pull from the open-source ground station network. Works with any public satellite.</p>
-        <span class="source-badge pro">Pro</span>
       </a>
-      <a href="#pricing" class="source-card">
+      <a href="#detectors" class="source-card">
         <div class="source-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" stroke="#06b6d4" stroke-width="1.5" stroke-linejoin="round"/></svg>
         </div>
         <h4>ESA / XTCE</h4>
         <p>ESA mission data loader and XTCE parameter definition import for standard spacecraft formats.</p>
-        <span class="source-badge enterprise">Enterprise</span>
       </a>
     </div>
   </div>
@@ -321,163 +312,36 @@
         <p>Detects increased noise floor — when a signal's scatter doubles or triples while the mean stays constant.</p>
         <div class="detector-weight">Weight: 8%</div>
       </div>
-      <a href="#pricing" class="detector-card pro-detector">
-        <div class="detector-badge ml-badge">ML · Pro</div>
+      <a href="#detectors" class="detector-card">
+        <div class="detector-badge ml-badge">ML</div>
         <h4>GRU Autoencoder</h4>
         <p>Trains a tiny GRU neural network on each channel's normal residuals. Flags sequences the model can't reconstruct — nonlinear temporal patterns.</p>
         <div class="detector-weight">Weight: 12%</div>
       </a>
-      <a href="#pricing" class="detector-card pro-detector">
-        <div class="detector-badge ml-badge">ML · Pro</div>
+      <a href="#detectors" class="detector-card">
+        <div class="detector-badge ml-badge">ML</div>
         <h4>TCN</h4>
         <p>Temporal Convolutional Network with dilated causal convolutions. Captures long-range dependencies across 512+ timestep windows.</p>
         <div class="detector-weight">Weight: 11%</div>
       </a>
-      <a href="#pricing" class="detector-card pro-detector">
-        <div class="detector-badge ml-badge">ML · Pro</div>
+      <a href="#detectors" class="detector-card">
+        <div class="detector-badge ml-badge">ML</div>
         <h4>Trend Velocity</h4>
         <p>Monitors the acceleration of the STL trend component. Early onset detection — catches drifts before they become critical.</p>
         <div class="detector-weight">Weight: 8%</div>
       </a>
-      <a href="#pricing" class="detector-card pro-detector">
-        <div class="detector-badge ml-badge">ML · Pro</div>
+      <a href="#detectors" class="detector-card">
+        <div class="detector-badge ml-badge">ML</div>
         <h4>Matrix Profile</h4>
         <p>Finds subsequences that have never appeared before in the history of the channel. Pure NumPy, O(n log n) FFT implementation.</p>
         <div class="detector-weight">Weight: 6%</div>
       </a>
-      <a href="#pricing" class="detector-card pro-detector">
-        <div class="detector-badge ml-badge">ML · Pro</div>
+      <a href="#detectors" class="detector-card">
+        <div class="detector-badge ml-badge">ML</div>
         <h4>Correlation Graph</h4>
         <p>Monitors rolling Pearson correlations across all channels on a satellite. Flags when one channel decouples from its peers.</p>
         <div class="detector-weight">Weight: 6%</div>
       </a>
-    </div>
-  </div>
-</section>
-
-<!-- ─── Pricing ───────────────────────────────────────────────────────────── -->
-<section id="pricing" class="section section-alt">
-  <div class="container">
-    <div class="section-header">
-      <span class="section-tag">Simple pricing</span>
-      <h2>Start free. Scale when you need it.</h2>
-      <p>No trial periods. No hidden fees. Free plan is genuinely useful for solo operators and researchers.</p>
-    </div>
-    <div class="pricing-grid">
-
-      <!-- Free -->
-      <div class="plan-card">
-        <div class="plan-header">
-          <span class="plan-name">Free</span>
-          <div class="plan-price"><span class="price-num">$0</span><span class="price-per">/month</span></div>
-          <p class="plan-desc">For researchers, students, and personal projects.</p>
-        </div>
-        <div class="plan-limits">
-          <div class="limit"><span class="limit-val">1</span> satellite</div>
-          <div class="limit"><span class="limit-val">5</span> channels</div>
-          <div class="limit"><span class="limit-val">1 MB</span> upload</div>
-          <div class="limit"><span class="limit-val">7 days</span> data retention</div>
-          <div class="limit"><span class="limit-val">100</span> API calls / day</div>
-        </div>
-        <ul class="plan-features">
-          <li class="feat-yes">CSV upload</li>
-          <li class="feat-yes">6 statistical detectors</li>
-          <li class="feat-yes">Anomaly dashboard</li>
-          <li class="feat-yes">Operator feedback (TP/FP)</li>
-          <li class="feat-yes">REST API access</li>
-          <li class="feat-no">ML detectors (GRU, TCN…)</li>
-          <li class="feat-no">Webhooks &amp; email alerts</li>
-          <li class="feat-no">Live data connectors</li>
-          <li class="feat-no">Multi-user access</li>
-        </ul>
-        <a href="/api/v1/auth/login" class="btn-plan btn-plan-free">Start free</a>
-      </div>
-
-      <!-- Pro -->
-      <div class="plan-card plan-featured">
-        <div class="plan-popular">Most popular</div>
-        <div class="plan-header">
-          <span class="plan-name">Pro</span>
-          <div class="plan-price"><span class="price-num">$49</span><span class="price-per">/month</span></div>
-          <p class="plan-desc">For satellite operators and small teams running real missions.</p>
-        </div>
-        <div class="plan-limits">
-          <div class="limit"><span class="limit-val">5</span> satellites</div>
-          <div class="limit"><span class="limit-val">50</span> channels</div>
-          <div class="limit"><span class="limit-val">100 MB</span> upload</div>
-          <div class="limit"><span class="limit-val">90 days</span> data retention</div>
-          <div class="limit"><span class="limit-val">10,000</span> API calls / day</div>
-        </div>
-        <ul class="plan-features">
-          <li class="feat-yes">Everything in Free</li>
-          <li class="feat-yes">All 11 detectors (+ ML)</li>
-          <li class="feat-yes">YAMCS, InfluxDB, SatNOGS connectors</li>
-          <li class="feat-yes">Webhook + email alerts</li>
-          <li class="feat-yes">Alert dedup &amp; escalation</li>
-          <li class="feat-yes">Per-channel threshold overrides</li>
-          <li class="feat-yes">Alert suppression windows</li>
-          <li class="feat-yes">Real-time WebSocket stream</li>
-          <li class="feat-no">Multi-user (team seats)</li>
-        </ul>
-        <a href="/api/v1/auth/login" class="btn-plan btn-plan-pro">Get Pro</a>
-      </div>
-
-      <!-- Team -->
-      <div class="plan-card">
-        <div class="plan-header">
-          <span class="plan-name">Team</span>
-          <div class="plan-price"><span class="price-num">$149</span><span class="price-per">/month</span></div>
-          <p class="plan-desc">For mission control teams that need collaboration and audit trails.</p>
-        </div>
-        <div class="plan-limits">
-          <div class="limit"><span class="limit-val">20</span> satellites</div>
-          <div class="limit"><span class="limit-val">500</span> channels</div>
-          <div class="limit"><span class="limit-val">500 MB</span> upload</div>
-          <div class="limit"><span class="limit-val">1 year</span> data retention</div>
-          <div class="limit"><span class="limit-val">5 users</span> per workspace</div>
-        </div>
-        <ul class="plan-features">
-          <li class="feat-yes">Everything in Pro</li>
-          <li class="feat-yes">5 team seats (viewer / operator / admin)</li>
-          <li class="feat-yes">RBAC — role-based access control</li>
-          <li class="feat-yes">Audit log for all actions</li>
-          <li class="feat-yes">Priority email support</li>
-          <li class="feat-yes">ML model persistence across restarts</li>
-          <li class="feat-yes">Incident grouping dashboard</li>
-          <li class="feat-no">ESA / XTCE integration</li>
-          <li class="feat-no">On-premise deployment</li>
-        </ul>
-        <a href="/api/v1/auth/login" class="btn-plan btn-plan-free">Get Team</a>
-      </div>
-
-      <!-- Enterprise -->
-      <div class="plan-card">
-        <div class="plan-header">
-          <span class="plan-name">Enterprise</span>
-          <div class="plan-price"><span class="price-num">Custom</span></div>
-          <p class="plan-desc">For agencies, satellite manufacturers, and constellation operators.</p>
-        </div>
-        <div class="plan-limits">
-          <div class="limit"><span class="limit-val">Unlimited</span> satellites</div>
-          <div class="limit"><span class="limit-val">Unlimited</span> channels</div>
-          <div class="limit"><span class="limit-val">Custom</span> retention</div>
-          <div class="limit"><span class="limit-val">Custom</span> users &amp; SLA</div>
-          <div class="limit"><span class="limit-val">99.9%</span> uptime SLA</div>
-        </div>
-        <ul class="plan-features">
-          <li class="feat-yes">Everything in Team</li>
-          <li class="feat-yes">ESA mission data + XTCE parser</li>
-          <li class="feat-yes">On-premise deployment option</li>
-          <li class="feat-yes">Custom ML model training</li>
-          <li class="feat-yes">SSO / SAML integration</li>
-          <li class="feat-yes">Dedicated Slack support channel</li>
-          <li class="feat-yes">Custom data retention policy</li>
-          <li class="feat-yes">White-label dashboard</li>
-          <li class="feat-yes">TimescaleDB continuous aggregates</li>
-        </ul>
-        <a href="mailto:hello@dsremodetect.ai" class="btn-plan btn-plan-free">Contact us</a>
-      </div>
-
     </div>
   </div>
 </section>
@@ -490,25 +354,25 @@
       <h2>Works on any time-series data</h2>
     </div>
     <div class="usecases-grid">
-      <a href="/api/v1/auth/login" class="usecase-card">
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/iss072e352255/iss072e352255~large.jpg')"></div>
         <div class="usecase-icon">🛰️</div>
         <h4>Satellite Telemetry</h4>
         <p>Battery voltage, temperature, attitude control, power subsystems. Self-calibrates per orbital period.</p>
       </a>
-      <a href="/api/v1/auth/login" class="usecase-card">
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/S83-35764/S83-35764~large.jpg')"></div>
         <div class="usecase-icon">🏭</div>
         <h4>Industrial IoT</h4>
         <p>Valve sensors, pressure readings, motor current. SKAB benchmark: F1=90.9% on real valve failure data.</p>
       </a>
-      <a href="/api/v1/auth/login" class="usecase-card">
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/2010-3122/2010-3122~large.jpg')"></div>
         <div class="usecase-icon">💧</div>
         <h4>Utility Monitoring</h4>
         <p>Water quality, power grid telemetry, HVAC systems. Any CSV with a timestamp column works.</p>
       </a>
-      <a href="/api/v1/auth/login" class="usecase-card">
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="usecase-card">
         <div class="usecase-thumb" style="background-image:url('https://images-assets.nasa.gov/image/PIA24105/PIA24105~large.jpg')"></div>
         <div class="usecase-icon">🔬</div>
         <h4>Research &amp; Benchmarking</h4>
@@ -573,15 +437,6 @@
           <p>Yes. Dsremo has a full REST API with OpenAPI documentation at <code>/docs</code>. You can push telemetry in real-time via <code>POST /api/v1/telemetry</code>, query anomalies, and receive real-time events via WebSocket. API keys are available on all plans.</p>
         </div>
       </div>
-      <div class="faq-item">
-        <button class="faq-q" onclick="toggleFaq(this)">
-          Do I need a credit card for the free plan?
-          <span class="faq-arrow">↓</span>
-        </button>
-        <div class="faq-a">
-          <p>No. Sign up with your email and start immediately. No credit card required until you upgrade to Pro or Team.</p>
-        </div>
-      </div>
     </div>
   </div>
 </section>
@@ -591,10 +446,9 @@
   <div class="container">
     <div class="cta-inner">
       <h2>Ready to find out what your data is hiding?</h2>
-      <p>Upload a CSV and get your first anomaly report in under 30 seconds. Free forever for 1 satellite.</p>
-      <a href="/api/v1/auth/login" class="btn-primary btn-large">
-        <svg width="20" height="20" viewBox="0 0 18 18" fill="none"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" fill="#34A853"/><path d="M3.964 10.71c-.18-.54-.282-1.117-.282-1.71s.102-1.17.282-1.71V4.958H.957C.347 6.173 0 7.548 0 9s.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>
-        Start free
+      <p>Upload a CSV and get your first anomaly report in seconds — a live portfolio demo on a synthetic satellite fleet.</p>
+      <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login" class="btn-primary btn-large">
+        Open dashboard
       </a>
     </div>
   </div>
@@ -616,12 +470,11 @@
           <h5>Product</h5>
           <a href="#how-it-works">How it works</a>
           <a href="#detectors">Detectors</a>
-          <a href="#pricing">Pricing</a>
-          <a href="/docs">API Docs</a>
+              <a href="/docs">API Docs</a>
         </div>
         <div class="footer-col">
           <h5>Account</h5>
-          <a href="/api/v1/auth/login">Sign in</a>
+          <a href="https://dsremo-telemetry-sentinel.hf.space/api/v1/auth/login">Sign in</a>
           <a href="/dashboard/">Dashboard</a>
           <a href="#faq">FAQ</a>
         </div>
